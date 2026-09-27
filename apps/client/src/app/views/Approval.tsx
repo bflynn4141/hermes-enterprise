@@ -10,12 +10,12 @@ import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Avatar, Button, EmptyState, MenuItem, Popover, Skeleton } from '../ui/primitives.js';
 import { LIST_KEYS } from '../selectors.js';
-import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy, approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine, decisionSignInStale } from '../approval-copy.js';
+import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy, approvalEffectLabel, approvalEffectSentence, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine, decisionSignInStale } from '../approval-copy.js';
 export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, approvalPrimaryAction, approvalIcon, approvalReviewerLabel, matchesReviewerFilter, approvalPreview } from '../approval-copy.js';
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
-import { EmailMessageView } from './EmailMessage.js';
+import { EmailCautions, EmailMessageView } from './EmailMessage.js';
 import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
 import { RestError } from '../../model/rest.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
@@ -90,14 +90,15 @@ function RunPlanPreview({ view }: { view: ApprovalView }) {
       <div className="approval-facts three">
         <Fact label="Estimated cost" strong>{money(budget.estimated_min_minor, budget.currency)}–{money(budget.estimated_max_minor, budget.currency)}</Fact>
         <Fact label="Hard cap" strong>{money(budget.cap_minor, budget.currency)}</Fact>
-        <Fact label="Estimated tokens">{((budget.estimated_input_tokens ?? 0) + (budget.estimated_output_tokens ?? 0)).toLocaleString()}</Fact>
+        <Fact label="Retries included">{budget.retries_included.toLocaleString()}</Fact>
       </div>
-      <div className="approval-facts four approval-enforcement-caps" aria-label="Enforced run limits">
-        <Fact label="Total token cap" strong>{budget.total_token_cap.toLocaleString()}</Fact>
-        <Fact label="Call cap" strong>{budget.call_cap.toLocaleString()}</Fact>
-        <Fact label="Output / call" strong>{budget.max_output_tokens_per_call.toLocaleString()}</Fact>
-        <Fact label="Parallel calls" strong>{budget.max_parallel_calls.toLocaleString()}</Fact>
+      <div className="approval-facts four approval-enforcement-caps" aria-label="Usage limits">
+        <Fact label="Model use, at most" strong>{budget.total_token_cap.toLocaleString()} tokens</Fact>
+        <Fact label="Model requests, at most" strong>{budget.call_cap.toLocaleString()}</Fact>
+        <Fact label="Longest single answer" strong>{budget.max_output_tokens_per_call.toLocaleString()} tokens</Fact>
+        <Fact label="At the same time" strong>{budget.max_parallel_calls.toLocaleString()}</Fact>
       </div>
+      <p className="meta">Hermes stops the work at the hard cap or any of these limits, whichever comes first.</p>
       <div className="approval-two-col">
         <section><span className="approval-kicker">Participating agents</span>{details.participating_agents.map((agent) => {
           const identity = [view.identities.requester_agent, ...view.identities.target_agents].find((item) => item.id === agent.agent_id);
@@ -105,7 +106,7 @@ function RunPlanPreview({ view }: { view: ApprovalView }) {
         })}</section>
         <section><span className="approval-kicker">Outputs</span><CheckList items={details.deliverables} /></section>
       </div>
-      <p className="meta">{budget.illustrative ? 'Illustrative estimate · ' : ''}Models: {budget.model_ids.join(', ') || 'configured model'} · Tools: {budget.metered_tools.join(', ') || 'none'} · {budget.retries_included} retries included</p>
+      {budget.illustrative && <p className="meta">Illustrative estimate</p>}
     </div>
   );
 }
@@ -139,7 +140,7 @@ function AccessPreview({ view }: { view: ApprovalView }) {
   const operations = new Set(details.operations);
   return (
     <div className="approval-preview">
-      <div className="approval-resource"><Glass name="context" size={46} /><Icon name="arrow" /><div className="col grow"><h2>{details.resource_label}</h2><span className="meta">{details.resource_id}</span></div></div>
+      <div className="approval-resource"><Glass name="context" size={46} /><Icon name="arrow" /><div className="col grow"><h2>{details.resource_label}</h2></div></div>
       <AgentIdentity name={agent?.name ?? 'Requested agent'} email={agent?.email} label="Access recipient" />
       <div className="approval-facts three">
         {(['read', 'write', 'admin'] as const).map((operation) => <Fact key={operation} label={operation[0]!.toUpperCase() + operation.slice(1)}><span className={operations.has(operation) ? 'approval-yes' : 'approval-no'}>{operations.has(operation) ? 'Allowed' : 'Not allowed'}</span></Fact>)}
@@ -154,7 +155,7 @@ function AccessPreview({ view }: { view: ApprovalView }) {
  * approval's own evidence route so the reader sees exactly the stored
  * message this revision is bound to.
  */
-function ReplyContext({ view }: { view: ApprovalView }) {
+function useReplyEmail(view: ApprovalView): { email: InboundEmailView | null; status: 'loading' | 'ready' | 'unavailable' | 'none' } {
   const adapter = useAdapter();
   const state = useAppState();
   const messageId = view.payload.approval_type === 'communication' ? view.payload.details.reply_to?.message_id : undefined;
@@ -170,34 +171,59 @@ function ReplyContext({ view }: { view: ApprovalView }) {
     );
     return () => { live = false; };
   }, [adapter, state.workspace.id, view.request_id, messageId]);
-  if (!messageId) return null;
-  return <section className="email-reply-context" aria-label="The email this answers">
-    <h2>The email</h2>
-    {status === 'loading' && <Skeleton rows={3} label="Loading the email" />}
-    {status === 'unavailable' && <p className="meta">The original email is no longer stored. Its inbox may have been removed.</p>}
-    {email && status === 'ready' && <EmailMessageView email={email} />}
-  </section>;
+  return messageId ? { email, status } : { email: null, status: 'none' };
 }
 
-/** Who approves and what approving does, for a reply to a role inbox. */
-function replyRule(view: ApprovalView): { tone: 'neutral' | 'caution'; text: string } | null {
+/**
+ * A suggested reply to a role-inbox email, in the order the tools we studied
+ * share (docs/DESIGN.md): what to check first, then the reply that is waiting
+ * for a decision, then the email it answers.
+ */
+function ReplyPreview({ view }: { view: ApprovalView }) {
+  const { email, status } = useReplyEmail(view);
   if (view.payload.approval_type !== 'communication' || !view.payload.details.reply_to) return null;
   const details = view.payload.details;
-  if (details.reply_to?.caution) {
-    return { tone: 'caution', text: 'Hermes flagged this sender, so two people approve this reply. It goes only to the address that sent the email.' };
-  }
-  if (details.draft_only) return { tone: 'neutral', text: 'Approving saves the reviewed reply. Hermes does not send it.' };
-  return { tone: 'neutral', text: `Approving sends this reply from ${details.sender.address}, threaded under the original email. It goes only to the address that sent it.` };
+  const agent = view.identities.requester_agent.name;
+  const recipient = details.recipients[0];
+  const to = recipient ? (recipient.address ? `${recipient.name} <${recipient.address}>` : recipient.name) : 'the sender';
+  const second = details.reply_to?.caution
+    ? 'A second person on your team approves this reply before it goes out.'
+    : details.draft_only && email && email.sender.warnings.some((warning) => warning.severity === 'caution')
+      ? "Nobody else on your team can be the second approver, so Hermes won't send this reply. Check the sender, then reply from your own email."
+      : null;
+  const rule = details.draft_only
+    ? "Approving saves this reply. Hermes won't send it from here."
+    : `Sent from ${details.sender.address ?? 'your connected Gmail account'} in the same email thread. It goes only to ${recipient?.address ?? 'the sender'}.`;
+  return (
+    <div className="approval-preview email-reply">
+      {email && <EmailCautions facts={email.sender} second={second} />}
+      <section className="email-reply-draft" aria-label="Suggested reply">
+        <div className="email-reply-heading">
+          <h2>Suggested reply</h2>
+          <span className="email-reply-badge">{view.status === 'pending' ? 'Not sent' : approvalStatusLabel(view.status)}</span>
+        </div>
+        <p className="email-reply-meta">To {to}{details.subject ? ` · ${details.subject}` : ''}</p>
+        <article className="approval-message email-reply-body">
+          <div className="approval-message-body">{details.body}</div>
+        </article>
+        <p className="email-reply-rule">{rule}</p>
+      </section>
+      <section className="email-reply-context" aria-label="The email this answers">
+        <h2>Original email</h2>
+        {status === 'loading' && <Skeleton rows={3} label="Loading the email" />}
+        {status === 'unavailable' && <p className="meta">The original email is no longer stored. Its inbox may have been removed.</p>}
+        {email && status === 'ready' && <EmailMessageView email={email} agentName={agent} showCautions={false} />}
+      </section>
+    </div>
+  );
 }
 
 function CommunicationPreview({ view }: { view: ApprovalView }) {
   if (view.payload.approval_type !== 'communication') return null;
   const details = view.payload.details;
-  const rule = replyRule(view);
+  if (details.reply_to) return <ReplyPreview view={view} />;
   return (
     <div className="approval-preview">
-      {details.reply_to && <ReplyContext view={view} />}
-      {rule && <div className="email-reply-draft"><h2>Suggested reply</h2><p className="email-reply-rule" data-tone={rule.tone}>{rule.text}</p></div>}
       <article className="approval-message">
         <dl>
           <div><dt>From</dt><dd>{details.sender.address ?? 'Sender address not provided'}</dd></div>
@@ -219,10 +245,10 @@ function SharedLearningPreview({ view }: { view: ApprovalView }) {
   const details = view.payload.details;
   return (
     <div className="approval-preview">
-      <section className="approval-lead-block"><span className="approval-kicker">{details.current_version ?? 'New'} → {details.proposed_version}</span><h2>{details.title}</h2></section>
+      <section className="approval-lead-block"><span className="approval-kicker">{details.current_version ? 'Updated instructions' : 'New instructions'}</span><h2>{details.title}</h2></section>
       <pre className="approval-diff" aria-label="Skill changes">{details.diff}</pre>
       <div className="approval-two-col"><section><span className="approval-kicker">Reuse audience</span><CheckList items={details.reuse_audience} /></section><section><span className="approval-kicker">Private data excluded</span><CheckList items={details.excluded_private_data} /></section></div>
-      <p className="meta">{details.source_evidence_ids.length} evidence reference{details.source_evidence_ids.length === 1 ? '' : 's'} · Publishing instructions does not publish the source data.</p>
+      <p className="meta">Based on {details.source_evidence_ids.length === 1 ? 'one source' : `${details.source_evidence_ids.length} sources`}. Sharing the instructions does not share the source data.</p>
     </div>
   );
 }
@@ -232,9 +258,9 @@ function DeliverablePreview({ view }: { view: ApprovalView }) {
   const details = view.payload.details;
   return (
     <div className="approval-preview">
-      <article className="approval-artifact"><span className="approval-kicker">{details.version} · {details.artifact_id}</span><h2>{details.title}</h2><div>{details.content}</div></article>
-      <div className="approval-two-col"><section><span className="approval-kicker">Evidence</span><CheckList items={details.evidence_ids} empty="No linked evidence" /></section><section><span className="approval-kicker">Missing information</span><CheckList items={details.missing_information} empty="Nothing marked missing" /></section></div>
-      <p className="meta">{details.releases_dependent_request_ids.length} dependent request reference{details.releases_dependent_request_ids.length === 1 ? '' : 's'}.</p>
+      <article className="approval-artifact"><span className="approval-kicker">Result for review</span><h2>{details.title}</h2><div>{details.content}</div></article>
+      <div className="approval-two-col"><section><span className="approval-kicker">Evidence</span><p>{details.evidence_ids.length === 0 ? 'No linked sources' : details.evidence_ids.length === 1 ? 'One linked source' : `${details.evidence_ids.length} linked sources`}</p></section><section><span className="approval-kicker">Missing information</span><CheckList items={details.missing_information} empty="Nothing marked missing" /></section></div>
+      {details.releases_dependent_request_ids.length > 0 && <p className="meta">Accepting this lets {details.releases_dependent_request_ids.length === 1 ? 'one waiting request' : `${details.releases_dependent_request_ids.length} waiting requests`} continue.</p>}
     </div>
   );
 }
@@ -245,7 +271,7 @@ function DisclosurePreview({ view }: { view: ApprovalView }) {
   return (
     <div className="approval-preview">
       <section className="approval-lead-block"><span className="approval-kicker">Recipient</span><h2>{details.recipient.organization}</h2><span className="meta">{details.recipient.contact ?? details.purpose}</span></section>
-      <div className="approval-manifest">{details.items.map((item) => <div key={item.resource_id}><strong>{item.resource_id}</strong><span>{item.fields.join(', ')}</span></div>)}</div>
+      <div className="approval-manifest">{details.items.map((item, index) => <div key={item.resource_id}><strong>{details.items.length === 1 ? 'Shared information' : `Item ${index + 1}`}</strong><span>{item.fields.map((field) => field.replaceAll('_', ' ')).join(', ')}</span></div>)}</div>
       <div className="approval-two-col"><section><span className="approval-kicker">Redactions</span><CheckList items={details.redactions} empty="No redactions specified" /></section><section><span className="approval-kicker">Retention</span><p>{shortDateTime(details.retention_until)}</p></section></div>
       <p className="meta">Purpose · {details.purpose}</p>
     </div>
@@ -259,8 +285,8 @@ function RecordChangePreview({ view }: { view: ApprovalView }) {
     <div className="approval-preview">
       <section className="approval-lead-block"><span className="approval-kicker">{details.system_label}</span><h2>{details.changes.length} proposed change{details.changes.length === 1 ? '' : 's'}</h2></section>
       <div className="approval-change-table" role="table" aria-label="Record changes">
-        <div role="row" className="head"><span>Record / field</span><span>Before</span><span>After</span></div>
-        {details.changes.map((change) => <div role="row" key={`${change.record_id}:${change.field}`}><span><strong>{change.record_id}</strong><small>{change.field}</small></span><span>{displayValue(change.before)}</span><span>{displayValue(change.after)}</span></div>)}
+        <div role="row" className="head"><span>What changes</span><span>Before</span><span>After</span></div>
+        {details.changes.map((change, index) => <div role="row" key={`${change.record_id}:${change.field}`}><span><strong>{`Change ${index + 1}`}</strong><small>{change.field.replaceAll('_', ' ')}</small></span><span>{displayValue(change.before)}</span><span>{displayValue(change.after)}</span></div>)}
       </div>
       <div className="approval-two-col"><section><span className="approval-kicker">Validation</span><CheckList items={details.validation} /></section><section><span className="approval-kicker">Rollback</span><p>{details.rollback}</p></section></div>
     </div>
@@ -272,7 +298,7 @@ function ExceptionPreview({ view }: { view: ApprovalView }) {
   const details = view.payload.details;
   return (
     <div className="approval-preview">
-      <section className="approval-lead-block"><span className="approval-kicker">Rule remains in force</span><h2>{details.rule_label}</h2><span className="meta">{details.rule_id}</span></section>
+      <section className="approval-lead-block"><span className="approval-kicker">Rule remains in force</span><h2>{details.rule_label}</h2></section>
       <div className="approval-facts"><Fact label="Exception scope">{details.scope}</Fact><Fact label="Expires">{shortDateTime(details.exception_expires_at)}</Fact></div>
       <section><span className="approval-kicker">Reason</span><p>{details.reason}</p></section>
       <section><span className="approval-kicker">Compensating controls</span><CheckList items={details.compensating_controls} /></section>
@@ -310,10 +336,32 @@ function ApprovalPreview({ view }: { view: ApprovalView }) {
   }
 }
 
+const STEP_WORDS: Record<string, string> = {
+  approved: 'Approved',
+  current: 'Waiting for a decision',
+  declined: 'Declined',
+  changes_requested: 'Changes requested',
+  skipped: 'Not needed',
+};
+
+const VOTE_WORDS: Record<string, string> = {
+  approve: 'Approved',
+  decline: 'Declined',
+  request_changes: 'Asked for changes',
+};
+
+/** "Waiting for approval", "1 of 2 approved", "Done", for one step of the header. */
+function stepProgress(step: ApprovalView['steps'][number]): string {
+  if (step.status === 'approved') return 'Done';
+  if (step.status === 'blocked') return 'After the step before';
+  if (step.quorum > 1) return `${step.approvals_recorded} of ${step.quorum} approved`;
+  return step.status === 'current' ? 'Waiting for approval' : STEP_WORDS[step.status] ?? '';
+}
+
 export function ReviewerSequence({ view }: { view: ApprovalView }) {
   return (
     <section className="approval-reviewers" aria-labelledby="approval-reviewers-heading">
-      <div className="row"><h2 className="section-title" id="approval-reviewers-heading">Reviewers</h2><span className="grow" /><span className="meta">{view.payload.policy.mode === 'sequential' ? 'In order' : 'Parallel'}</span></div>
+      <div className="row"><h2 className="section-title" id="approval-reviewers-heading">Reviewers</h2><span className="grow" /><span className="meta">{view.payload.policy.mode === 'sequential' ? 'One after another' : 'In any order'}</span></div>
       <ol>
         {[...view.steps].sort((a, b) => a.order - b.order).map((step, index) => {
           const votes = view.votes.filter((vote) => vote.step_id === step.step_id);
@@ -322,7 +370,7 @@ export function ReviewerSequence({ view }: { view: ApprovalView }) {
             <li key={step.step_id} data-state={step.status}>
               <span className="approval-reviewer-index">{step.status === 'approved' ? <Icon name="check" size={13} /> : index + 1}</span>
               <Avatar person={{ name: votes[0]?.reviewer_name ?? currentNames[0] ?? '?' }} size={28} />
-              <span className="col grow" style={{ gap: 2 }}><strong>{step.label}</strong><span className="meta">{currentNames.length > 0 ? currentNames.join(', ') : step.status === 'blocked' ? 'Waits for the prior step' : step.status.replaceAll('_', ' ')}{votes.map((vote) => <span className="approval-vote" key={vote.id}>{vote.reviewer_name} · {vote.decision.replaceAll('_', ' ')} · {shortDateTime(vote.recorded_at)}{vote.note && <span>{vote.note}</span>}</span>)}</span></span>
+              <span className="col grow" style={{ gap: 2 }}><strong>{step.label}</strong><span className="meta">{currentNames.length > 0 ? currentNames.join(', ') : step.status === 'blocked' ? 'After the step before' : STEP_WORDS[step.status] ?? ''}{votes.map((vote) => <span className="approval-vote" key={vote.id}>{vote.reviewer_name} · {VOTE_WORDS[vote.decision] ?? 'Responded'} · {shortDateTime(vote.recorded_at)}{vote.note && <span>{vote.note}</span>}</span>)}</span></span>
               <span className="approval-quorum">{step.approvals_recorded}/{step.quorum}</span>
             </li>
           );
@@ -332,17 +380,24 @@ export function ReviewerSequence({ view }: { view: ApprovalView }) {
   );
 }
 
+/** A suggested reply is titled by who it answers: "Reply to Priya Raman". */
+function replyTitle(view: ApprovalView): string | null {
+  if (view.payload.approval_type !== 'communication' || !view.payload.details.reply_to) return null;
+  const recipient = view.payload.details.recipients[0];
+  return recipient ? `Reply to ${recipient.name}` : 'Suggested reply';
+}
+
 export function ApprovalDecisionHeader({ view }: { view: ApprovalView }) {
   const pending = view.status === 'pending';
   return <header className="approval-decision-header">
-    <div className="row"><h1>{pending ? 'Your decision' : ['approved', 'declined', 'changes_requested'].includes(view.status) ? 'Decision recorded' : approvalStatusLabel(view.status)}</h1><span className="grow" />{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
-    <p>{pending ? approvalDecisionPrompt(view) : `${approvalStatusLabel(view.status)} · Revision ${view.payload.authorization.revision}`}</p>
+    <div className="row"><h1>{replyTitle(view) ?? (pending ? 'Your decision' : ['approved', 'declined', 'changes_requested'].includes(view.status) ? 'Decision recorded' : approvalStatusLabel(view.status))}</h1><span className="grow" />{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
+    <p>{pending ? approvalDecisionPrompt(view) : `${approvalStatusLabel(view.status)}${view.payload.authorization.revision > 1 ? ' · Revised' : ''}`}</p>
     <div className="approval-thresholds" aria-label="Required approvals">
       {[...view.steps].sort((a, b) => a.order - b.order).map((step) => <span key={step.step_id} data-state={step.status}>
-        <strong>{step.label}</strong> {step.approvals_recorded}/{step.quorum} approved{step.status === 'current' ? ' · Current' : step.status === 'blocked' ? ' · Next' : ''}
+        <strong>{step.label}</strong> · {stepProgress(step)}
       </span>)}
     </div>
-    <p className="meta">{view.payload.policy.mode === 'sequential' ? 'Review in order' : 'Parallel review'} · Expires {shortDateTime(view.payload.authorization.expires_at)}</p>
+    {pending && <p className="meta">Decide by {shortDateTime(view.payload.authorization.expires_at)}</p>}
     {pending && view.capabilities.reason && <p className="approval-eligibility">{view.capabilities.reason}</p>}
   </header>;
 }
@@ -356,11 +411,11 @@ function ResultState({ view }: { view: ApprovalView }) {
     <section className="approval-result" aria-labelledby="approval-result-heading">
       <h2 className="section-title" id="approval-result-heading">Decision and result</h2>
       <div className="approval-result-track">
-        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{approvalStatusLabel(view.status)}</strong><small>Human authorization</small></span>
+        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{approvalStatusLabel(view.status)}</strong><small>Your team’s decision</small></span>
         <Icon name="arrow" />
-        <span data-state={view.work.status === 'completed' || view.work.status === 'admitted' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' || view.work.status === 'admitted' ? 'check' : 'history'} /> <strong>{work}</strong><small>{started ?? approvalWorkReason(view.work.reason) ?? 'Dependent work'}</small></span>
+        <span data-state={view.work.status === 'completed' || view.work.status === 'admitted' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' || view.work.status === 'admitted' ? 'check' : 'history'} /> <strong>{work}</strong><small>{started ?? approvalWorkReason(view.work.reason) ?? 'What runs next'}</small></span>
         <Icon name="arrow" />
-        <span data-state={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'done' : view.effect.status === 'failed' ? 'failed' : 'waiting'}><Icon name={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'check' : 'history'} /> <strong>{effect}</strong><small>{view.effect.reason ?? 'Provider effect'}</small></span>
+        <span data-state={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'done' : view.effect.status === 'failed' ? 'failed' : 'waiting'}><Icon name={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'check' : 'history'} /> <strong>{effect}</strong><small>{approvalEffectSentence(view)}</small></span>
       </div>
     </section>
   );
@@ -571,6 +626,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const signInStale = !resolved && (canApprove || canDecline || canRequestChanges) && decisionSignInStale(state.connection.authenticatedAt);
   // A reply to a role inbox is editable before it is approved, like a draft:
   // the edit is a new revision, and the server re-checks its recipient (C98).
+  const isReply = view.payload.approval_type === 'communication' && Boolean(view.payload.details.reply_to);
   const editableDraft = view.payload.approval_type === 'communication' && (view.payload.details.draft_only || Boolean(view.payload.details.reply_to)) && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
@@ -590,20 +646,16 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           </AnimatePresence>
 
           <details className="approval-disclosure">
-            <summary>Request details <span>{APPROVAL_META[view.payload.approval_type].label} · v{view.payload.authorization.revision}</span></summary>
+            <summary>Request details <span>{view.payload.approval_type === 'communication' && view.payload.details.reply_to ? 'Email reply' : APPROVAL_META[view.payload.approval_type].label}{view.payload.authorization.revision > 1 ? ' · Revised' : ''}</span></summary>
             <div className="approval-request-details">
               <h2 className="section-title">{request.subject ?? request.label}</h2>
-              <AgentIdentity name={view.identities.requester_agent.name} email={view.identities.requester_agent.email} label="Proposer" />
+              <AgentIdentity name={view.identities.requester_agent.name} email={view.identities.requester_agent.email} label="Suggested by" />
               <p>{view.payload.summary}</p><p>{view.payload.consequence}</p>
-              <details className="approval-technical-details">
-                <summary>Technical details</summary>
-                <p className="meta">{[`Request ${request.id}`, `Policy ${view.payload.policy.key} v${view.payload.policy.version}`].join(' · ')}</p>
-                {(view.payload.context.source.run_id || view.payload.context.source.session_id) && <p className="meta">{[view.payload.context.source.run_id && `Source run ${view.payload.context.source.run_id}`, view.payload.context.source.session_id && `Source session ${view.payload.context.source.session_id}`].filter(Boolean).join(' · ')}</p>}
-              </details>
             </div>
           </details>
-          <ApprovalEvidence key={view.payload.authorization.revision} view={view} load={(id) => adapter.rest.getApprovalEvidence(state.workspace.id, request.id, id)} />
-          <details className="approval-disclosure"><summary>Review history <span>Current revision</span></summary><ReviewerSequence view={view} /></details>
+          {/* A reply's source is the email, already shown in full above. */}
+          {!(view.payload.approval_type === 'communication' && view.payload.details.reply_to) && <ApprovalEvidence key={view.payload.authorization.revision} view={view} load={(id) => adapter.rest.getApprovalEvidence(state.workspace.id, request.id, id)} />}
+          <details className="approval-disclosure"><summary>Who reviews this</summary><ReviewerSequence view={view} /></details>
           {resolved && <ResultState view={view} />}
           {view.payload.illustrative && <p className="approval-simulation-note">Illustrative scenario. Names, prices, sources and effects shown here are fictional; no external message, access grant, disclosure or system change occurs.</p>}
         </div>
@@ -611,7 +663,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
 
       <div className="app-footer approval-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{resolved ? `${approvalStatusLabel(view.status)} · authorization v${view.payload.authorization.revision}` : revisionMode ? 'Editing draft · Save a new revision to continue' : approvalEffectCopy(view)}</span>
+          <span className="f-title">{resolved ? approvalStatusLabel(view.status) : revisionMode ? `Editing${editableDraft ? ` the ${isReply ? 'reply' : 'email'}` : ''} · Save your changes to continue` : approvalEffectCopy(view)}</span>
           {error && <span className="f-sub" role="alert">{error}</span>}
           {!error && !needsReauth && signInStale && <span className="f-sub">Recent sign-in required to decide · <a href={adapter.auth.stepUpUrl(typeof window === 'undefined' ? '/' : window.location.href, 'decision') ?? '#'} onClick={(event) => { event.preventDefault(); signInAgain(); }}>Sign in again</a></span>}
         </div>
@@ -622,13 +674,13 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           <span className="approval-more">
             <button ref={menuAnchor} type="button" className="icon-btn" aria-label="More approval actions" aria-expanded={menu} onClick={() => setMenu((open) => !open)}><Icon name="more" /></button>
             <Popover open={menu} onClose={() => setMenu(false)} anchorRef={menuAnchor} align="right" above width={240} label="Approval actions" portal className="menu">
-              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</MenuItem>}
+              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? (isReply ? 'Edit reply' : 'Edit email') : 'Edit request'}</MenuItem>}
               {canDecline && <MenuItem icon="close" onClick={() => { setMenu(false); decide('decline'); }}>Decline</MenuItem>}
-              {view.capabilities.can_route && <MenuItem icon="users" onClick={() => { setMenu(false); setRouteMode(true); }}>Route reviewer</MenuItem>}
+              {view.capabilities.can_route && <MenuItem icon="users" onClick={() => { setMenu(false); setRouteMode(true); }}>Ask someone else</MenuItem>}
             </Popover>
           </span>
         )}
-        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</Button>}
+        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? (isReply ? 'Edit reply' : 'Edit email') : 'Edit request'}</Button>}
       </div>
 
       {changeMode && (
@@ -639,17 +691,17 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
       )}
       {revisionMode && (
         <div className={`approval-inline-form${editableDraft ? ' approval-draft-revision' : ''}`} role="region" aria-label="Revise proposal">
-          {editableDraft && <><label><span>Revised email subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>Revised email body</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
-          <label><span>Revised proposal summary</span><textarea value={revisionSummary} onChange={(event) => setRevisionSummary(event.target.value)} maxLength={1000} autoFocus /></label>
-          <label><span>What changed</span><input value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} maxLength={2000} /></label>
-          <Button onClick={() => { clearApprovalRevisionDraft(revisionDraftStorage()); setRevisionMode(false); setRevisionNote(''); setRevisionSummary(view.payload.summary); if (view.payload.approval_type === 'communication') { setRevisionSubject(view.payload.details.subject ?? ''); setRevisionBody(view.payload.details.body); } }}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Submit v{view.payload.authorization.revision + 1}</Button>
+          {editableDraft && <><label><span>Subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>{isReply ? 'Reply' : 'Email'}</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
+          <label><span>Short summary</span><textarea value={revisionSummary} onChange={(event) => setRevisionSummary(event.target.value)} maxLength={1000} autoFocus /></label>
+          <label><span>What you changed</span><input value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} maxLength={2000} /></label>
+          <Button onClick={() => { clearApprovalRevisionDraft(revisionDraftStorage()); setRevisionMode(false); setRevisionNote(''); setRevisionSummary(view.payload.summary); if (view.payload.approval_type === 'communication') { setRevisionSubject(view.payload.details.subject ?? ''); setRevisionBody(view.payload.details.body); } }}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Save changes</Button>
         </div>
       )}
       {routeMode && (
         <div className="approval-inline-form" role="region" aria-label="Route reviewer">
-          <label><span>Eligible reviewer</span><select value={routeMember} onChange={(event) => setRouteMember(event.target.value)}><option value="">Choose reviewer</option>{view.identities.reviewers.map((reviewer) => <option key={reviewer.member_id} value={reviewer.member_id}>{reviewer.name} · {reviewer.authority_roles.join(', ') || 'member'}</option>)}</select></label>
-          <label><span>Routing reason</span><input value={routeReason} onChange={(event) => setRouteReason(event.target.value)} maxLength={1000} /></label>
-          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || authorizationExpired || !view.capabilities.can_route || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Route review</Button>
+          <label><span>Who should decide</span><select value={routeMember} onChange={(event) => setRouteMember(event.target.value)}><option value="">Choose a person</option>{view.identities.reviewers.map((reviewer) => <option key={reviewer.member_id} value={reviewer.member_id}>{reviewer.name}</option>)}</select></label>
+          <label><span>Why</span><input value={routeReason} onChange={(event) => setRouteReason(event.target.value)} maxLength={1000} /></label>
+          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || authorizationExpired || !view.capabilities.can_route || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Ask them</Button>
         </div>
       )}
     </div>

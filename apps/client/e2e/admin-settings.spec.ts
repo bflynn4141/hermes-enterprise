@@ -57,7 +57,7 @@ test('a Member direct or legacy Admin link falls back before privileged effects 
   await expect(page.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
   await expect(app.getByText('User View', { exact: true })).toBeVisible();
-  await expect(app.getByRole('heading', { name: 'Hermes capacity' })).toHaveCount(0);
+  await expect(app.getByRole('heading', { name: 'Agent capacity' })).toHaveCount(0);
 
   const account = page.getByRole('button', { name: 'Your account', exact: true });
   await account.click();
@@ -105,9 +105,9 @@ test('Member Settings preserve personal Slack linking and safe privacy facts', a
   await page.getByRole('button', { name: 'Library', exact: true }).first().click();
   await app.getByRole('tab', { name: 'Connections', exact: true }).click();
   await expect(app.getByText('Read-only Gmail connected')).toBeVisible();
-  await expect(app.getByText('Outbound sender connected')).toBeVisible();
-  await expect(app.getByText('Imported snapshots')).toHaveCount(0);
-  await expect(app.getByText('Waiting messages')).toHaveCount(0);
+  await expect(app.getByText('Sending account connected')).toBeVisible();
+  await expect(app.getByText('Saved conversations')).toHaveCount(0);
+  await expect(app.getByText('Waiting to send')).toHaveCount(0);
   await expect(app.getByText(/· null/)).toHaveCount(0);
 });
 
@@ -148,8 +148,8 @@ test('Model provider details and actions remain readable in the standard desktop
 test('notification preferences ack only after a successful save', async ({ page }) => {
   await page.goto('/#settings/Notifications');
   const app = page.getByRole('region', { name: 'Application' });
-  await expect(app.getByText('Delivery not configured', { exact: true })).toBeVisible();
-  await expect(app.getByText(/does not send approval, blocked-work or digest emails/)).toBeVisible();
+  await expect(app.getByText('Emails not turned on', { exact: true })).toBeVisible();
+  await expect(app.getByText(/does not send notification emails yet/)).toBeVisible();
   const toggle = app.getByRole('switch', { name: 'Approval requests' });
   const before = await toggle.isChecked();
   await toggle.click();
@@ -161,7 +161,7 @@ test('notification preferences ack only after a successful save', async ({ page 
 test('a failed notification preference save never shows Preference saved', async ({ page }) => {
   await page.goto('/?settingsWrites=fail#settings/Notifications');
   const app = page.getByRole('region', { name: 'Application' });
-  await expect(app.getByText('Delivery not configured', { exact: true })).toBeVisible();
+  await expect(app.getByText('Emails not turned on', { exact: true })).toBeVisible();
   const toggle = app.getByRole('switch', { name: 'Approval requests' });
   const before = await toggle.isChecked();
   await toggle.click();
@@ -174,19 +174,19 @@ test('run limits save explicitly and distinguish zero from no limit', async ({ p
   await recordMockRequests(page);
   await page.goto('/#admin/Agents');
   const app = page.getByRole('region', { name: 'Application' });
-  const daily = app.getByRole('spinbutton', { name: 'Daily token limit' });
-  const concurrent = app.getByRole('spinbutton', { name: 'Concurrent runs' });
+  const daily = app.getByRole('spinbutton', { name: 'Daily usage limit' });
+  const concurrent = app.getByRole('spinbutton', { name: 'Tasks at the same time' });
   await expect(daily).toBeVisible();
   await daily.fill('0');
   await concurrent.fill('3');
   expect((await mockRequests(page)).filter((r) => r.method === 'PATCH' && r.path.endsWith('/settings'))).toHaveLength(0);
   await app.getByRole('button', { name: 'Save limits' }).click();
   const usage = app.getByRole('region', { name: 'Current usage' });
-  await expect(usage.getByText(/of 0 today/)).toBeVisible();
-  await expect(usage.getByText(/of 3 active/)).toBeVisible();
+  await expect(usage.getByText(/of 0 used today/)).toBeVisible();
+  await expect(usage.getByText(/of 3 running now/)).toBeVisible();
   await daily.fill('');
   await app.getByRole('button', { name: 'Save limits' }).click();
-  await expect(usage.getByText('None', { exact: true })).toBeVisible();
+  await expect(usage.getByText('No limit', { exact: true })).toBeVisible();
   await concurrent.fill('51');
   await expect(app.getByRole('button', { name: 'Save limits' })).toBeDisabled();
   expect((await mockRequests(page)).filter((r) => r.method === 'PATCH' && r.path.endsWith('/settings'))).toHaveLength(2);
@@ -197,7 +197,7 @@ for (const channel of ['Slack', 'Email']) {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/?${channel.toLowerCase()}=unconfigured#admin/${channel}`);
     const app = page.getByRole('region', { name: 'Application' });
-    await expect(app.getByRole('heading', { name: `${channel} is not configured` })).toBeVisible();
+    await expect(app.getByRole('heading', { name: channel === 'Email' ? 'Sending from Gmail is not available yet' : 'Slack is not available yet' })).toBeVisible();
     await expect(app.getByRole('button', { name: channel === 'Email' ? 'Connect Gmail' : 'Connect Slack' })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`${channel.toLowerCase()}-detail.png`), fullPage: true });
     await page.goto(`/?${channel.toLowerCase()}=unavailable#admin/${channel}`);

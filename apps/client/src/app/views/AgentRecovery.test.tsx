@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { agentRecoveryViewSchema, mockUuid, type AgentRecoveryView, type AgentWakeInput, type SessionSnapshot } from '@hermes/shared';
-import { AgentRecoveryControls, createRecoverySubmitter, refreshRecoveryContext, retryCountdown } from './AgentRecovery.js';
+import { AgentRecoveryControls, createRecoverySubmitter, recoverySentence, refreshRecoveryContext, retryCountdown } from './AgentRecovery.js';
 import { createRest } from '../../model/rest.js';
 import { createAuth } from '../../model/auth.js';
 import { createStore, initialState } from '../../model/store.js';
@@ -28,6 +28,17 @@ describe('task recovery controls', () => {
     expect(html).toContain('DeepSeek V4.1 Flash');
     expect(html).toContain('Attempt 1');
     expect(html).not.toContain('Run now');
+  });
+
+  it('never shows the run’s raw error text or an operator sentence', () => {
+    const raw = { ...failed, message: 'ECONNREFUSED 10.0.0.4:8642' };
+    expect(recoverySentence(raw, { reason: 'hermes_unavailable', message: 'ECONNREFUSED 10.0.0.4:8642' })).toBe("Hermes couldn't reach this agent. Retry in a moment.");
+    expect(recoverySentence(raw)).toBe('This task stopped before it finished. You can retry it.');
+    expect(recoverySentence({ ...failed, state: 'blocked', message: 'The engine is paused for a deployment. Retry when it is ready.' })).toBe('Hermes is updating. Retry in a moment.');
+    expect(recoverySentence(failed)).toBe(failed.message);
+    const html = render(failed, { modelLabel: null });
+    expect(html).toContain('DeepSeek V4.1 Flash');
+    expect(html).not.toContain('nous:deepseek');
   });
 
   it('keeps blocked and human-review states actionable through their explanation, without a wake', () => {

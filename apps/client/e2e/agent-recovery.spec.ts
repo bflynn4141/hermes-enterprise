@@ -21,15 +21,16 @@ test('paid and free StepFun routes stay visibly distinct and preserve the exact 
   const menu = page.getByRole('dialog', { name: 'Model' });
   await menu.getByRole('textbox', { name: 'Search models' }).fill('step-3.7-flash');
 
-  const paid = menu.locator('.menu-item[title="nous:stepfun/step-3.7-flash"]');
-  const free = menu.locator('.menu-item[title="nous:stepfun/step-3.7-flash:free"]');
+  // The exact route id stays in the data, never in the visible text or tooltip.
+  const paid = menu.locator('.menu-item:has([data-model-id="nous:stepfun/step-3.7-flash"])');
+  const free = menu.locator('.menu-item:has([data-model-id="nous:stepfun/step-3.7-flash:free"])');
   await expect(paid).toContainText('Paid route');
   await expect(free).toContainText('Free route');
   await free.click();
 
   const selected = page.getByRole('button', { name: 'Model: StepFun: Step 3.7 Flash · Free route', exact: true });
   await expect(selected).toBeVisible();
-  await expect(selected).toHaveAttribute('title', 'nous:stepfun/step-3.7-flash:free');
+  await expect(selected).toHaveAttribute('title', 'StepFun: Step 3.7 Flash');
 });
 
 test('a no-output failure can be retried from Overview without using chat', async ({ page }) => {
@@ -49,15 +50,15 @@ test('a no-output failure can be retried from Overview without using chat', asyn
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toBeEmpty();
   await card.getByRole('button', { name: 'Open current task →' }).click();
   await expect(page.getByRole('heading', { name: 'Automated partner screening · Work mode' })).toBeVisible();
-  await expect(page.getByText('This run called no tools.', { exact: true })).toBeVisible();
+  await expect(page.getByText('It didn’t use any tools.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });
 
 test('trace controls load after navigation for a failure with no tool output', async ({ page }) => {
   await page.goto('/?recovery=retryable');
-  await page.getByRole('button', { name: 'View trace →', exact: true }).click();
+  await page.getByRole('button', { name: 'See what it did →', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Retry task', exact: true })).toBeVisible();
-  await expect(page.getByText('This run called no tools.', { exact: true })).toBeVisible();
+  await expect(page.getByText('It didn’t use any tools.', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Retry task', exact: true })).toBeVisible();
 });
@@ -76,7 +77,7 @@ test('scheduled recovery shows its countdown and allows cancellation', async ({ 
 test('a blocked model connection explains the next action without starting work', async ({ page }) => {
   await page.goto('/?recovery=blocked');
   const card = page.getByRole('region', { name: 'Agent activity' });
-  await expect(card).toContainText('Reconnect Nous Portal in Settings before retrying.');
+  await expect(card).toContainText('Reconnect Nous Portal in Admin → Model providers before retrying.');
   await expect(card.getByRole('button', { name: 'Retry task', exact: true })).toHaveCount(0);
   await expect(card.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });
@@ -88,7 +89,7 @@ test('Run now can report no eligible work and stays absent on a completed trace'
   await expect(card.getByRole('button', { name: 'Checking work…' })).toBeDisabled();
   await expect(card.getByRole('status')).toHaveText('Idle');
   await expect(card).toContainText('No eligible pending work right now.');
-  await card.getByRole('button', { name: 'View trace →', exact: true }).click();
+  await card.getByRole('button', { name: 'See what it did →', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Automated partner screening · Work mode' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });

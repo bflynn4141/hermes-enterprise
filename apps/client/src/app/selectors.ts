@@ -105,7 +105,11 @@ export function requestStatusLabel(request: RequestEntity): string {
   if (request.kind === 'approval' && request.approval) return approvalReviewerLabel(request);
   switch (request.status) {
     case 'pending':
-      return request.kind === 'task' ? 'Ready to continue' : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? [money, 'Invoice draft'].filter(Boolean).join(' · ') : 'Agreement draft · Unsigned';
+      return request.kind === 'task'
+        ? (request.payload as { task_type?: string; to_role_name?: string } | undefined)?.task_type === 'email_handoff'
+          ? `Handed to ${(request.payload as { to_role_name?: string }).to_role_name ?? 'another team'}`
+          : 'Ready to continue'
+        : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? [money, 'Invoice draft'].filter(Boolean).join(' · ') : 'Agreement draft · Unsigned';
     case 'declined':
       return 'Declined · No message sent';
     case 'admitted':
@@ -120,8 +124,11 @@ export function requestStatusLabel(request: RequestEntity): string {
       return 'Changes requested · New version required';
     case 'expired':
       return 'Expired · No authorization';
+    case 'withdrawn':
+      return 'Withdrawn · Nothing sent';
     default:
-      return request.status;
+      // A status this build does not know yet: never the raw enum (docs/DESIGN.md).
+      return 'Status updated · Open to see details';
   }
 }
 
@@ -140,8 +147,8 @@ export function describeRef(state: AppState, app: Ref): [string, string] {
   const view = app.view;
   if (section === 'agents') {
     if (view === 'setup') return [agent, `${agent} / Ready to start`];
-    if (view === 'trace') return [agent, `${agent} / Run detail`];
-    if (view === 'traces') return [agent, `${agent} / Traces`];
+    if (view === 'trace') return [agent, `${agent} / What it did`];
+    if (view === 'traces') return [agent, `${agent} / Activity`];
     if (view === 'context') return [agent, app.field ? `${agent} / ${app.field}` : `${agent} / Context`];
     if (view === 'skills') return [agent, `${agent} / Skills`];
     if (view === 'permissions') return [agent, `${agent} / Permissions`];

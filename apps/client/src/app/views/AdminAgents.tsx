@@ -13,7 +13,7 @@ import { catalogRows } from '../selectors.js';
 import { Button, EmptyState, MenuItem, Skeleton } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { ApprovalSwitches } from './AgentPermissions.js';
-import { SkillAssignmentEditor } from './Workspace.js';
+import { SkillAssignmentEditor, providerName } from './Workspace.js';
 import { needsSignIn, useStepUp } from './use-step-up.js';
 import './admin-agents.css';
 import './admin-roles.css';
@@ -29,7 +29,7 @@ export function agentStatusLabel(agent: AgentDirectoryEntry): string {
 export function runtimeLabel(runtime: AgentDirectoryEntry['runtime']): string {
   const place = runtime.source === 'cloud_capacity' || runtime.source === 'cloud_provisioned'
     ? ['Hermes Cloud', runtime.label].filter(Boolean).join(' · ')
-    : runtime.source === 'deployment' ? 'Deployment runtime' : 'No runtime yet';
+    : runtime.source === 'deployment' ? 'This deployment' : 'Not set up yet';
   if (runtime.source === 'none' || runtime.state === 'connected') return place;
   return `${place} (${runtime.state === 'failed' ? 'needs attention' : runtime.state === 'setting_up' ? 'setting up' : 'not connected'})`;
 }
@@ -53,15 +53,15 @@ export function agentNameProblem(name: string): string | null {
  * `subject` finishes the step-up sentence: "Changing <subject> needs…".
  */
 export function agentWriteMessage(error: unknown, subject: string): string {
-  const refusal = error as { reason?: string; message?: string } | null;
+  const refusal = error as { reason?: string } | null;
   switch (refusal?.reason) {
     case 'reauth_required': return `Changing ${subject} needs a recent sign-in.`;
     case 'bad_agent_update': return `Use a name of 1 to ${AGENT_NAME_MAX} characters. Nothing was changed.`;
     case 'unknown_model':
     case 'provider_not_allowed': return 'That model isn’t available for this agent. Nothing was changed.';
     case 'unknown_agent': return 'This agent no longer exists. Nothing was changed.';
-    // The server's own sentence says why and where the runbook is.
-    case 'runtime_rebuild_required': return refusal.message ?? 'This agent’s runtime needs a rebuild before its skills can change.';
+    // The server's sentence names an operator runbook; the Admin gets the next step instead.
+    case 'runtime_rebuild_required': return 'This agent has to be set up again before its skills can change. Ask the person who runs Hermes for your company. Nothing was changed.';
     case 'one_active_skill': return 'Pause or remove the current skill first.';
     case 'already_assigned': return 'This agent already has that skill.';
     case 'no_lane': return 'Give this agent a role before assigning a skill.';
@@ -238,7 +238,7 @@ function ModelCard({ agent, onUpdated }: { agent: AgentDirectoryEntry; onUpdated
   >
     <div className="col" role="radiogroup" aria-label={`Model for ${agent.name}`} style={{ gap: 4 }}>
       <MenuItem role="radio" checked={choice === null} onClick={() => pick(null)}>{`Workspace default (${defaultLabel})`}</MenuItem>
-      {options.map((row) => <MenuItem role="radio" key={row.model_id} checked={choice === row.model_id} sub={row.provider ? `via ${row.provider}` : undefined} onClick={() => pick(row.model_id)}>{row.label}</MenuItem>)}
+      {options.map((row) => <MenuItem role="radio" key={row.model_id} checked={choice === row.model_id} sub={row.provider ? `From ${providerName(row.provider)}` : undefined} onClick={() => pick(row.model_id)}>{row.label}</MenuItem>)}
     </div>
     <p className="meta">New conversations start with this model. People can still change it in a conversation.</p>
   </AdminSettingsCard>;
@@ -297,7 +297,7 @@ function SkillsCard({ agent, onChanged }: { agent: AgentDirectoryEntry; onChange
   };
   return <AdminSettingsCard
     title="Skills"
-    description={`What ${agent.name} is assigned to do. Pausing a skill removes its tools from new runs.`}
+    description={`What ${agent.name} is assigned to do. A paused skill is not used in new tasks.`}
     footer={problem !== null || status || assignable.length > 0 ? <>
       {problem !== null ? <Problem error={problem} subject="this agent’s skills" /> : <p role="status">{status}</p>}
       {assignable.length > 0 && <div className="admin-roles-actions"><Button disabled={busy} onClick={add}>{busy ? 'Saving…' : 'Add'}</Button></div>}
@@ -308,7 +308,7 @@ function SkillsCard({ agent, onChanged }: { agent: AgentDirectoryEntry; onChange
     {assignments?.length === 0 && <p>No skills assigned.</p>}
     {assignments?.map((assignment) => <div key={assignment.id} className="admin-agents-skill">
       <div className="admin-agents-skill-row">
-        <div><span className="admin-agents-name">{assignment.name}</span><p className="meta">{[assignment.team?.name, assignment.version, assignment.state === 'active' ? 'Active' : 'Paused'].filter(Boolean).join(' · ')}</p></div>
+        <div><span className="admin-agents-name">{assignment.name}</span><p className="meta">{[assignment.team?.name, assignment.state === 'active' ? 'Active' : 'Paused'].filter(Boolean).join(' · ')}</p></div>
         {confirming === assignment.id
           ? <div className="admin-roles-actions">
             <span className="meta admin-agents-confirm">Remove {assignment.name}?</span>
@@ -337,7 +337,7 @@ function SkillsCard({ agent, onChanged }: { agent: AgentDirectoryEntry; onChange
     {assignments?.length === 0 && !agent.role && <p>Skills come from a role. Give {agent.name} a role to assign one.</p>}
     {assignable.length > 0 && <label className="kv"><span className="grow">Assign a skill</span>
       <select className="admin-agents-input" disabled={busy} value={selected} onChange={(event) => { setAdding(event.target.value); setProblem(null); setStatus(''); }}>
-        {assignable.map((entry) => <option key={entry.key} value={entry.key}>{entry.name} · {entry.version}</option>)}
+        {assignable.map((entry) => <option key={entry.key} value={entry.key}>{entry.name}</option>)}
       </select>
     </label>}
   </AdminSettingsCard>;

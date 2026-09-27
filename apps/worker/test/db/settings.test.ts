@@ -240,7 +240,7 @@ describe('Settings > Data and privacy', () => {
 
     expect(body.policy).toEqual([
       ...POLICY_FACTS,
-      { id: 'jurisdiction', label: 'Jurisdiction', value: 'eu' },
+      { id: 'jurisdiction', label: 'Data location', value: 'eu' },
     ]);
     expect(body.policy.find((fact) => fact.id === 'model_training')).toEqual({
       id: 'model_training',

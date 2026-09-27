@@ -152,7 +152,7 @@ export async function getApprovalEvidence(
       facts: [
         { label: 'From', value: sender.name ? `${sender.name} <${sender.address}>` : sender.address },
         { label: 'Subject', value: stored.view.subject || '(no subject)' },
-        { label: 'Domain checks', value: `DMARC ${sender.authentication.dmarc} · SPF ${sender.authentication.spf} · DKIM ${sender.authentication.dkim}` },
+        { label: 'Sender', value: sender.authentication.dmarc === 'pass' ? `Confirmed by ${sender.domain}` : 'Not confirmed' },
       ],
       email: stored.view,
     });

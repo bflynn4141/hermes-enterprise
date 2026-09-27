@@ -1,0 +1,8 @@
+.field-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
+.field-list > div { display: contents; }
+.field-list dt { color: var(--muted); }
+.field-list dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 560px) {
+  .field-list { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .field-list dd { margin-bottom: 8px; }
+}

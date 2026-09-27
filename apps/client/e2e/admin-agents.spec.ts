@@ -42,9 +42,9 @@ test('an Admin sees every agent and governs a member agent without its conversat
   const skills = pane.getByRole('region', { name: 'Skills' });
   await skills.getByRole('button', { name: 'Configure' }).click();
   await skills.getByLabel('Status').selectOption('paused');
-  await skills.getByRole('button', { name: 'Save revision' }).click();
+  await skills.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(pane.getByText('Skill saved.')).toBeVisible();
-  await expect(skills.getByText('Finance · 1.0.1 · Paused')).toBeVisible();
+  await expect(skills.getByText('Finance · Paused')).toBeVisible();
   if (shots) await page.screenshot({ path: `${shots}/admin-agents-detail.png`, fullPage: true });
 
   await pane.getByRole('button', { name: '← All agents' }).click();
@@ -110,15 +110,15 @@ test('an Admin removes and assigns a catalog skill on an agent without a runtime
   await expect(skills.getByText('No skills assigned.')).toBeVisible();
 
   const picker = skills.getByLabel('Assign a skill');
-  await expect(picker.locator('option')).toHaveText(['Partner program screening · 1.8.0']);
+  await expect(picker.locator('option')).toHaveText(['Partner program screening']);
   await skills.getByRole('button', { name: 'Add' }).click();
   await expect(skills.getByRole('status')).toHaveText('Skill assigned.');
-  await expect(skills.getByText('1.8.0 · Active')).toBeVisible();
+  await expect(skills.getByText('Active', { exact: true }).first()).toBeVisible();
   await expect(skills.getByLabel('Assign a skill')).toHaveCount(0);
   if (shots) await page.screenshot({ path: `${shots}/admin-agents-skills.png`, fullPage: true });
 
   await pane.getByRole('button', { name: '← All agents' }).click();
-  await expect(pane.getByRole('list', { name: 'Agents' }).getByRole('button', { name: /^Scout/ })).toContainText('Partner program screening · No runtime yet');
+  await expect(pane.getByRole('list', { name: 'Agents' }).getByRole('button', { name: /^Scout/ })).toContainText('Partner program screening · Not set up yet');
 });
 
 test('an agent whose runtime attests its skill says it needs a rebuild and offers no retry', async ({ page }) => {
@@ -129,7 +129,7 @@ test('an agent whose runtime attests its skill says it needs a rebuild and offer
   const skills = pane.getByRole('region', { name: 'Skills' });
   await skills.getByRole('button', { name: 'Remove' }).click();
   await skills.getByRole('button', { name: 'Remove', exact: true }).click();
-  await expect(skills.getByRole('alert')).toContainText('The runtime needs a rebuild first');
+  await expect(skills.getByRole('alert')).toContainText('This agent has to be set up again before its skills can change.');
   await expect(skills.getByRole('button', { name: 'Sign in again' })).toHaveCount(0);
   await expect(skills.getByRole('button', { name: /Try again|Retry/ })).toHaveCount(0);
   await expect(skills.getByText('Partner invoice review', { exact: true })).toBeVisible();

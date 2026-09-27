@@ -42,22 +42,23 @@ describe('invitation diagnostics copy', () => {
   });
 
   it.each([
-    ['iris_capacity_unavailable', 'No verified agent profile is available'],
+    ['iris_capacity_unavailable', 'There is no agent ready for a new member'],
     ['member_setup_role_unavailable', 'Finance agent setup is not available yet'],
-    ['not_configured', 'not connected to WorkOS invitation delivery'],
+    ['not_configured', 'Invitation emails are not turned on'],
     ['rate_limited', 'Too many invitation attempts'],
     ['admin_required', 'Only a workspace Admin'],
     ['invalid_session', 'session could not be verified'],
     ['csrf_failed', 'Refresh this page'],
     ['bad_email', 'Enter a valid email address'],
-    ['bad_body', 'request was not valid'],
+    ['bad_body', 'invitation could not be read'],
     ['bad_id', 'invitation no longer exists'],
     ['not_resendable', 'can no longer be resent'],
   ])('maps %s without echoing a server message', (reason, expected) => {
     const error = new RestError(409, reason, 'recipient@example.test bearer secret upstream body', null, TRACE);
     const copy = invitationFailureMessage(error);
     expect(copy).toContain(expected);
-    expect(copy).toContain(`Reference: ${TRACE}`);
+    expect(copy).not.toContain(TRACE);
+    expect(copy).not.toMatch(/WorkOS|Reference/);
     expect(copy).not.toContain('recipient@example.test');
     expect(copy).not.toContain('bearer secret');
   });
@@ -66,7 +67,7 @@ describe('invitation diagnostics copy', () => {
     const copy = invitationFailureMessage(
       new RestError(500, 'unexpected_provider_shape', '{"email":"private@example.test"}', null, TRACE),
     );
-    expect(copy).toBe(`Could not record the invitation. Try again. Reference: ${TRACE}.`);
+    expect(copy).toBe('Could not record the invitation. Try again.');
   });
 
   it('retains the optional server correlation id on RestError', async () => {
@@ -86,9 +87,9 @@ describe('invitation diagnostics copy', () => {
 
   it('describes queued, accepted, local, and sanitized failed delivery states', () => {
     expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'queued' }))
-      .toBe('Email delivery queued');
+      .toBe('Invitation email waiting to send');
     expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'delivered' }))
-      .toBe('Sent by WorkOS');
+      .toBe('Invitation email sent');
     expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'not_required' }))
       .toBe('No invitation email was sent.');
     expect(invitationDeliveryMessage({
@@ -96,27 +97,27 @@ describe('invitation diagnostics copy', () => {
       delivery_status: 'failed',
       delivery_reason: 'workos_invitation_delivery_unavailable',
       delivery_trace_id: TRACE,
-    })).toBe(`Email delivery will retry automatically. Reference: ${TRACE}.`);
+    })).toBe('Email delivery will retry automatically.');
     expect(invitationDeliveryMessage({
       ...INVITATION,
       delivery_status: 'failed',
       delivery_reason: 'workos_invitation_delivery_not_configured',
       delivery_trace_id: TRACE,
-    })).toBe(`Email delivery is waiting for WorkOS configuration. Reference: ${TRACE}.`);
+    })).toBe('Invitation emails are not turned on yet. Ask the person who runs Hermes for your company.');
     expect(invitationDeliveryMessage({
       ...INVITATION,
       delivery_status: 'failed',
       delivery_reason: 'workos_invitation_local_commit_failed',
       delivery_trace_id: TRACE,
     })).toBe(
-      `WorkOS accepted the request, but Hermes could not save confirmation. Check WorkOS before resending. Reference: ${TRACE}.`,
+      'The invitation email was probably sent, but Hermes could not confirm it. Ask them to check their inbox before you resend.',
     );
     expect(invitationDeliveryMessage({
       ...INVITATION,
       delivery_status: 'failed',
       delivery_reason: 'workos_invitation_delivery_outcome_unknown',
       delivery_trace_id: TRACE,
-    })).toBe(`WorkOS may have accepted the email. Check WorkOS before resending. Reference: ${TRACE}.`);
+    })).toBe('The invitation email may already have been sent. Ask them to check their inbox before you resend.');
   });
 
   it('uses safe fallback copy for an unknown historical failure category', () => {
@@ -127,7 +128,7 @@ describe('invitation diagnostics copy', () => {
       delivery_trace_id: TRACE,
     } as unknown as InvitationEntity;
     const copy = invitationDeliveryMessage(invitation);
-    expect(copy).toBe(`Email delivery will retry automatically. Reference: ${TRACE}.`);
+    expect(copy).toBe('Email delivery will retry automatically.');
     expect(copy).not.toContain('finance@example.test');
   });
 });

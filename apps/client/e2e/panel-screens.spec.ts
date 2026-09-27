@@ -38,15 +38,15 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     key: 'traces',
     go: async (page) => {
       await nav(page, 'Agents').click();
-      await app(page).getByRole('tab', { name: 'Traces' }).click();
+      await app(page).getByRole('tab', { name: 'Activity' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Runs' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Activity' })).toBeVisible()),
   },
   {
     key: 'trace-detail',
     go: async (page) => {
       await nav(page, 'Agents').click();
-      await app(page).getByRole('tab', { name: 'Traces' }).click();
+      await app(page).getByRole('tab', { name: 'Activity' }).click();
       // Scoped to the view rather than the region: the app *header* carries an
       // "Open Iris" button in two of the three states, and it sorts first.
       await view(page).getByRole('button', { name: /^Open/ }).first().click();
@@ -112,7 +112,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, 'Library').click();
       await app(page).getByRole('tab', { name: 'Connections' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Connect read-only Gmail evidence')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByText('Connect read-only Gmail', { exact: true })).toBeVisible()),
   },
   {
     key: 'library-intelligence',

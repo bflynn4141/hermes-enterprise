@@ -182,7 +182,7 @@ async function selectAlternate(page: Page) {
   await page.getByRole('button', { name: /^Model:/ }).click();
   const menu = page.getByRole('dialog', { name: 'Model', exact: true });
   await menu.getByRole('textbox', { name: 'Search models' }).fill('step-3.7-flash');
-  await menu.locator(`.menu-item[title="${ALTERNATE}"]`).click();
+  await menu.locator(`.menu-item:has([data-model-id="${ALTERNATE}"])`).click();
   await page.keyboard.press('Escape');
 }
 
@@ -226,7 +226,8 @@ test('a no-output failed turn retains its explanation and retry after reload', a
   run.status = 'error'; run.error = { class: 'transient', retryable: true, reason: 'provider_rate_limited', message: 'The selected model is rate limited. Try again shortly.' };
   server.messages.get(A)!.push({ ...server.message(A, 'iris', ''), run_id: run.id, seq: 3, status: 'incomplete' });
   await page.reload();
-  await expect(page.getByText(/selected model is rate limited/)).toBeVisible();
+  await expect(page.getByText(/The model is busy right now/)).toBeVisible();
+  await expect(page.getByText(/selected model is rate limited/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Retry remaining step/ })).toBeVisible();
   expect(server.turns).toHaveLength(1);
 });

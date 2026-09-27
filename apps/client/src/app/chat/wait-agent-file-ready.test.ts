@@ -43,7 +43,7 @@ describe('waitForAgentFileReady', () => {
       extraction_error: 'unsupported encoding',
       sha256: null,
     }), { sleep: async () => undefined })).rejects.toSatisfy((error: unknown) =>
-      error instanceof AgentFileExtractionError && error.message.includes('unsupported encoding'));
+      error instanceof AgentFileExtractionError && error.message.includes('couldn’t read this file') && !error.message.includes('unsupported encoding'));
   });
 
   it('gives up after max attempts while still pending', async () => {

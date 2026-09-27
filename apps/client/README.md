@@ -368,10 +368,10 @@ are the same three clicks on either side of that change.
   for a second, deliberate click — it never auto-replays.
 * **A refusal is rendered, never swallowed.** Every send, guide and queue used
   to end in `.catch(() => undefined)`, so a 400 with a sentence in it produced
-  nothing on screen. `chat/refusal.ts` maps the server's `reason` to an *action*
-  and never to replacement copy — the Worker's words are shown verbatim, the
-  client adds the route to the fix — the draft comes back with the caret, and a
-  session is not named after a turn that never ran (decision C45).
+  nothing on screen. `chat/refusal.ts` maps the server's `reason` to a plain
+  sentence and an *action* (the route to the fix); the Worker's own text is kept
+  for logs, never shown (docs/DESIGN.md). The draft comes back with the caret,
+  and a session is not named after a turn that never ran (decision C45).
 * **A chat reply may use light Markdown; a tool argument may not.** The subset
   is paragraphs, bold, italics, inline code, fenced code, lists, headings to h3,
   blockquotes and simple tables, parsed by `chat/markdown-subset.ts` into a node
@@ -401,13 +401,13 @@ are the same three clicks on either side of that change.
   never decides. `PromptBar` and `AgentScreen` are deliberately not adopted
   (decisions C23 and C27); eleven other components are, and "The library,
   adopted and not" below says what each one needed.
-* **A screen renders the server's sentence, not its own.** The usage
-  disclaimer, the provider jurisdiction warnings, the erasure timing copy and an
-  effect's `reason` are all strings the Worker writes, rendered verbatim. Each
-  is a claim somebody could be held to, and a claim with two authors is a claim
-  that drifts. Where the client writes copy it is about the client — "this
-  server does not serve traces; the client is newer than the Worker it is
-  talking to" — not about the data.
+* **Promises come from the server; codes never reach the screen.** The usage
+  disclaimer, the provider jurisdiction warnings and the erasure timing copy
+  are sentences the Worker writes and the client renders verbatim, because each
+  is a claim somebody could be held to. Reason codes, ids, digests, raw states
+  and operator detail (an effect's `reason`, an extraction error) are mapped to
+  the client's own plain sentences instead, with a neutral fallback for a code
+  it does not know (docs/DESIGN.md, September 27, 2026).
 
 ## Server findings
 

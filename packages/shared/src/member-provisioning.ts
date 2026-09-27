@@ -83,7 +83,7 @@ export function memberProvisioningPresentation(
     return result('Invite not sent', 'Check the email address before resending.', 'attention', 'resend');
   }
   if (value.delivery === 'failed' && value.issue === 'readiness_failed') {
-    return result('Invite not sent', 'Their reserved agent capacity was lost before the invitation went out. Resend to reserve it again.', 'attention', 'resend');
+    return result('Invite not sent', 'Their agent’s spot was released before the invitation went out. Resend to set it up again.', 'attention', 'resend');
   }
   if (value.issue !== null || value.preparation === 'failed' || value.delivery === 'failed') {
     return result('Needs attention', 'Setup or invitation delivery could not finish.', 'attention', 'contact_admin');
@@ -92,9 +92,9 @@ export function memberProvisioningPresentation(
     return result('Sending invite', 'Their agent is ready. Sending the invitation.', 'neutral');
   }
   if (value.preparation === 'ready') {
-    return result('Agent ready', 'Setup is verified. Invitation delivery has not been queued.', 'positive');
+    return result('Agent ready', 'Their agent is ready. The invitation hasn’t been sent yet.', 'positive');
   }
-  return result('Setting up agent', 'Hermes is preparing verified capacity in the background.', 'neutral');
+  return result('Setting up agent', 'Hermes is setting up their agent.', 'neutral');
 }
 
 export type MemberProvisioningNextStep =

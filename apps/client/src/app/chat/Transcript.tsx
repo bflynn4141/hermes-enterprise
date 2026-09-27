@@ -38,6 +38,8 @@ import { ActivityArea } from './ActivityArea.js';
 import { RunActivity, RunStream } from './RunSurface.js';
 import { FocusLink } from './FocusLink.js';
 import { canReleaseRunStream, collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
+import { emailTurn } from './email-turn.js';
+export { emailTurn } from './email-turn.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
@@ -451,7 +453,22 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
   );
 }
 
+function EmailTurn({ message, email }: { message: Message; email: { from: string; subject: string } }) {
+  return (
+    <div className="msg-email" data-message-id={message.id} role="note" aria-label={`New email from ${email.from}`}>
+      <Glass name="inbox" size={30} />
+      <span className="msg-email-body">
+        <span className="msg-email-label">New email</span>
+        <strong>{email.subject || '(no subject)'}</strong>
+        <span className="msg-email-from">From {email.from}</span>
+      </span>
+    </div>
+  );
+}
+
 function UserMessage({ message }: { message: Message }) {
+  const email = emailTurn(message);
+  if (email) return <EmailTurn message={message} email={email} />;
   const bot = parseBotModeAgentMessage(message.text);
   if (bot) {
     return (
@@ -459,7 +476,6 @@ function UserMessage({ message }: { message: Message }) {
         <summary>
           <span>Message from</span>
           <strong>{bot.display}</strong>
-          {bot.profile && <code>@{bot.profile}</code>}
         </summary>
         <div className="msg-agent-handoff-body">{bot.body}</div>
       </details>

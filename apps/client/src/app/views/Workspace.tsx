@@ -47,17 +47,16 @@ import { AdminRunLimits } from './AdminRunLimits.js';
  * row is in, which is the question an operator asks. Neither is derived from
  * the other, so both are offered and both are labelled.
  *
- * `FilterTable`'s three states are mapped from the server's `status` string,
- * which is prose written per event kind rather than an enum; anything that is
- * neither blocked nor a finished decision is "in progress", which is what
- * "assigned, waiting on a person" actually is.
+ * `FilterTable`'s three states are mapped from the server's `status` word.
+ * The Worker (domain/history.ts) writes one vocabulary: the words in
+ * `NEEDS_PERSON` mean the row's subject is waiting on somebody right now;
+ * every other word is a finished state (Sent, Handled, Added, Retried…), so
+ * finished work never reads "Working". The Blocked tab lists the same
+ * `NEEDS_PERSON` rows the table marks "Needs review".
  */
-const historyState = (row: EventRow): 'todo' | 'progress' | 'done' => {
-  const status = row.status.toLowerCase();
-  if (status.includes('blocked') || status.includes('failed')) return 'todo';
-  if (row.kind === 'decision.recorded' || status.includes('admitted') || status.includes('declined') || status.includes('saved') || status.includes('created')) return 'done';
-  return 'progress';
-};
+const NEEDS_PERSON = new Set(['Needs review', 'Waiting', 'Stopped', 'Needs attention']);
+const DECISION_KINDS = new Set(['decision.recorded', 'approval.vote_recorded', 'approval.finalized']);
+export const historyState = (row: EventRow): 'todo' | 'progress' | 'done' => (NEEDS_PERSON.has(row.status) ? 'todo' : 'done');
 
 export function History() {
   const state = useAppState();
@@ -66,7 +65,7 @@ export function History() {
   const lists = useWorkspaceLists();
   const tab = state.ui.historyTab;
   const events = useMemo(
-    () => lists.history.filter((row) => (tab === 'decisions' ? row.kind === 'decision.recorded' : tab === 'blocked' ? row.status === 'Blocked' : true)),
+    () => lists.history.filter((row) => (tab === 'decisions' ? DECISION_KINDS.has(row.kind) : tab === 'blocked' ? NEEDS_PERSON.has(row.status) : true)),
     [lists.history, tab],
   );
   const emptyCopy = tab === 'decisions' ? EMPTY.historyDecisions : tab === 'blocked' ? EMPTY.historyBlocked : EMPTY.historyAll;
@@ -470,10 +469,10 @@ export function Members() {
             </select>
           </label>}
           <p className="meta">{setupOnly
-            ? 'Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.'
-            : 'Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.'}</p>
+            ? 'Hermes sets up an agent for them first. The invitation email goes out once it is ready.'
+            : 'Hermes sets aside an agent for them. Their card shows whether the invitation email was sent.'}</p>
           {setupOnly && !setupRoles.includes('finance-agent') && <p className="meta">
-            Finance appears here once a verified Finance instance is added under Admin → Agent capacity.
+            Finance appears here once a Finance agent is added under Admin → Agent capacity.
           </p>}
           {roles.length > 0 && <div className="member-approvals">
             <RoleChecklist roles={roles} selected={inviteRoles} locked={jobRoleLock} disabled={pending === 'invite'} onChange={setInviteRoles} />
@@ -534,7 +533,7 @@ export function Members() {
           }
         >
           <p className="meta">
-            {person?.email} · {person?.status}
+            {person?.email}{person ? ` · ${memberStatusLabel(person.status)}` : ''}
           </p>
           {isYou ? (
             <>
@@ -638,6 +637,35 @@ export function Library({ view, id }: { view: string; id: string | null }) {
   );
 }
 
+/**
+ * The result an OAuth callback left in the URL (`?gmail=connected`,
+ * `?gmail_evidence=failed`), read once and then removed so a reload or a
+ * shared link does not repeat it.
+ */
+function useCallbackResult(param: string): 'connected' | 'failed' | null {
+  const [result] = useState<'connected' | 'failed' | null>(() => {
+    try {
+      const value = new URL(window.location.href).searchParams.get(param);
+      return value === 'connected' || value === 'failed' ? value : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (!result) return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete(param);
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      // Leaving the parameter in place only repeats a message.
+    }
+  }, [param, result]);
+  return result;
+}
+
+const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+
 function LibraryConnections() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -647,7 +675,10 @@ function LibraryConnections() {
   const [outbound, setOutbound] = useState<OutboundEmailConnection | null>(null);
   const [threadId, setThreadId] = useState('');
   const [busy, setBusy] = useState<'connect' | 'import' | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const callback = useCallbackResult('gmail_evidence');
+  const [notice, setNotice] = useState<string | null>(() => (callback === 'connected'
+    ? 'Read-only Gmail is connected.'
+    : callback === 'failed' ? 'Gmail was not connected. Nothing changed. Try again.' : null));
   const [result, setResult] = useState<InboundEmailThreadImport | null>(null);
 
   const load = (): void => {
@@ -678,9 +709,9 @@ function LibraryConnections() {
       return;
     }
     setNotice(error.reason === 'admin_required' ? EMPTY.adminRequired
-      : error.reason === 'gmail_evidence_unavailable' ? 'Read-only Gmail evidence is not configured for this deployment.'
-        : error.reason === 'gmail_evidence_not_connected' ? 'Connect the read-only Gmail account before importing a thread.'
-          : 'The evidence action could not be completed. Nothing was sent or changed outside Hermes.');
+      : error.reason === 'gmail_evidence_unavailable' ? 'Read-only Gmail is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.'
+        : error.reason === 'gmail_evidence_not_connected' ? 'Connect read-only Gmail before saving a conversation.'
+          : 'That did not work. Nothing was sent or changed.');
   };
   const connect = async (): Promise<void> => {
     setBusy('connect');
@@ -724,59 +755,61 @@ function LibraryConnections() {
       {notice && <Ack show>{notice}</Ack>}
       {result && (
         <Ack show>
-          {result.created ? 'Thread imported as immutable Library evidence.' : 'That exact thread snapshot was already imported.'}
-          {' '}Detected {result.events.replies} repl{result.events.replies === 1 ? 'y' : 'ies'}, recorded {result.events.bounces} unverified bounce-like notice{result.events.bounces === 1 ? '' : 's'}, and detected {result.events.unsubscribes} unsubscribe request{result.events.unsubscribes === 1 ? '' : 's'}. Sent 0 messages.
+          {result.created ? 'Saved to your Library.' : 'This conversation was already saved.'}
+          {' '}Found {plural(result.events.replies, 'reply', 'replies')}, {plural(result.events.bounces, 'possible bounce', 'possible bounces')} and {plural(result.events.unsubscribes, 'unsubscribe request', 'unsubscribe requests')}. Nothing was sent.
         </Ack>
       )}
       <Panel
         icon="context"
-        title={connected ? (admin && inbound.address ? `Read-only Gmail · ${inbound.address}` : 'Read-only Gmail connected') : inbound.configured ? 'Connect read-only Gmail evidence' : 'Read-only Gmail is not configured'}
+        title={connected ? (admin && inbound.address ? `Read-only Gmail · ${inbound.address}` : 'Read-only Gmail connected') : inbound.configured ? 'Connect read-only Gmail' : 'Read-only Gmail is not available yet'}
         subtitle={connected
-          ? 'Hermes reads only the exact thread ID an Admin enters. It cannot use this credential to send.'
-          : 'This uses separate Google consent from the outreach sender and never lists or searches the mailbox.'}
+          ? 'Hermes can only read the one conversation you choose. It cannot send from this account.'
+          : inbound.configured
+            ? 'Hermes never lists or searches the mailbox. This is separate from the account Hermes sends from.'
+            : 'Ask the person who runs Hermes for your company to turn it on.'}
         right={admin && inbound.configured ? (
           <Button primary={!connected} disabled={busy !== null} onClick={() => void connect()}>
             {busy === 'connect' ? 'Opening Google…' : connected ? 'Reconnect' : 'Connect'}
           </Button>
         ) : undefined}
       >
-        <div className="kv"><span className="grow">Authorization</span><span className="meta">Separate gmail.readonly consent</span></div>
-        <div className="kv"><span className="grow">Selection</span><span className="meta">One exact thread per import</span></div>
-        {admin && <div className="kv"><span className="grow">Imported snapshots</span><span className="meta">{inbound.imported_threads}</span></div>}
-        {!admin && <p className="meta">A workspace Admin manages this connection and imports evidence.</p>}
+        <div className="kv"><span className="grow">Access</span><span className="meta">Read only</span></div>
+        <div className="kv"><span className="grow">What Hermes reads</span><span className="meta">One conversation at a time, chosen by an Admin</span></div>
+        {admin && <div className="kv"><span className="grow">Saved conversations</span><span className="meta">{inbound.imported_threads}</span></div>}
+        {!admin && <p className="meta">A workspace Admin manages this connection and saves conversations.</p>}
       </Panel>
       {connected && admin && (
         <Panel
           icon="document"
-          title="Technical Gmail evidence import"
-          subtitle="Enter a Gmail API thread ID supplied by an approved operator tool. Google does not document converting a Gmail browser link into this API ID."
+          title="Save a Gmail conversation to the Library"
+          subtitle="Hermes reads the conversation once and saves a copy. Nothing in Gmail changes."
         >
           <div className="row" style={{ alignItems: 'end' }}>
             <label className="field grow">
-              <span>Gmail thread ID</span>
+              <span>Conversation ID</span>
               <input
                 value={threadId}
                 onChange={(event) => setThreadId(event.target.value)}
-                placeholder="18f2a4b7c9d…"
+                placeholder="Paste the conversation ID"
                 autoComplete="off"
                 spellCheck={false}
               />
             </label>
             <Button primary disabled={busy !== null || threadId.trim().length < 4 || !state.agent.id} onClick={() => void importThread()}>
-              {busy === 'import' ? 'Importing…' : 'Import evidence'}
+              {busy === 'import' ? 'Saving…' : 'Save to Library'}
             </Button>
           </div>
-          <p className="meta">This is an operator proof, not a finished end-user thread picker. Exact-thread replies and explicit unsubscribe requests can stop future outreach. DSN-looking bounce text is recorded only as unverified evidence and never suppresses a contact automatically. Import cannot send email.</p>
+          <p className="meta">A reply or an unsubscribe request in the conversation stops future outreach to that person. Something that only looks like a bounce is noted, but never stops outreach on its own. Saving never sends email.</p>
         </Panel>
       )}
       <Panel
         icon="send"
-        title={outbound.status === 'connected' ? (admin && outbound.address ? `Outbound sender · ${outbound.address}` : 'Outbound sender connected') : 'Outbound sender is not connected'}
-        subtitle="Sending is a separate Settings connection. Read permission is never reused as send permission."
+        title={outbound.status === 'connected' ? (admin && outbound.address ? `Sending from ${outbound.address}` : 'Sending account connected') : 'No sending account connected'}
+        subtitle="Sending is set up separately, in Admin → Email. Permission to read is never used to send."
         right={admin ? <Button link onClick={() => nav(ADMIN('Email'))}>Open Email settings</Button> : undefined}
       >
-        <div className="kv"><span className="grow">Mode</span><span className="meta">{outbound.mode === 'send_after_approval' ? 'Exact approved revision only' : 'Draft only'}</span></div>
-        {admin && <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{outbound.pending_messages}</span></div>}
+        <div className="kv"><span className="grow">What gets sent</span><span className="meta">{outbound.mode === 'send_after_approval' ? 'Only emails a person approved, exactly as approved' : 'Nothing. Approved emails are saved as drafts'}</span></div>
+        {admin && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{outbound.pending_messages}</span></div>}
       </Panel>
     </div>
   );
@@ -811,12 +844,10 @@ function LibrarySkills() {
             <div className="list-row" style={{ minHeight: 112 }}>
               <Glass name="skill" size={32} className="row-icon" />
               <div className="row-main">
-                <span className="t">
-                  {skill.name} · {skill.version}
-                </span>
+                <span className="t">{skill.name}</span>
                 <span className="s">
                   {skill.description} · Shared by {skill.shared_by}
-                  {assignment ? ` · ${assignment.state === 'active' ? 'Active' : 'Paused'} · revision ${assignment.revision}` : ''}
+                  {assignment ? ` · ${assignment.state === 'active' ? 'Active' : 'Paused'}` : ''}
                 </span>
               </div>
               <span style={{ position: 'relative', display: 'flex', gap: 8 }}>
@@ -907,15 +938,15 @@ export function SkillAssignmentEditor({
         void onSave({ revision: assignment.revision, state, config, schedule }).catch((caught: unknown) => {
           setSaving(false);
           setError((caught as { reason?: string }).reason === 'stale_revision'
-            ? 'This skill changed in another window. Your draft is kept. Reload the current configuration before saving again.'
-            : 'Could not save. Your draft is kept. Check the configuration and try again.');
+            ? 'This skill changed in another window. Your changes are kept here. Reload to see the latest settings before saving again.'
+            : 'Could not save. Your changes are kept here. Check the settings and try again.');
         });
       }}
     >
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <div className="t">How {assignment.agent_name ?? 'this agent'} performs this skill</div>
-          <div className="s">Configuration is versioned. Outreach remains a draft until a person approves it.</div>
+          <div className="s">Every saved change is kept. Outreach stays a draft until a person approves it.</div>
         </div>
         <label className="skill-config-compact-field">
           <span>Status</span>
@@ -962,17 +993,17 @@ export function SkillAssignmentEditor({
             <option value={720}>12 hours</option>
             <option value={1440}>Day</option>
           </select>
-          <small>Controls proactive discovery; manual runs remain available.</small>
+          <small>How often it looks on its own. You can still ask it any time.</small>
         </label>
         <label className="skill-config-check">
           <input type="checkbox" checked={schedule.enabled} onChange={(event) => setSchedule({ ...schedule, enabled: event.target.checked })} />
-          <span>Run proactive discovery on this schedule</span>
+          <span>Look on its own on this schedule</span>
         </label>
       </div>
       {error && <div className="danger-note" role="alert">{error}</div>}
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
         <Button quiet disabled={saving} onClick={onCancel}>Cancel</Button>
-        <Button primary type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save revision'}</Button>
+        <Button primary type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </div>
     </form>
   );
@@ -1074,9 +1105,9 @@ function LibraryDocuments() {
                 {doc.pdf_status === 'preparing'
                   ? ` · ${EMPTY.pdfPreparing}`
                   : doc.pdf_status === 'failed'
-                    ? ` · ${EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')}`
+                    ? ' · The PDF could not be made. The document is still saved.'
                     : doc.pdf_status === 'none' && doc.pdf_error
-                      ? ` · ${EMPTY.pdfUnavailable} · HTML render saved`
+                      ? ' · Saved without a PDF'
                       : ''}
               </span>
             </div>
@@ -1198,6 +1229,8 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
   );
 }
 
+const UNCONFIGURED_GMAIL = 'Sending from Gmail is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.';
+
 function EmailTab() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -1205,7 +1238,10 @@ function EmailTab() {
   const [connection, setConnection] = useState<OutboundEmailConnection | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const callback = useCallbackResult('gmail');
+  const [notice, setNotice] = useState<string | null>(() => (callback === 'connected'
+    ? 'Gmail is connected. Approved emails will be sent from this account.'
+    : callback === 'failed' ? 'Gmail was not connected. Nothing changed. Try again.' : null));
 
   const load = (): void => {
     if (!state.workspace.id) return;
@@ -1231,8 +1267,8 @@ function EmailTab() {
         else setNotice('This needs a recent sign-in. Sign in again to continue.');
       } else {
         setNotice(error.reason === 'gmail_unavailable'
-          ? 'Gmail outreach is not configured for this Hermes deployment.'
-          : error.reason === 'admin_required' ? EMPTY.adminRequired : 'Gmail authorization could not be started. Try again.');
+          ? UNCONFIGURED_GMAIL
+          : error.reason === 'admin_required' ? EMPTY.adminRequired : 'Google could not be opened. Nothing changed. Try again.');
       }
       setBusy(false);
     }
@@ -1241,29 +1277,28 @@ function EmailTab() {
   if (!connection && !statusError) return <Skeleton rows={4} label="Loading email connection" />;
   const connected = connection?.status === 'connected';
   const sendingEnabled = connection?.mode === 'send_after_approval';
-  const discoveryCadence = connection
-    ? connection.discovery_interval_minutes % 60 === 0
-      ? `${connection.discovery_interval_minutes / 60} hours`
-      : `${connection.discovery_interval_minutes} minutes`
-    : null;
+  const minutes = connection?.discovery_interval_minutes ?? 0;
+  const discoveryCadence = minutes % 60 === 0
+    ? minutes === 60 ? 'hour' : `${minutes / 60} hours`
+    : `${minutes} minutes`;
   const statusLabel = statusError
     ? 'Status unavailable'
     : !connection?.configured
-      ? 'Not configured'
+      ? 'Not available yet'
       : connection.status === 'connected'
         ? 'Connected'
         : connection.status === 'error'
           ? 'Needs attention'
           : connection.status === 'unavailable'
             ? 'Unavailable'
-            : 'Disconnected';
+            : 'Not connected';
   const statusTone = connected ? 'ok' : connection?.status === 'error' || statusError ? 'warn' : 'muted';
   return (
     <div className="admin-detail-page">
       <div className="admin-detail-heading">
         <div>
           <h2>Email</h2>
-          <p className="meta">Connect one dedicated Gmail sender for reviewed partner outreach.</p>
+          <p className="meta">Connect the Gmail account Hermes sends approved emails from: partner outreach, and replies your team approves from a role inbox.</p>
         </div>
         <Pill tone={statusTone}>{statusLabel}</Pill>
       </div>
@@ -1272,27 +1307,27 @@ function EmailTab() {
         title={statusError
           ? 'Gmail status is unavailable'
           : connected
-            ? connection?.address ? `Connected as ${connection.address}` : 'Gmail is connected'
+            ? connection?.address ? `Sending from ${connection.address}` : 'Gmail is connected'
             : connection?.status === 'error'
               ? 'Gmail needs to be reconnected'
               : connection?.configured
-                ? 'Connect a dedicated Gmail sender'
-                : 'Email is not configured'}
+                ? 'Connect a Gmail account for sending'
+                : 'Sending from Gmail is not available yet'}
         description={connected
-          ? 'This workspace uses this identity for approved partner outreach.'
+          ? 'Approved outreach, and replies your team approves from a role inbox, are sent from this account.'
           : statusError
-            ? 'Hermes could not read the current connection state.'
+            ? 'Hermes could not check the connection.'
             : connection?.configured
-              ? 'A workspace Admin completes Google OAuth to choose the sender.'
-              : 'An operator must configure the Google OAuth app before an Admin can connect the outreach mailbox.'}
+              ? 'Choose the account in Google. Approved outreach, and replies your team approves from a role inbox, are sent from it.'
+              : UNCONFIGURED_GMAIL}
         footer={<>
           <p className="meta">{statusError
-            ? 'Retrying reads the current state without changing the connection.'
+            ? 'Checking again does not change the connection.'
             : connected
-              ? 'Reconnect to replace or refresh the authorized Gmail identity.'
+              ? 'Reconnect to switch to another account or renew access.'
               : connection?.configured
-                ? 'Google opens in a new authorization flow; no password is entered in Hermes.'
-                : 'Google OAuth setup is managed by the Hermes operator.'}</p>
+                ? 'You sign in with Google, not in Hermes.'
+                : 'Until then, approved emails wait in Hermes and nothing is sent.'}</p>
           {statusError ? (
             <Button disabled={busy} onClick={load}>Retry</Button>
           ) : admin && connection?.configured ? (
@@ -1306,28 +1341,28 @@ function EmailTab() {
             <p className="meta" role="alert">{statusError}</p>
           ) : connection && (
             <>
-              <div className="kv"><span className="grow">Connection status</span><span className="meta">{statusLabel}</span></div>
-              {connection.address && <div className="kv"><span className="grow">Sender</span><span className="meta">{connection.address}</span></div>}
-              {connection.configured && <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{connection.pending_messages}</span></div>}
+              <div className="kv"><span className="grow">Connection</span><span className="meta">{statusLabel}</span></div>
+              {connection.address && <div className="kv"><span className="grow">Sends from</span><span className="meta">{connection.address}</span></div>}
+              {connection.configured && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{connection.pending_messages}</span></div>}
             </>
           )}
       </AdminSettingsCard>
 
-      <AdminSettingsCard title="How email outreach works" description="Discovery, drafting, and sending stay separate so a person controls what leaves the workspace.">
-          <div className="kv"><span className="grow">Discovery</span><span className="meta">{connection
-            ? connection.discovery_enabled ? `New candidates every ${discoveryCadence}` : 'Automated discovery is off'
-            : 'Available after connection status loads'}</span></div>
-          <div className="kv"><span className="grow">Drafts</span><span className="meta">The agent prepares personalized copy for Inbox review</span></div>
+      <AdminSettingsCard title="How sending works" description="Finding people, drafting and sending stay separate, so a person decides what leaves the workspace.">
+          <div className="kv"><span className="grow">Finding partners</span><span className="meta">{connection
+            ? connection.discovery_enabled ? `The agent looks for new partners every ${discoveryCadence}` : 'The agent does not look for partners on its own'
+            : 'Shown once the connection loads'}</span></div>
+          <div className="kv"><span className="grow">Drafts</span><span className="meta">The agent writes each email for review in the Inbox</span></div>
           <div className="kv"><span className="grow">Sending</span><span className="meta">{connection
-            ? sendingEnabled ? 'Exact approved revision only' : 'Draft-only until enabled by the operator'
-            : 'The current sending mode could not be loaded'}</span></div>
+            ? sendingEnabled ? 'Only what a person approved, exactly as approved' : 'Approved emails are saved as drafts. Nothing is sent yet'
+            : 'Could not check whether sending is on'}</span></div>
       </AdminSettingsCard>
 
-      <AdminSettingsCard title="Access and approval boundaries" description="Connection access and message approval are controlled independently.">
-          <div className="kv"><span className="grow">Authorization</span><span className="meta">A workspace Admin starts Google OAuth</span></div>
-          <div className="kv"><span className="grow">Credential storage</span><span className="meta">The Gmail credential stays encrypted on the server</span></div>
-          <div className="kv"><span className="grow">Message approval</span><span className="meta">Review happens in the Hermes Inbox</span></div>
-          <div className="kv"><span className="grow">Approved content</span><span className="meta">Only the exact approved revision can be sent when sending is enabled</span></div>
+      <AdminSettingsCard title="Who can do what" description="Connecting the account and approving each email are separate steps.">
+          <div className="kv"><span className="grow">Connecting</span><span className="meta">A workspace Admin signs in with Google</span></div>
+          <div className="kv"><span className="grow">Access</span><span className="meta">Stored encrypted. Hermes never sees the password</span></div>
+          <div className="kv"><span className="grow">Approving</span><span className="meta">Every email is reviewed in the Inbox</span></div>
+          <div className="kv"><span className="grow">What is sent</span><span className="meta">Exactly the words a person approved, and only when sending is on</span></div>
       </AdminSettingsCard>
     </div>
   );
@@ -1376,10 +1411,10 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         stepUp();
       } else {
         setNotice(error.reason === 'slack_unavailable'
-          ? 'Slack is not configured for this Hermes deployment.'
+          ? 'Slack is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.'
           : error.reason === 'admin_required'
             ? EMPTY.adminRequired
-            : 'Slack authorization could not be started. Try again.');
+            : 'Slack could not be opened. Nothing changed. Try again.');
       }
       setBusy(false);
     }
@@ -1392,7 +1427,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
       const result = await adapter.rest.disconnectSlack(state.workspace.id);
       setDisconnectOpen(false);
       setNotice(result.remote_revocation === 'pending'
-        ? 'Slack is disconnected in Hermes. Slack-side token revocation is queued and will retry automatically.'
+        ? 'Slack is disconnected. Hermes will finish removing its access in Slack automatically.'
         : 'Slack is disconnected.');
       load();
     } catch (caught) {
@@ -1434,18 +1469,18 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         </div>
         <AdminSettingsCard
           title="Slack status is unavailable"
-          description="Hermes could not read the current connection state."
+          description="Hermes could not check the connection."
           footer={<>
-            <p className="meta">Retrying reads the current state without changing the connection.</p>
+            <p className="meta">Checking again does not change the connection.</p>
             <Button disabled={busy} onClick={load}>Retry</Button>
           </>}
         >
           <p className="meta" role="alert">{statusError}</p>
         </AdminSettingsCard>
         <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
-          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
+          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private conversation with the agent</span></div>
           <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
-          <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Only in the Hermes Inbox</span></div>
         </AdminSettingsCard>
       </div>
     );
@@ -1478,14 +1513,14 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
     );
   }
   const statusLabel = !connection.configured
-    ? 'Not configured'
+    ? 'Not available yet'
     : connection.status === 'connected'
       ? 'Connected'
       : connection.status === 'error'
         ? 'Needs attention'
         : connection.status === 'unavailable'
           ? 'Unavailable'
-          : 'Disconnected';
+          : 'Not connected';
   const statusTone = connected ? 'ok' : connection.status === 'error' ? 'warn' : 'muted';
   return (
     <div className="admin-detail-page">
@@ -1504,18 +1539,18 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
             ? 'Slack needs to be reconnected'
             : connection.configured
               ? 'Connect this workspace to Slack'
-              : 'Slack is not configured'}
+              : 'Slack is not available yet'}
         description={connected
           ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Hermes agent'}`
           : connection.configured
-            ? 'A workspace Admin completes Slack OAuth. No Slack credential is entered into Hermes.'
-            : 'An operator must set the Slack app credentials before an Admin can connect this workspace.'}
+            ? 'You approve the connection in Slack. You never enter a Slack password in Hermes.'
+            : 'Slack is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.'}
         footer={<>
           <p className="meta">{connected
             ? 'Slack is ready for direct messages and mentioned channel threads.'
             : connection.configured
-              ? 'Slack opens in a new authorization flow for this workspace.'
-              : 'Slack app setup is managed by the Hermes operator.'}</p>
+              ? 'Slack opens so you can choose the workspace and approve.'
+              : 'Until then, Slack messages do not reach Hermes.'}</p>
           {admin && connection.configured && !connected ? (
             <Button primary disabled={busy} onClick={connect}>
               {busy ? 'Opening Slack…' : connection.status === 'error' ? 'Reconnect Slack' : 'Connect Slack'}
@@ -1523,22 +1558,22 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
           ) : null}
         </>}
       >
-        <div className="kv"><span className="grow">Connection status</span><span className="meta">{statusLabel}</span></div>
-        {connected && <div className="kv"><span className="grow">Destination</span><span className="meta">{destination}</span></div>}
+        <div className="kv"><span className="grow">Connection</span><span className="meta">{statusLabel}</span></div>
+        {connected && <div className="kv"><span className="grow">Slack workspace</span><span className="meta">{destination}</span></div>}
         {connected && connection.installation_kind && <div className="kv"><span className="grow">Installation</span><span className="meta">{connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'}</span></div>}
       </AdminSettingsCard>
 
       <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
-          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
+          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private conversation with the agent</span></div>
           <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
-          <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Only in the Hermes Inbox</span></div>
       </AdminSettingsCard>
 
       <AdminSettingsCard title="Permissions and identity" description="Workspace installation and member identity linking are separate steps.">
-          <div className="kv"><span className="grow">Workspace authorization</span><span className="meta">A workspace Admin completes Slack OAuth</span></div>
-          <div className="kv"><span className="grow">Member identity</span><span className="meta">Each member links with an explicit one-time command</span></div>
-          <div className="kv"><span className="grow">Approval boundary</span><span className="meta">Slack cannot approve Inbox actions</span></div>
-          {connected && connection.granted_scopes.length > 0 && <div className="kv"><span className="grow">Permissions</span><span className="meta">{connection.granted_scopes.join(', ')}</span></div>}
+          <div className="kv"><span className="grow">Connecting</span><span className="meta">A workspace Admin approves it in Slack</span></div>
+          <div className="kv"><span className="grow">Each member</span><span className="meta">Links their own Slack account with a one-time command</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Nothing can be approved from Slack</span></div>
+          {connected && connection.granted_scopes.length > 0 && <div className="kv"><span className="grow">What Hermes can do in Slack</span><span className="meta">Read messages sent to it and reply in the same place</span></div>}
       </AdminSettingsCard>
 
       {connected && (
@@ -1552,14 +1587,14 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         >
             {linkCommand
               ? <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>
-              : <p className="meta">No link command has been created in this session.</p>}
+              : <p className="meta">No link command yet.</p>}
         </AdminSettingsCard>
       )}
 
       {admin && connected && (
         <AdminSettingsCard
           title="Disconnect Slack"
-          description="New Slack messages will stop reaching Hermes. Existing Hermes sessions and their history stay in Hermes."
+          description="New Slack messages will stop reaching Hermes. Earlier conversations stay in Hermes."
           danger
           footer={<>
             <p className="meta">You will confirm before the workspace is disconnected.</p>
@@ -1573,7 +1608,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         onClose={() => setDisconnectOpen(false)}
         actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
       >
-        <p>New Slack messages will stop reaching Hermes immediately. Existing Hermes sessions and their history stay in Hermes.</p>
+        <p>New Slack messages will stop reaching Hermes immediately. Earlier conversations stay in Hermes.</p>
       </Dialog>
     </div>
   );
@@ -1741,7 +1776,7 @@ function OrganizationTab() {
         ['Workspace', state.workspace.name],
         ['Your role', state.user.role === 'admin' ? 'Admin' : 'Member'],
         ['Signed in as', state.user.email || '—'],
-        ['Jurisdiction', state.workspace.jurisdiction ?? 'default'],
+        ['Data location', state.workspace.jurisdiction === 'eu' ? 'European Union' : 'Standard'],
         ['Timezone', view?.timezone ?? 'UTC'],
         ['Members', `${counts.joined} joined · ${counts.invited} invited`],
       ].map(([key, value]) => (
@@ -1772,7 +1807,7 @@ function OrganizationTab() {
               <Panel
                 icon="admission"
                 title="Scheduled for deletion"
-                subtitle={`Access was revoked when it was requested. The rows and objects go on ${new Date(pending.at).toLocaleString()}.`}
+                subtitle={`Everyone lost access when deletion was requested. Everything is deleted on ${new Date(pending.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.`}
                 right={
                   <Button
                     onClick={() => {
@@ -1784,12 +1819,12 @@ function OrganizationTab() {
                   </Button>
                 }
               />
-              {pending.copy && <p className="meta" style={{ maxWidth: 760 }}>{pending.copy}</p>}
+              {pending.copy && <p className="meta" style={{ maxWidth: 760 }}>Backup copies kept for recovering from failures expire on their own within 30 days.</p>}
             </>
           ) : (
             <div className="row">
               <span className="meta grow" style={{ maxWidth: 620 }}>
-                Every share is revoked, every session becomes read-only and every working run is asked to stop, immediately. The rows and the objects are destroyed seven days later, and that half can be cancelled until then.
+                Everyone loses access right away: shared links stop working, conversations become read-only and work in progress stops. Everything is deleted seven days later, and you can cancel until then.
               </span>
               <Button
                 quiet
@@ -1833,9 +1868,9 @@ function OrganizationTab() {
           </>
         }
       >
-        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
+        {reauthed && <p className="meta">You signed in again. Confirm to continue.</p>}
         <p>
-          Everyone loses access now. Nothing is destroyed for seven days, and a cancel is on this screen until then. Type the workspace name to confirm.
+          Everyone loses access now. Nothing is deleted for seven days, and you can cancel on this screen until then. Type the workspace name to confirm.
         </p>
         <label className="field">
           <span className="sr-only">Workspace name</span>
@@ -1867,8 +1902,8 @@ function OrganizationTab() {
           </>
         }
       >
-        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
-        <p>The workspace stops being scheduled for destruction. Sessions stay read-only until somebody puts them back deliberately: a cancel that silently resumed every run would resume runs that have been stopped for days against a world that moved on.</p>
+        {reauthed && <p className="meta">You signed in again. Confirm to continue.</p>}
+        <p>The workspace will not be deleted. Conversations stay read-only until someone reopens them, so no old work restarts on its own.</p>
       </Dialog>
     </>
   );
@@ -1923,7 +1958,7 @@ function AgentsTab() {
       })
       .catch((caught: unknown) => {
         const reason = (caught as { reason?: string }).reason;
-        setError(reason === 'not_admin' ? EMPTY.adminRequired : reason === 'bad_cap' ? 'A cap is a whole number of tokens, or none.' : 'Could not save that. Try again.');
+        setError(reason === 'not_admin' ? EMPTY.adminRequired : reason === 'bad_cap' ? 'Enter a whole number, or leave it empty for no limit.' : 'Could not save that. Try again.');
         return false;
       });
   };
@@ -1938,7 +1973,7 @@ function AgentsTab() {
 
   return (
     <>
-      <header className="admin-detail-heading"><div><h2>Agent defaults</h2><p>Choose defaults for new sessions and set workspace run limits.</p></div></header>
+      <header className="admin-detail-heading"><div><h2>Agent defaults</h2><p>Choose the model new conversations start with, and limits for the whole workspace.</p></div></header>
       <AdminSettingsCard title="Your agent">
       <div className="list-row">
         <Glass name="iris" size={32} className="row-icon" />
@@ -1953,9 +1988,9 @@ function AgentsTab() {
       <div className="row">
         <span className="grow" />
         <span style={{ position: 'relative' }}>
-          <span className="meta">Applies to new sessions</span>
+          <span className="meta">Applies to new conversations</span>
           <Ack show={ack} style={{ right: 0, top: -40 }}>
-            Saved · New sessions use this
+            Saved · New conversations use this
           </Ack>
         </span>
       </div>
@@ -1969,7 +2004,7 @@ function AgentsTab() {
               role="radio"
               checked={(view?.defaults.model_id ?? settings.default_model_id) === row.model_id}
               disabled={!row.enabled || !admin}
-              sub={row.enabled ? `via ${row.provider}` : row.disabled_reason ?? `No verified ${row.provider} key`}
+              sub={row.enabled ? `From ${providerName(row.provider)}` : modelUnavailableReason(row.disabled_reason, row.provider)}
               onClick={() => save({ default_model_id: row.model_id })}
             >
               {row.label}
@@ -1983,7 +2018,7 @@ function AgentsTab() {
           <div className="effort-row" role="radiogroup" aria-label="Default effort">
             {current.effort.map((value) => (
               <button key={value} type="button" role="radio" aria-checked={(view?.defaults.effort ?? settings.default_effort) === value} disabled={!admin} onClick={() => save({ default_effort: value })}>
-                {value}
+                {effortLabel(value)}
               </button>
             ))}
           </div>
@@ -1996,30 +2031,52 @@ function AgentsTab() {
       {admin && <AdminRunLimits key={`${caps.daily_token_cap}:${caps.max_concurrent_runs}`} dailyLimit={caps.daily_token_cap} concurrentLimit={caps.max_concurrent_runs} onSave={save} />}
       <AdminSettingsCard title="Current usage">
       <div className="kv">
-        <span className="grow">Daily token cap</span>
+        <span className="grow">Daily usage limit</span>
         <span className="meta">
-          {caps.daily_token_cap === null ? 'None' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} today`}
+          {caps.daily_token_cap === null ? 'No limit' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} used today`}
         </span>
         {admin && caps.daily_token_cap !== null && (
           <Button link onClick={() => save({ daily_token_cap: null })}>
-            Remove cap
+            Remove limit
           </Button>
         )}
       </div>
       <div className="kv">
-        <span className="grow">Concurrent runs</span>
+        <span className="grow">Tasks at the same time</span>
         <span className="meta">
-          {caps.active_runs} of {caps.max_concurrent_runs} active
+          {caps.active_runs} of {caps.max_concurrent_runs} running now
         </span>
       </div>
       </AdminSettingsCard>
       {error && <p className="meta" role="alert">{error}</p>}
-      <p className="meta">Model defaults apply to new sessions. Run limits apply across this workspace. Changes are recorded in History.</p>
+      <p className="meta">Model defaults apply to new conversations. Limits apply to the whole workspace. Changes are recorded in History.</p>
     </>
   );
 }
 
-const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verified: 'Verified', verified_scoped: 'Verified (scoped)', invalid: 'Invalid', revoked: 'Revoked' };
+/** A provider's brand name; never its slug (docs/DESIGN.md). */
+const PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  nous: 'Nous Portal',
+  nous_portal: 'Nous Portal',
+  openrouter: 'OpenRouter',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+};
+export const providerName = (id: string | null | undefined): string =>
+  (id && (PROVIDER_CHOICES.find((choice) => choice.id === id)?.label ?? PROVIDER_NAMES[id])) || 'another model provider';
+
+/** Why a catalog row cannot be chosen, in words an Admin can act on. The stored reason is never shown as-is. */
+const modelUnavailableReason = (reason: string | null | undefined, provider: string): string =>
+  !reason ? `Connect ${providerName(provider)} to use this`
+    : /catalog sync/i.test(reason) ? `Check the ${providerName(provider)} connection in Model providers to use this`
+      : /no longer listed/i.test(reason) ? `No longer offered by ${providerName(provider)}`
+        : 'Not available right now';
+
+const EFFORT_LABELS: Readonly<Record<string, string>> = { minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' };
+const effortLabel = (value: string): string => EFFORT_LABELS[value] ?? (value.charAt(0).toUpperCase() + value.slice(1)).replace(/[_-]+/g, ' ');
+
+const STATUS_LABEL: Record<string, string> = { unverified: 'Not verified yet', verified: 'Verified', verified_scoped: 'Verified for some models', invalid: 'Not accepted', revoked: 'Removed' };
 
 /**
  * Can this key still be used at all?
@@ -2034,8 +2091,8 @@ const usable = (key: MaskedProviderKey): boolean => PROVIDER_CHOICES.some((choic
 /** "342 models synced · 2 Mar" — or nothing, for a provider that has no list. */
 function syncLabel(key: MaskedProviderKey): string | null {
   if (key.synced_model_count === null) return null;
-  const when = key.models_synced_at === null ? 'never' : new Date(key.models_synced_at).toLocaleDateString();
-  return `${key.synced_model_count} model${key.synced_model_count === 1 ? '' : 's'} synced · last sync ${when}`;
+  const when = key.models_synced_at === null ? 'not updated yet' : `last updated ${new Date(key.models_synced_at).toLocaleDateString()}`;
+  return `${key.synced_model_count} model${key.synced_model_count === 1 ? '' : 's'} synced · ${when}`;
 }
 
 function providerAccountLabel(key: MaskedProviderKey): string | null {
@@ -2098,7 +2155,7 @@ function ProviderKeysTab() {
       hostedOAuth
         ? { kind: 'notice', message: 'Sign-in confirmed. Continue with Nous to approve this workspace.' }
         : intent.keyId
-        ? { kind: 'pending', message: 'Re-authenticated. Confirm to verify the saved key again; you do not need to paste it again.' }
+        ? { kind: 'pending', message: 'You signed in again. Confirm to check the saved key again; you do not need to paste it.' }
         : { kind: 'idle' },
     );
     setConnectKeyId(intent.keyId ?? null);
@@ -2122,7 +2179,7 @@ function ProviderKeysTab() {
       : reason === 'forbidden'
         ? 'Nous Portal did not allow this verification attempt.'
         : 'Nous Portal could not be reached.';
-    setConnectStatus({ kind: 'pending', message: `The key is encrypted and saved, but it is not verified yet. ${detail} Try verification again; you do not need to paste it again.` });
+    setConnectStatus({ kind: 'pending', message: `The key is saved securely, but it is not verified yet. ${detail} Try again; you do not need to paste it again.` });
   };
 
   const connect = async (): Promise<void> => {
@@ -2145,9 +2202,9 @@ function ProviderKeysTab() {
         return;
       }
       const message = error.reason === 'bad_key'
-        ? 'That does not look like a Nous Portal API key. Copy the complete key from Nous Portal and try again.'
+        ? 'That does not look like a Nous Portal key. Copy the complete key from Nous Portal and try again.'
         : error.reason === 'key_exists'
-          ? 'This workspace already has a Nous Portal key. Close this dialog and rotate the existing key instead.'
+          ? 'This workspace already has a Nous Portal key. Close this dialog and replace the existing key with Rotate.'
           : error.reason === 'not_admin'
             ? 'A workspace Admin must connect the Nous Portal key.'
             : 'The key could not be saved. Check your connection and try again.';
@@ -2171,7 +2228,7 @@ function ProviderKeysTab() {
           return;
         }
       }
-      setConnectStatus({ kind: 'pending', message: 'The key remains encrypted and saved, but verification did not finish. Try again shortly.' });
+      setConnectStatus({ kind: 'pending', message: 'The key is still saved securely, but the check did not finish. Try again shortly.' });
     }
   };
 
@@ -2185,7 +2242,7 @@ function ProviderKeysTab() {
       if (started.status === 'unavailable') {
         popup?.close();
         setManualProviderFlow(true);
-        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Signing in with Nous is not available on this deployment. Paste a Nous Portal key below instead.' });
         return;
       }
       if (popup) popup.location.href = started.verification_uri;
@@ -2216,7 +2273,7 @@ function ProviderKeysTab() {
       }
       if (error.reason === 'oauth_not_configured') {
         setManualProviderFlow(true);
-        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Signing in with Nous is not available on this deployment. Paste a Nous Portal key below instead.' });
       } else {
         setConnectStatus({ kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
       }
@@ -2296,18 +2353,18 @@ function ProviderKeysTab() {
               <div className="row-id" style={{ width: 220 }}>
                 <span className="t">{key.label}</span>
                 <span className="s truncate" title={providerAccountLabel(key) ?? undefined}>
-                  {key.provider} · {key.credential_kind === 'oauth_device_code' ? 'Workspace OAuth' : `····${key.last4}`}
+                  {providerName(key.provider)} · {key.credential_kind === 'oauth_device_code' ? 'Signed in with Nous' : `Key ending ${key.last4}`}
                   {providerAccountLabel(key) ? ` · ${providerAccountLabel(key)}` : ''}
                 </span>
               </div>
               <div className="row-main">
-                <span className="t">{usable(key) ? STATUS_LABEL[key.status] ?? key.status : EMPTY.keyNotAllowed}</span>
+                <span className="t">{usable(key) ? STATUS_LABEL[key.status] ?? 'Status unknown' : EMPTY.keyNotAllowed}</span>
                 <span className="s">
                   {/* A Nous Portal key verifies against hundreds of models, so
                       the row says how many were synced and when, rather than
                       listing them (decision R7). */}
-                  {syncLabel(key) ?? `${key.verified_models.length} model${key.verified_models.length === 1 ? '' : 's'}`} · {key.fingerprint_prefix} · added {new Date(key.created_at).toLocaleDateString()}
-                  {key.rotated_at ? ` · rotated ${new Date(key.rotated_at).toLocaleDateString()}` : ''}
+                  {syncLabel(key) ?? `${key.verified_models.length} model${key.verified_models.length === 1 ? '' : 's'}`} · added {new Date(key.created_at).toLocaleDateString()}
+                  {key.rotated_at ? ` · replaced ${new Date(key.rotated_at).toLocaleDateString()}` : ''}
                 </span>
               </div>
               {/* A key for a provider this deployment no longer offers keeps
@@ -2351,7 +2408,7 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        Nous Portal powers Iris through the Hermes Agent runtime. Workspace OAuth credentials stay encrypted and refresh automatically. Connecting syncs the current model catalog.
+        Nous Portal runs the models your agents use. Hermes stores the connection encrypted and keeps it signed in. Connecting also updates the list of models you can choose.
       </p>
 
       <Dialog
@@ -2393,7 +2450,7 @@ function ProviderKeysTab() {
           <span className="sr-only">New key</span>
           <input type="password" placeholder="Paste the new key" value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete="off" />
         </label>
-        <p className="meta">Rotated. Past usage still lists the previous key.</p>
+        <p className="meta">The new key replaces this one. Past usage still shows the old key.</p>
       </Dialog>
 
       <Dialog
@@ -2410,7 +2467,7 @@ function ProviderKeysTab() {
         }
       >
         <p>
-          Removing this key stops {target?.verified_models.length ?? 0} working run(s) on {target?.provider} and blocks new runs until another key is verified.
+          Your agents stop using {providerName(target?.provider)} until another key is connected. Work already in progress may stop.
         </p>
       </Dialog>
     </>
@@ -2462,21 +2519,21 @@ function UsageTab() {
     if (group === 'day')
       return usage.by_day.map((day) => ({
         key: day.day,
-        label: day.day,
-        sub: `${day.input_tokens.toLocaleString()} in · ${day.output_tokens.toLocaleString()} out · ${day.calls} call${day.calls === 1 ? '' : 's'}${day.errors ? ` · ${day.errors} error${day.errors === 1 ? '' : 's'}` : ''}`,
+        label: formatUsageDay(day.day),
+        sub: `${day.input_tokens.toLocaleString()} read · ${day.output_tokens.toLocaleString()} written · ${day.calls} request${day.calls === 1 ? '' : 's'}${day.errors ? ` · ${day.errors} failed` : ''}`,
         cost: day.cost_usd_estimate,
       }));
     if (group === 'session')
       return usage.by_session.map((row) => ({
         key: row.session_id ?? 'no-session',
-        label: row.title ?? 'Untitled session',
-        sub: `${row.total_tokens.toLocaleString()} tokens · ${row.runs} run${row.runs === 1 ? '' : 's'}${row.last_call_at ? ` · ${new Date(row.last_call_at).toLocaleString()}` : ''}`,
+        label: row.title ?? 'Untitled conversation',
+        sub: `${row.total_tokens.toLocaleString()} used · ${row.runs} task${row.runs === 1 ? '' : 's'}${row.last_call_at ? ` · last used ${new Date(row.last_call_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : ''}`,
         cost: row.cost_usd_estimate,
       }));
     return usage.by_key.map((row) => ({
       key: row.key_id ?? `${row.provider}-deleted`,
-      label: row.label ?? `${row.provider ?? 'unknown'} · removed key`,
-      sub: `${row.total_tokens.toLocaleString()} tokens · ${row.calls} call${row.calls === 1 ? '' : 's'}${row.last4 ? ` · ····${row.last4}` : ''}${row.status ? ` · ${row.status}` : ''}`,
+      label: row.label ?? `${providerName(row.provider)} · removed key`,
+      sub: `${row.total_tokens.toLocaleString()} used · ${row.calls} request${row.calls === 1 ? '' : 's'}${row.last4 ? ` · key ending ${row.last4}` : ''}${row.status ? ` · ${STATUS_LABEL[row.status] ?? 'Status unknown'}` : ''}`,
       cost: row.cost_usd_estimate,
     }));
   }, [usage, group]);
@@ -2503,7 +2560,7 @@ function UsageTab() {
         <EmptyState
           icon="trace"
           title="Usage is unavailable"
-          detail={error === 'contract_violation' ? 'The usage route answered a shape this client does not understand. That is a bug, not an outage.' : 'The usage route did not answer. Try again shortly.'}
+          detail={error === 'contract_violation' ? 'Usage could not be shown. This is a problem on our side; try again later.' : 'Usage could not be loaded. Try again shortly.'}
         />
       )}
       {!usage && !error && <Skeleton rows={3} label="Loading usage" />}
@@ -2511,7 +2568,7 @@ function UsageTab() {
         <>
           <div className="stat-grid">
             <div className="stat">
-              <span className="k">Tokens</span>
+              <span className="k">Model usage</span>
               <span className="v">{usage.totals.total_tokens.toLocaleString()}</span>
             </div>
             <div className="stat">
@@ -2519,7 +2576,7 @@ function UsageTab() {
               <span className="v">${usage.totals.cost_usd_estimate.toFixed(3)}</span>
             </div>
             <div className="stat">
-              <span className="k">Calls</span>
+              <span className="k">Requests</span>
               <span className="v">
                 {usage.totals.calls.toLocaleString()}
                 {usage.totals.errors ? ` · ${usage.totals.errors} failed` : ''}
@@ -2530,19 +2587,19 @@ function UsageTab() {
           {usage.caps.warn && (
             <Panel
               icon="admission"
-              title="Approaching the daily token cap"
-              subtitle={`${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap?.toLocaleString() ?? 'no'} tokens today · ${usage.caps.active_runs} of ${usage.caps.max_concurrent_runs} runs active`}
+              title="Close to the daily usage limit"
+              subtitle={`${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap?.toLocaleString() ?? 'no limit'} used today · ${usage.caps.active_runs} of ${usage.caps.max_concurrent_runs} tasks running`}
             />
           )}
           {pages.length > 0 && (
             <div className="hermes-ui">
-              <InsightCards pages={pages} labels={{ title: `Usage · ${usage.range} · ${usage.timezone}` }} />
+              <InsightCards pages={pages} labels={{ title: USAGE_RANGE_TITLES[usage.range] ?? 'Usage' }} />
             </div>
           )}
           <Tabs
             tabs={[
               { id: 'day', label: 'By day' },
-              { id: 'session', label: 'By session' },
+              { id: 'session', label: 'By conversation' },
               { id: 'key', label: 'By key' },
             ]}
             value={group}
@@ -2550,7 +2607,7 @@ function UsageTab() {
             label="Usage grouping"
           />
           {rows.length === 0 ? (
-            <EmptyState icon="trace" title="No usage yet" detail="Usage appears after the first run." />
+            <EmptyState icon="trace" title="No usage yet" detail="Usage appears after the agent's first task." />
           ) : (
             <div className="col">
               {rows.map((row) => (
@@ -2566,15 +2623,15 @@ function UsageTab() {
             </div>
           )}
           <div className="kv">
-            <span className="grow">Daily token cap</span>
+            <span className="grow">Daily usage limit</span>
             <span className="meta">
-              {usage.caps.daily_token_cap === null ? 'None' : `${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap.toLocaleString()} today`}
+              {usage.caps.daily_token_cap === null ? 'No limit' : `${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap.toLocaleString()} used today`}
             </span>
           </div>
           <div className="kv">
-            <span className="grow">Concurrent runs</span>
+            <span className="grow">Tasks at the same time</span>
             <span className="meta">
-              {usage.caps.active_runs} of {usage.caps.max_concurrent_runs} active
+              {usage.caps.active_runs} of {usage.caps.max_concurrent_runs} running now
             </span>
           </div>
         </>
@@ -2596,6 +2653,14 @@ function UsageTab() {
  * has no series to draw, so the caller renders no carousel rather than a
  * straight line pretending to be a trend.
  */
+const USAGE_RANGE_TITLES: Readonly<Record<string, string>> = { today: 'Usage today', '7d': 'Usage, last 7 days', '30d': 'Usage, last 30 days', '90d': 'Usage, last 90 days' };
+
+/** A report day (`YYYY-MM-DD`, already in the workspace's timezone) as "Sep 27". */
+const formatUsageDay = (day: string): string => {
+  const date = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? day : date.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+};
+
 function Sparkline({ values, stroke, label }: { values: number[]; stroke: string; label: string }) {
   const max = Math.max(...values, 1);
   const width = 300;
@@ -2639,19 +2704,19 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
   return [
     {
       key: 'tokens',
-      pill: `${days.length} days · ${usage.timezone}`,
-      prose: `${usage.totals.total_tokens.toLocaleString()} tokens over ${days.length} days, an estimated $${usage.totals.cost_usd_estimate.toFixed(3)}.`,
+      pill: `${days.length} days`,
+      prose: `${usage.totals.total_tokens.toLocaleString()} units of model usage over ${days.length} days, an estimated $${usage.totals.cost_usd_estimate.toFixed(3)}.`,
       Card: () => (
         <div className="usage-card">
-          <span className="meta">Tokens per day</span>
-          <Sparkline values={tokens} stroke="var(--accent, #4a86ff)" label={`Tokens per day over ${days.length} days`} />
+          <span className="meta">Model usage per day</span>
+          <Sparkline values={tokens} stroke="var(--accent, #4a86ff)" label={`Model usage per day over ${days.length} days`} />
         </div>
       ),
     },
     {
       key: 'spend',
-      pill: `${usage.totals.calls.toLocaleString()} calls`,
-      prose: `${usage.totals.calls.toLocaleString()} model calls, ${usage.totals.errors} of them failed. Spend follows usage unless a model changed.`,
+      pill: `${usage.totals.calls.toLocaleString()} requests`,
+      prose: `${usage.totals.calls.toLocaleString()} model requests, ${usage.totals.errors} of them failed. Spend follows usage unless a model changed.`,
       Card: () => (
         <div className="usage-card">
           <span className="meta">Estimated cost per day, USD</span>
@@ -2662,7 +2727,7 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
     {
       key: 'keys',
       pill: keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'}` : 'No key recorded',
-      prose: keys.length ? 'Which key paid for what. A removed key keeps its spend rather than vanishing from the total.' : 'No provider key is recorded against these calls.',
+      prose: keys.length ? 'Which key paid for what. A removed key keeps its spend rather than vanishing from the total.' : 'No provider key is recorded for these requests.',
       Card: () => (
         <div className="usage-card">
           {keys.length === 0 && <span className="meta">Nothing to allocate.</span>}
@@ -2670,7 +2735,7 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
             const pct = Math.round((row.total_tokens / keyTotal) * 100);
             return (
               <div className="usage-alloc" key={row.key_id ?? `${row.provider}-removed`}>
-                <span className="t">{row.label ?? `${row.provider ?? 'unknown'} · removed key`}</span>
+                <span className="t">{row.label ?? `${providerName(row.provider)} · removed key`}</span>
                 <span className="bar" aria-hidden>
                   <span style={{ width: `${pct}%` }} />
                 </span>
@@ -2735,8 +2800,8 @@ function NotificationsTab() {
   };
   return (
     <>
-      <div className="row"><h2 className="section-title">Notification preferences</h2><span className="grow" /><span className="pill">Delivery not configured</span></div>
-      <p className="meta">These preferences are saved for a future delivery service. This deployment does not send approval, blocked-work or digest emails.</p>
+      <div className="row"><h2 className="section-title">Notification preferences</h2><span className="grow" /><span className="pill">Emails not turned on</span></div>
+      <p className="meta">Hermes saves your choices, but this deployment does not send notification emails yet. The Inbox always shows what needs you.</p>
       {([
         ['approvals', 'Approval requests'],
         ['blocked', 'Blocked work'],
@@ -2762,16 +2827,17 @@ function NotificationsTab() {
 /**
  * Data and privacy.
  *
- * Every fact on this screen is the server's. The policy rows, retention table,
- * erasure timing, residency lines and per-provider warnings all come from
- * `GET /w/:ws/settings/data-privacy`, because a client that paraphrased them
- * would be a client making a data-protection claim nobody reviewed. The one
+ * The facts on this screen come from `GET /w/:ws/settings/data-privacy`: the
+ * policy rows, retention table, erasure timing and per-provider warnings. The
+ * client renames infrastructure nouns and codes into customer words
+ * (docs/DESIGN.md) and writes the erasure and residency sentences from the
+ * server's numbers; it never invents a retention period. The one
  * control is the attestation, and it is Admin plus step-up: whoever writes it
  * is asserting to a future auditor that a zero-retention arrangement or a DPA
  * exists.
  */
 function privacyProviderLabel(provider: string): string {
-  return provider === 'nous_portal' ? 'Nous Portal' : provider.replaceAll('_', ' ');
+  return providerName(provider);
 }
 
 function privacyErasureLabel(value: string): string {
@@ -2780,11 +2846,49 @@ function privacyErasureLabel(value: string): string {
     'redact_subject plus subject_key search': 'Removed with the related person’s data',
     'deleted by row': 'Deleted with the stored item',
     expires: 'Expires automatically',
-    'ids only; redaction tested': 'Identifiers only; deleted data stays redacted',
+    'expires on the bucket lifecycle rule': 'Expires automatically',
+    'ids only, by rule': 'Holds no personal details; expires automatically',
+    'ids only; redaction tested': 'Holds no personal details',
     'account deletion': 'Removed when the account is deleted',
   };
-  return labels[value] ?? value;
+  const known = labels[value];
+  if (known) return known;
+  // Newer servers send plain words; anything that still looks like a code does not reach the screen.
+  return /[_:]/u.test(value) || !/\s/u.test(value) ? 'Removed on request' : value.charAt(0).toUpperCase() + value.slice(1);
 }
+
+/**
+ * The server's retention inventory, in customer words. The server still owns
+ * which stores exist and how long each is kept; this only renames the
+ * infrastructure nouns (docs/DESIGN.md). A store the map does not know keeps
+ * the server's own name, which is prose rather than a code.
+ */
+const PRIVACY_STORES: Readonly<Record<string, string>> = {
+  'Requests, notes and documents': 'Requests, notes and documents',
+  'Turns, messages and stream events': 'Conversations and messages',
+  'Uploads, extracted text and rendered documents': 'Uploaded files and generated documents',
+  'Nightly backup copy': 'Nightly backup',
+  'Workflow instance state': 'Background task records',
+  'Database point-in-time history': 'Database recovery history',
+  'Logs and error tracking': 'Logs and error reports',
+  'Identity provider (WorkOS)': 'Sign-in provider (WorkOS)',
+};
+const PRIVACY_RETENTION: Readonly<Record<string, string>> = {
+  'until tombstoned': 'Until deleted',
+  'until deleted': 'Until deleted',
+  '30 days after completion': '30 days after the task finishes',
+  'authentication data only': 'Sign-in details only',
+};
+const privacyRetentionLabel = (value: string): string => PRIVACY_RETENTION[value] ?? value.charAt(0).toUpperCase() + value.slice(1);
+
+/** What an Admin recorded about a provider's data terms. */
+const DATA_TERMS: Readonly<Record<string, { label: string; sub: string }>> = {
+  zdr: { label: 'Zero data retention', sub: 'Zero data retention is agreed with this provider' },
+  dpa: { label: 'Data-processing agreement', sub: 'A data-processing agreement is signed' },
+  synthetic_only: { label: 'Synthetic data only', sub: 'This key is for synthetic data only' },
+  none: { label: 'Nothing claimed', sub: 'Nothing is claimed' },
+};
+const dataTermsLabel = (kind: unknown): string => (typeof kind === 'string' && DATA_TERMS[kind]?.label) || 'Recorded';
 
 function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
   const state = useAppState();
@@ -2840,7 +2944,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           else setNotice('This needs a recent sign-in. Sign in again to continue.');
           return;
         }
-        setNotice(error.reason === 'not_admin' ? EMPTY.adminRequired : 'Could not record that attestation. Try again.');
+        setNotice(error.reason === 'not_admin' ? EMPTY.adminRequired : 'Could not record the data terms. Try again.');
       });
   };
 
@@ -2848,19 +2952,19 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
     <>
       <div>
         <h2 className="section-title">Data and privacy</h2>
-        <p className="meta">Server-reported policy, retention, erasure, provider policy and data location for this workspace.</p>
+        <p className="meta">What Hermes keeps, for how long, where it is stored and who processes it.</p>
       </div>
 
-      {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
+      {failed && <EmptyState icon="context" title="Privacy details could not be loaded" detail="Try again shortly. Nothing here is shown from memory." />}
       {!privacy && !failed && <Skeleton rows={4} label="Loading retention facts" />}
 
       {privacy && (
         <>
           {privacy.policy.map((fact) => (
             <div className="kv" key={fact.id}>
-              <span className="grow">{fact.label}</span>
+              <span className="grow">{fact.id === 'jurisdiction' ? 'Data location' : fact.label}</span>
               <span className="meta" style={{ textAlign: 'right', maxWidth: 380 }}>
-                {fact.value}
+                {fact.id === 'jurisdiction' ? (fact.value === 'eu' ? 'European Union' : 'Standard') : fact.value}
               </span>
             </div>
           ))}
@@ -2872,14 +2976,14 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
               <div className="row">
                 <div className="row-main">
                   <span className="t">
-                    {key.label} · {key.provider}
+                    {key.label} · {providerName(key.provider)}
                   </span>
                   <span className="s">
-                    ····{key.last4} · {key.status}
-                    {key.verified_at ? ` · verified ${new Date(key.verified_at).toLocaleDateString()}` : ' · never verified'}
+                    Key ending {key.last4} · {STATUS_LABEL[key.status] ?? 'Status unknown'}
+                    {key.verified_at ? ` · verified ${new Date(key.verified_at).toLocaleDateString()}` : ' · not verified yet'}
                   </span>
                 </div>
-                <span className="meta">{key.attested ? `Attested · ${String(key.attestation?.kind ?? '')}` : 'No attestation'}</span>
+                <span className="meta">{key.attested ? `Data terms: ${dataTermsLabel(key.attestation?.kind)}` : 'No data terms recorded'}</span>
                 <Button
                   onClick={() => {
                     setTarget(key);
@@ -2888,10 +2992,10 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
                     setNotice(null);
                   }}
                 >
-                  {key.attested ? 'Update attestation' : 'Record attestation'}
+                  {key.attested ? 'Update data terms' : 'Record data terms'}
                 </Button>
               </div>
-              <span className="meta">{key.real_data_allowed ? 'Real applicant data is allowed on this key: an Admin has recorded an attestation and the provider carries no jurisdiction warning.' : 'Real applicant data is not allowed on this key. Use synthetic or consented data.'}</span>
+              <span className="meta">{key.real_data_allowed ? 'Real applicant data is allowed on this key: an Admin recorded its data terms and the provider has no storage-location warning.' : 'Real applicant data is not allowed on this key. Use synthetic or consented data.'}</span>
               {key.warnings.map((warning) => (
                 <p className="meta" key={warning} style={{ maxWidth: 720 }}>
                   {warning}
@@ -2912,23 +3016,27 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           <div className="col">
             {privacy.retention.map((fact) => (
               <div className="kv" key={fact.store}>
-                <span className="grow">{fact.store}</span>
+                <span className="grow">{PRIVACY_STORES[fact.store] ?? fact.store}</span>
                 <span className="meta" style={{ textAlign: 'right', maxWidth: 420 }}>
-                  {fact.retention} · {privacyErasureLabel(fact.erasure)}
+                  {privacyRetentionLabel(fact.retention)} · {privacyErasureLabel(fact.erasure)}
                 </span>
               </div>
             ))}
           </div>
 
           <h2 className="section-title">Erasure</h2>
-          <p style={{ maxWidth: 760 }}>{privacy.erasure.copy}</p>
+          <p style={{ maxWidth: 760 }}>
+            When you ask Hermes to erase someone, their details disappear from the product right away; History keeps only a record that something happened.
+            Copies kept for recovering from failures take longer to expire: database recovery history after {privacy.erasure.point_in_time_history_days} days and the nightly backup after {privacy.erasure.backup_retention_days} days.
+            Erasure is therefore complete {privacy.erasure.complete_after_days} days after you ask.
+          </p>
           <div className="stat-grid">
             <div className="stat">
-              <span className="k">Tombstone</span>
-              <span className="v">{privacy.erasure.tombstone}</span>
+              <span className="k">Removed from Hermes</span>
+              <span className="v">{privacy.erasure.tombstone === 'immediate' ? 'Right away' : 'Soon after you ask'}</span>
             </div>
             <div className="stat">
-              <span className="k">Point-in-time history</span>
+              <span className="k">Database recovery history</span>
               <span className="v">{privacy.erasure.point_in_time_history_days} days</span>
             </div>
             <div className="stat">
@@ -2941,13 +3049,13 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
             </div>
           </div>
 
-          <h2 className="section-title">Where the data sits</h2>
+          <h2 className="section-title">Where the data is stored</h2>
           {(
             [
-              ['Identity provider', privacy.residency.identity_provider],
-              ['Database', privacy.residency.database],
-              ['Objects', privacy.residency.objects],
-              ['Processing', privacy.residency.processing],
+              ['Sign-in provider', privacy.residency.identity_provider],
+              ['Database (Neon)', 'The region chosen when this workspace was created'],
+              ['File storage (Cloudflare)', 'The region chosen when this workspace was created. It cannot be changed later.'],
+              ['Processing (Cloudflare)', 'Requests run wherever they arrive. Background tasks, queues and logs have no region setting; the data-processing agreement says so.'],
             ] as const
           ).map(([label, value]) => (
             <div className="kv" key={label}>
@@ -2970,7 +3078,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
 
       {adminControls && <Dialog
         open={!!target}
-        title={`Attestation for ${target?.label ?? ''}`}
+        title={`Data terms for ${target?.label ?? ''}`}
         onClose={() => setTarget(null)}
         actions={
           <>
@@ -2981,18 +3089,11 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           </>
         }
       >
-        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
-        <div className="col" role="radiogroup" aria-label="Attestation kind" style={{ gap: 4 }}>
-          {(
-            [
-              ['zdr', 'Zero data retention agreed with this provider'],
-              ['dpa', 'A data-processing agreement is signed'],
-              ['synthetic_only', 'This key is for synthetic data only'],
-              ['none', 'Nothing is claimed'],
-            ] as const
-          ).map(([value, sub]) => (
-            <MenuItem key={value} checked={kind === value} sub={sub} onClick={() => setKind(value)}>
-              {value}
+        {reauthed && <p className="meta">You signed in again. Confirm to continue.</p>}
+        <div className="col" role="radiogroup" aria-label="Data terms" style={{ gap: 4 }}>
+          {(['zdr', 'dpa', 'synthetic_only', 'none'] as const).map((value) => (
+            <MenuItem key={value} checked={kind === value} sub={DATA_TERMS[value]!.sub} onClick={() => setKind(value)}>
+              {DATA_TERMS[value]!.label}
             </MenuItem>
           ))}
         </div>
@@ -3000,7 +3101,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           <span className="sr-only">Reference</span>
           <input placeholder="Contract or ticket reference" value={reference} onChange={(event) => setReference(event.target.value)} />
         </label>
-        <p className="meta">Recorded against your name and the time. It is a statement about retention, not about jurisdiction: a provider&apos;s storage warning is not answered by it.</p>
+        <p className="meta">Recorded with your name and the time. It says how long the provider keeps data, not where it stores it, so it does not answer a storage-location warning.</p>
         {notice && <p className="meta" role="alert">{notice}</p>}
       </Dialog>}
     </>

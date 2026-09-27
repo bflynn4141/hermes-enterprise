@@ -1,27 +1,27 @@
 import type { InvitationEntity } from '@hermes/shared';
 import { RestError } from './rest.js';
 
-function withReference(message: string, error: RestError): string {
-  return error.traceId ? `${message} Reference: ${error.traceId}.` : message;
-}
-
-/** User copy is keyed only on server-owned reason codes, never provider text. */
+/**
+ * User copy is keyed only on server-owned reason codes, never provider text.
+ * Trace ids stay in the error for logs and support; they are not rendered
+ * (docs/DESIGN.md, "Never on screen").
+ */
 export function invitationFailureMessage(error: unknown): string {
   if (!(error instanceof RestError)) {
     return 'Could not record the invitation. Check your connection and try again.';
   }
-  const message = error.reason === 'iris_capacity_unavailable'
-    ? 'No verified agent profile is available. Add ready capacity, then try again.'
+  return error.reason === 'iris_capacity_unavailable'
+    ? 'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.'
     : error.reason === 'member_setup_unavailable'
-      ? 'Background member setup is paused right now. The existing setup was not changed.'
+      ? 'Setting up new members is paused right now. Nothing was changed.'
     : error.reason === 'member_setup_role_unavailable'
       ? 'Finance agent setup is not available yet. Choose an available job role.'
     : error.reason === 'invitation_mode_conflict'
-      ? 'This address already has an invitation in a different delivery flow. Use the existing invitation card.'
+      ? 'This address already has an invitation. Use the existing invitation card.'
     : error.reason === 'invitation_role_conflict'
       ? 'This address already has setup in progress for a different job role.'
     : error.reason === 'not_configured'
-      ? 'This workspace is not connected to WorkOS invitation delivery.'
+      ? 'Invitation emails are not turned on for this workspace yet. Ask the person who runs Hermes for your company.'
       : error.reason === 'rate_limited'
         ? 'Too many invitation attempts were made. Wait a moment and try again.'
         : error.reason === 'admin_required'
@@ -33,7 +33,7 @@ export function invitationFailureMessage(error: unknown): string {
               : error.reason === 'bad_email'
                 ? 'Enter a valid email address.'
                 : error.reason === 'bad_body'
-                  ? 'The invitation request was not valid. Refresh and try again.'
+                  ? 'The invitation could not be read. Refresh and try again.'
                   : error.reason === 'bad_id' || error.reason === 'unknown_invitation'
                     ? 'That invitation no longer exists. Refresh the member list.'
                     : error.reason === 'not_resendable' || error.reason === 'already_accepted'
@@ -47,7 +47,6 @@ export function invitationFailureMessage(error: unknown): string {
                             : error.reason === 'already_member'
                               ? 'This person is already a member. Change their roles in Manage.'
                 : 'Could not record the invitation. Try again.';
-  return withReference(message, error);
 }
 
 /** Acknowledge the state the server actually persisted, not a cached rollout mode. */
@@ -62,27 +61,31 @@ export function invitationSuccessMessage(invitation: InvitationEntity): string {
   return 'Invitation recorded';
 }
 
+/**
+ * The invitation card's delivery line. Invitation emails go out through the
+ * workspace's sign-in provider; the card calls it that rather than by its
+ * vendor name, and never shows the delivery trace id.
+ */
 export function invitationDeliveryMessage(invitation: InvitationEntity): string | null {
   if (invitation.delivery_status === 'not_required') {
     return 'No invitation email was sent.';
   }
   if (!invitation.delivery_status) return null;
-  if (invitation.delivery_status === 'queued') return 'Email delivery queued';
-  if (invitation.delivery_status === 'sending') return 'Sending through WorkOS';
-  if (invitation.delivery_status === 'delivered') return 'Sent by WorkOS';
+  if (invitation.delivery_status === 'queued') return 'Invitation email waiting to send';
+  if (invitation.delivery_status === 'sending') return 'Sending the invitation email';
+  if (invitation.delivery_status === 'delivered') return 'Invitation email sent';
 
-  const message = invitation.delivery_reason === 'workos_invitation_delivery_rejected'
-    ? 'WorkOS rejected the email. Check the address or WorkOS policy, then resend.'
+  return invitation.delivery_reason === 'workos_invitation_delivery_rejected'
+    ? 'The invitation email was refused. Check the address, then resend.'
     : invitation.delivery_reason === 'workos_invitation_payload_invalid'
-      ? 'Email delivery needs Admin attention.'
+      ? 'The invitation email could not be sent. Resend it, or ask the person who runs Hermes for your company.'
       : invitation.delivery_reason === 'iris_capacity_reservation_missing'
-        ? 'Reserved agent capacity is missing. Add capacity, then resend.'
+        ? 'The agent set aside for this person is no longer available. Add one under Admin → Agent capacity, then resend.'
         : invitation.delivery_reason === 'workos_invitation_delivery_not_configured'
-          ? 'Email delivery is waiting for WorkOS configuration.'
+          ? 'Invitation emails are not turned on yet. Ask the person who runs Hermes for your company.'
           : invitation.delivery_reason === 'workos_invitation_delivery_outcome_unknown'
-            ? 'WorkOS may have accepted the email. Check WorkOS before resending.'
+            ? 'The invitation email may already have been sent. Ask them to check their inbox before you resend.'
             : invitation.delivery_reason === 'workos_invitation_local_commit_failed'
-              ? 'WorkOS accepted the request, but Hermes could not save confirmation. Check WorkOS before resending.'
+              ? 'The invitation email was probably sent, but Hermes could not confirm it. Ask them to check their inbox before you resend.'
               : 'Email delivery will retry automatically.';
-  return invitation.delivery_trace_id ? `${message} Reference: ${invitation.delivery_trace_id}.` : message;
 }

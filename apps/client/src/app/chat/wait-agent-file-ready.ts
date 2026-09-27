@@ -32,8 +32,8 @@ export async function waitForAgentFileReady(
     if (last.status === 'ready' && last.extraction_status === 'ready' && last.sha256) return last;
     if (last.extraction_status === 'failed' || last.status === 'failed') {
       throw new AgentFileExtractionError(
-        last.extraction_error?.trim()
-          || 'Source processing failed. Upload a corrected PDF, Markdown, or text file and try again.',
+        // The server's extraction error is operator detail; the person gets one sentence.
+        'Hermes couldn’t read this file. Upload a PDF, Markdown or text file and try again.',
         last,
       );
     }

@@ -979,7 +979,7 @@ export function createMockBackend(input: MockOptions = {}) {
     recoveryView = {
       ...recoveryView,
       message: options.recovery === 'working' ? 'Iris is working on this task.'
-        : options.recovery === 'blocked' ? 'Reconnect Nous Portal in Settings before retrying.'
+        : options.recovery === 'blocked' ? 'Reconnect the model provider in Settings before retrying.'
         : options.recovery === 'idle' ? 'No eligible pending work right now.'
           : options.recovery === 'stopped' ? 'Automatic retry cancelled. You can resume this task when ready.'
             : 'The selected model is temporarily unavailable. Your completed work is saved.',

@@ -8,7 +8,7 @@ it('shows projected facts and dates without turning unsafe URLs into links', () 
     source_url: 'javascript:alert(1)', fetched_at: '2026-09-18T12:00:00Z', source_updated_at: null, verified_at: null,
     sha256: null, facts: [{ label: 'Organization', value: 'Example cooperative' }],
   }} />);
-  expect(html).toContain('Stored source facts');
+  expect(html).toContain('What Hermes saved');
   expect(html).toContain('Example cooperative');
   expect(html).toContain('dateTime="2026-09-18T12:00:00Z"');
   expect(html).not.toContain('Iris thinks this is useful');

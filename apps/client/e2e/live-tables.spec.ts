@@ -79,7 +79,7 @@ test('live · the four list screens', async ({ browser }) => {
   await shot(page, '04-library-documents');
 
   await openSection(page, 'Agents', /Iris|Overview/i);
-  await page.getByRole('tab', { name: 'Traces' }).click();
+  await page.getByRole('tab', { name: 'Activity' }).click();
   await settle(page);
   await shot(page, '05-traces');
 

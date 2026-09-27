@@ -126,17 +126,17 @@ test('live · the main screens', async ({ browser }) => {
   await settle(page);
   await shot(page, '10-agent-context');
 
-  await page.getByRole('tab', { name: 'Traces' }).click();
+  await page.getByRole('tab', { name: 'Activity' }).click();
   await settle(page);
   await shot(page, '11-traces');
 
   // The trace detail, with its arguments open: the screen that answers "what
   // did it read before it proposed that".
   await page.getByRole('button', { name: 'Open →' }).first().click();
-  await expect(page.getByRole('button', { name: 'Show arguments and result' }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Show details' }).first()).toBeVisible({ timeout: 15_000 });
   await settle(page);
   await shot(page, '21-trace-detail');
-  await page.getByRole('button', { name: 'Show arguments and result' }).first().click();
+  await page.getByRole('button', { name: 'Show details' }).first().click();
   await settle(page);
   await shot(page, '22-trace-tool-call');
 

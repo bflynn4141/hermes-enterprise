@@ -1,10 +1,11 @@
 import type { TraceEntity } from '@hermes/shared';
 import type { AppState, SessionState } from '../../model/store.js';
-import { readableTool } from '../tool-copy.js';
+import { readableStep, readableTool, readableWaitingLabel, runErrorSentence } from '../tool-copy.js';
 
 export type AgentActivityState = 'working' | 'waiting' | 'stopped' | 'idle';
 
 export interface AgentActivityTool {
+  /** The tool id, for keys and tests. Never rendered (docs/DESIGN.md). */
   name: string;
   summary: string;
   state: 'active' | 'complete' | 'failed' | 'waiting' | 'interrupted';
@@ -31,7 +32,7 @@ function toolFromStep(step: TraceEntity['steps'][number] | undefined, runState: 
     : step.state === 'done' ? 'complete'
       : runState === 'working' ? 'active'
         : runState === 'waiting' ? 'waiting' : 'interrupted';
-  const summary = state === 'failed' ? 'Tool failed'
+  const summary = state === 'failed' ? `${readableTool(step.label, true)} · Didn’t finish`
     : state === 'waiting' ? 'Waiting for a response'
       : state === 'interrupted' ? (runStatus.trim().toLowerCase() === 'stopped' ? 'Stopped before completion' : 'Completion not recorded')
         : readableTool(step.label, state === 'active');
@@ -81,8 +82,8 @@ function fromLive(session: SessionState, state: Exclude<AgentActivityState, 'idl
   const current = activeStep(session);
   const toolStep = state === 'working' && current?.tool_call_id && current.state === 'active' ? current : latestTool(run?.steps ?? []);
   const tool = toolFromStep(toolStep, state, run?.status ?? session.status);
-  const waitingOn = run?.waiting_label?.trim();
-  const error = run?.error?.message?.trim();
+  const waitingOn = readableWaitingLabel(run?.waiting_label?.trim());
+  const error = run?.error ? runErrorSentence(run.error) : null;
   const task = state === 'waiting' && waitingOn
     ? waitingOn
     : state === 'stopped' && error
@@ -95,7 +96,7 @@ function fromLive(session: SessionState, state: Exclude<AgentActivityState, 'idl
     status,
     label,
     task,
-    action: tool ? null : state === 'working' ? (current?.label || 'Preparing a response') : state === 'waiting' ? 'Waiting for your input' : failedRun(run?.status ?? session.status) ? 'Run failed' : 'Run stopped',
+    action: tool ? null : state === 'working' ? ((current ? readableStep(current) : '') || 'Preparing a response') : state === 'waiting' ? 'Waiting for your input' : failedRun(run?.status ?? session.status) ? 'Run failed' : 'Run stopped',
     tool,
     traceId: run?.id ?? null,
     key: `${state}:${run?.id ?? session.id}:${current?.id ?? ''}:${current?.state ?? ''}:${toolStep?.id ?? ''}:${tool?.state ?? ''}`,
@@ -122,10 +123,10 @@ function fromTrace(trace: TraceEntity): AgentActivity {
     // Step labels describe execution, not the task. A completed "Thinking"
     // step must not read as current activity on an idle card.
     task: state === 'waiting' && current?.label && !current.tool_call_id ? current.label : trace.name,
-    action: tool ? null : state === 'working' ? (current?.label || 'Preparing a response')
+    action: tool ? null : state === 'working' ? ((current ? readableStep(current) : '') || 'Preparing a response')
       : state === 'waiting' ? 'Waiting for your input'
         : state === 'stopped' ? (failedRun(trace.status) ? 'Run failed' : 'Run stopped')
-          : trace.status.toLowerCase() === 'completed' ? 'Response completed · No tool calls' : 'No tool calls recorded',
+          : trace.status.toLowerCase() === 'completed' ? 'Replied without using any tools' : 'No steps recorded',
     tool,
     traceId: trace.id,
     key: `${state}:${trace.id}:${current?.id ?? ''}:${current?.state ?? ''}:${toolStep?.id ?? ''}:${tool?.state ?? ''}`,

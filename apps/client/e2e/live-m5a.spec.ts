@@ -108,13 +108,13 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
 
   await page.reload();
   await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Traces' }).click();
-  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Activity' }).click();
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
   await page.getByRole('button', { name: 'Open →' }).first().click();
 
   // The detail, not the list row. The two are the same entity kind and the
   // list fills half of it, so this is also the regression test for the forced
-  // refetch: without it the pane said "This run called no tools" for a run
+  // refetch: without it the pane said "It didn’t use any tools" for a run
   // that called one.
   const app = pane(page);
   // The detail heading is the session, the runtime and the mode; the model
@@ -124,14 +124,15 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
   await expect(app.getByText('Prepared a review request').first()).toBeVisible();
 
-  await app.getByRole('button', { name: 'Show arguments and result' }).first().click();
-  await expect(app.getByText('propose_request.arguments.json')).toBeVisible();
-  await expect(app.getByText('propose_request.result.json')).toBeVisible();
-  // The result envelope, as the model saw it.
-  await expect(app.getByText('"awaiting"').first()).toBeVisible();
+  await app.getByRole('button', { name: 'Show details' }).first().click();
+  await expect(app.getByText('What it was given', { exact: true })).toBeVisible();
+  await expect(app.getByText('What came back', { exact: true })).toBeVisible();
+  // The result, as the model saw it, in labelled words rather than JSON.
+  await expect(app.getByText(/awaiting/).first()).toBeVisible();
+  await expect(app.getByText('propose_request.arguments.json')).toHaveCount(0);
 
   // And nothing on this screen advances the run.
-  await expect(app.getByText('Opening a trace never advances a run or decides anything.', { exact: false })).toBeVisible();
+  await expect(app.getByText('Opening this page never continues the work or decides anything.', { exact: false })).toBeVisible();
   await context.close();
 });
 
@@ -300,7 +301,7 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await expect(
     app.getByText('Estimated, billed by your provider. These figures are our arithmetic over published prices; your provider invoices your own key and is the authority.'),
   ).toBeVisible({ timeout: 20_000 });
-  await expect(app.getByText('Tokens', { exact: true })).toBeVisible();
+  await expect(app.getByText('Model usage', { exact: true })).toBeVisible();
 
   // The number is the run's, not zero: this is the regression test for the
   // shape mismatch that used to make every usage call a `contract_violation`.
@@ -309,7 +310,7 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await expect(app.getByText(total.toLocaleString(), { exact: true }).first()).toBeVisible();
 
   // By session and by key are the same report, regrouped client-side.
-  await app.getByRole('tab', { name: 'By session' }).click();
+  await app.getByRole('tab', { name: 'By conversation' }).click();
   await expect(app.getByText('M4 usage').first()).toBeVisible();
   await context.close();
 });
@@ -456,8 +457,8 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('No standing instructions saved yet')).toBeVisible();
   await expect(app.getByText('No skills assigned yet.')).toBeVisible();
 
-  await app.getByRole('tab', { name: 'Traces' }).click();
-  await expect(app.getByText('No runs yet.')).toBeVisible();
+  await app.getByRole('tab', { name: 'Activity' }).click();
+  await expect(app.getByText('No activity yet.')).toBeVisible();
 
   await page.getByRole('button', { name: 'History', exact: true }).first().click();
   await expect(app.getByText('No decisions yet').first()).toBeVisible();
@@ -474,8 +475,8 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('No documents created yet.')).toBeVisible();
   // Connections now report the real, unconfigured state of each source.
   await app.getByRole('tab', { name: 'Connections' }).click();
-  await expect(app.getByText('Read-only Gmail is not configured')).toBeVisible();
-  await expect(app.getByText('Outbound sender is not connected')).toBeVisible();
+  await expect(app.getByText('Read-only Gmail is not available yet')).toBeVisible();
+  await expect(app.getByText('No sending account connected')).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Usage');
   await expect(app.getByText('No usage yet')).toBeVisible({ timeout: 15_000 });
@@ -486,13 +487,13 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   // is the honest shape: "no models" would be wrong, and a silent list of
   // disabled rows would be worse. Only Nous Portal rows are listed, because the
   // others are not offered by this deployment at all (decision R12).
-  await expect(app.getByRole('radio', { name: /Catalog sync required/ })).toBeDisabled();
-  await expect(app.getByText('Daily token cap')).toBeVisible();
+  await expect(app.getByRole('radio', { name: /Check the Nous Portal connection/ })).toBeDisabled();
+  await expect(app.getByText('Daily usage limit')).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Data & privacy');
   await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
   // The retention facts are the server's and are there with or without a key.
-  await expect(app.getByText('Database point-in-time history')).toBeVisible();
+  await expect(app.getByText('Database recovery history').first()).toBeVisible();
   await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Workspace details');

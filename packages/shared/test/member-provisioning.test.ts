@@ -31,7 +31,7 @@ describe('Member provisioning public state and recovery', () => {
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready' })).toBe('queue_email');
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready', delivery: 'queued' })).toBe('deliver_email');
     expect(memberProvisioningPresentation({ ...base, preparation: 'ready' })).toMatchObject({
-      label: 'Agent ready', detail: 'Setup is verified. Invitation delivery has not been queued.',
+      label: 'Agent ready', detail: 'Their agent is ready. The invitation hasn’t been sent yet.',
     });
   });
   it('never presents a delayed cancellation as complete', () => {

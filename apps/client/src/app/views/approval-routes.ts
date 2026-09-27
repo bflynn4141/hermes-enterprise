@@ -37,7 +37,8 @@ export function joinOr(items: readonly string[]): string {
 
 /** The groups a rule lets approve, in the order the page lists them: Admins first, then roles. */
 export function approverGroups(rule: Pick<ApprovalRouteRule, 'admins' | 'roles'>, names: RoleNames): string[] {
-  return [...(rule.admins ? ['Admins'] : []), ...rule.roles.map((slug) => names.get(slug) ?? slug)];
+  // A slug the role list no longer names is a removed role; the slug itself is never shown.
+  return [...(rule.admins ? ['Admins'] : []), ...rule.roles.map((slug) => names.get(slug) ?? 'a removed role')];
 }
 
 /** What the requester switch means for this kind of approval, as a question. */

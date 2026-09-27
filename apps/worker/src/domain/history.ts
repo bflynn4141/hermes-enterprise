@@ -19,7 +19,6 @@
 // subject rows — a request still `pending`, an effect still `pending` or
 // `assigned` — never from a flag on the event, because an event is a fact about
 // the past and "is this still blocked" is a question about the present.
-import { EFFECT_LABELS, EFFECT_SIMULATED_REASON, EFFECT_UNAVAILABLE_REASON } from './effects.js';
 import type { Tx } from '../db/client.js';
 import type { EffectKind } from '@hermes/shared';
 import { requestAudiencePredicate } from './audience.js';
@@ -57,6 +56,12 @@ export interface HistoryRow {
   approval_status: string | null;
   approval_effect_status: string | null;
   approval_work_status: string | null;
+  /** When a pending approval stops counting as pending. */
+  approval_expires_at?: Date | null;
+  /** The agent the row is about: named on the event, the approval, the session or the request. */
+  agent_name?: string | null;
+  /** For an email hand-off: the name of the role it was handed to. */
+  handoff_role_name?: string | null;
 }
 
 const SELECT = `
@@ -81,7 +86,10 @@ const SELECT = `
          e.session_id,
          ar.status         AS approval_status,
          ar.effect_status  AS approval_effect_status,
-         ar.work_status    AS approval_work_status
+         ar.work_status    AS approval_work_status,
+         ar.expires_at     AS approval_expires_at,
+         ag.name           AS agent_name,
+         wr.name           AS handoff_role_name
     FROM events e
     LEFT JOIN users actor   ON actor.id = e.actor_user_id
     LEFT JOIN decisions d   ON d.id = e.decision_id
@@ -90,7 +98,10 @@ const SELECT = `
     LEFT JOIN requests r    ON r.id = COALESCE(e.request_id, f.request_id, doc.request_id)
     LEFT JOIN members m     ON m.id = e.member_id
     LEFT JOIN users mu      ON mu.id = m.user_id
-    LEFT JOIN approval_requests ar ON ar.request_id = e.request_id`;
+    LEFT JOIN approval_requests ar ON ar.request_id = e.request_id
+    LEFT JOIN sessions s    ON s.id = e.session_id
+    LEFT JOIN agents ag     ON ag.id::text = COALESCE(e.agent_id::text, ar.requester_agent_id::text, s.agent_id::text, r.payload ->> 'agent_id')
+    LEFT JOIN workspace_roles wr ON wr.workspace_id = e.workspace_id AND wr.slug = r.payload ->> 'to_role_slug'`;
 
 /**
  * `before` is the previous page's last `created_at`, which is a timestamptz and
@@ -165,8 +176,12 @@ const documentNumber = (row: HistoryRow): string | null => str(asRecord(row.requ
 
 const actorName = (row: HistoryRow): string => {
   if (row.actor_name) return row.actor_name;
-  return row.actor_type === 'agent' ? 'Iris' : row.actor_type === 'system' ? 'Hermes' : 'Someone';
+  if (row.actor_type === 'agent') return row.agent_name ?? 'The agent';
+  return row.actor_type === 'system' ? 'Hermes' : 'Someone';
 };
+
+/** The agent a row is about, for the middle of a sentence. */
+const agentInSentence = (row: HistoryRow): string => row.agent_name ?? 'the agent';
 
 const subjectOrNumber = (row: HistoryRow): string =>
   row.request_kind === 'application' ? subjectName(row) : (documentNumber(row) ?? subjectName(row));
@@ -178,6 +193,104 @@ function decisionDetail(row: HistoryRow): string {
   if (row.request_kind === 'invoice') return 'Saved in Library · Not sent · No money moved';
   return 'Saved in Library · Unsigned · Not sent';
 }
+
+/**
+ * The state word every row ends with.
+ *
+ * One vocabulary, because the client sorts rows by it: `NEEDS_PERSON` words
+ * mean the row's subject is waiting on somebody right now (the same present-
+ * state question the `blocked` tab asks in SQL), and every other word is a
+ * finished state. A row never says "Working" once the work is done.
+ */
+export const HISTORY_NEEDS_PERSON = ['Needs review', 'Waiting', 'Stopped', 'Needs attention'] as const;
+
+/** Approval status, read in the present: a pending approval past its deadline has expired. */
+function approvalState(row: HistoryRow): string {
+  const expired = row.approval_expires_at ? row.approval_expires_at.getTime() <= Date.now() : false;
+  switch (row.approval_status) {
+    case 'pending':
+      return expired ? 'Expired' : 'Needs review';
+    case 'approved':
+      return 'Approved';
+    case 'declined':
+      return 'Declined';
+    case 'changes_requested':
+      return 'Changes requested';
+    case 'expired':
+      return 'Expired';
+    case 'withdrawn':
+      return 'Withdrawn';
+    default:
+      return 'Proposed';
+  }
+}
+
+/** A request's status, read in the present. */
+function requestState(status: string | null): string {
+  switch (status) {
+    case 'pending':
+      return 'Needs review';
+    case 'admitted':
+      return 'Admitted';
+    case 'declined':
+      return 'Declined';
+    case 'created':
+    case 'drafted':
+    case 'approved':
+      return 'Approved';
+    case 'withdrawn':
+      return 'Withdrawn';
+    case 'changes_requested':
+      return 'Changes requested';
+    case 'expired':
+      return 'Expired';
+    default:
+      return 'Decided';
+  }
+}
+
+/** What a legacy effect was, as the object of a sentence. */
+const EFFECT_NOUNS: Readonly<Record<EffectKind, string>> = {
+  access_grant: 'the workspace access',
+  email_send: 'the email',
+  payment: 'the payment',
+  signature: 'the signatures',
+};
+const effectNoun = (row: HistoryRow): string => EFFECT_NOUNS[row.effect_kind as EffectKind] ?? 'the follow-up';
+const capitalize = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
+const REVIEWER_ROLE_NAMES: Readonly<Record<string, string>> = { access: 'an Access', finance: 'a Finance', legal: 'a Legal' };
+const reviewerRole = (role: string | null): string => `${(role && REVIEWER_ROLE_NAMES[role]) ?? 'a'} reviewer`;
+
+/** An effect's status, read in the present. */
+function effectState(status: string | null): string {
+  switch (status) {
+    case 'pending':
+    case 'assigned':
+      return 'Waiting';
+    case 'executed':
+      return 'Done';
+    case 'simulated':
+      return 'Practice run';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Not done here';
+  }
+}
+
+/** The email's own subject, from a hand-off label written as "<Role>: <subject>". */
+function handoffSubject(row: HistoryRow): string {
+  const label = subjectName(row);
+  const role = row.handoff_role_name;
+  if (role && label.startsWith(`${role}: `)) return label.slice(role.length + 2);
+  return label;
+}
+
+const isEmailHandoff = (row: HistoryRow): boolean =>
+  row.request_kind === 'task' && asRecord(row.request_payload).task_type === 'email_handoff';
 
 export interface RenderedEvent {
   id: string;
@@ -196,80 +309,99 @@ export interface RenderedEvent {
 export function renderHistoryRow(row: HistoryRow): RenderedEvent {
   const actor = actorName(row);
   const subject = subjectName(row);
-  let text = `${actor} · ${row.kind}`;
+  // Never the raw kind: a kind this switch does not know yet still reads as a sentence.
+  let text = `${actor} made a change`;
   let detail = '';
-  let status = '';
+  let status = 'Done';
+  const requestRef: RenderedEvent['ref'] = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
   let ref: RenderedEvent['ref'] = null;
 
   switch (row.kind) {
     case 'request.created':
-      text =
-        row.request_kind === 'application'
-          ? `${actor} screened ${subject}’s application`
-          : row.request_kind === 'invoice'
-            ? `${actor} prepared invoice ${documentNumber(row) ?? subject}`
-            : row.request_kind === 'approval'
-              ? `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`
-            : `${actor} prepared agreement ${documentNumber(row) ?? subject}`;
-      detail = 'Proposed for review · No decision taken';
-      status = row.request_status === 'pending' ? 'Needs review' : 'Reviewed';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      if (isEmailHandoff(row)) {
+        text = `${row.agent_name ?? 'The agent'} handed “${handoffSubject(row)}” to ${row.handoff_role_name ?? 'another team'}`;
+        detail = row.request_status === 'pending' ? 'Waiting for someone on that team to handle it' : 'Handled by the receiving team';
+        status = row.request_status === 'pending' ? 'Waiting' : 'Handled';
+      } else if (row.request_kind === 'task') {
+        text = `${actor} added a task: ${subject}`;
+        detail = row.request_status === 'pending' ? 'Waiting for a person' : 'Finished';
+        status = row.request_status === 'pending' ? 'Waiting' : 'Done';
+      } else {
+        text =
+          row.request_kind === 'application'
+            ? `${actor} screened ${subject}’s application`
+            : row.request_kind === 'invoice'
+              ? `${actor} prepared invoice ${documentNumber(row) ?? subject}`
+              : row.request_kind === 'approval'
+                ? `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`
+                : `${actor} prepared agreement ${documentNumber(row) ?? subject}`;
+        const waiting = row.request_kind === 'approval' ? approvalState(row) === 'Needs review' : row.request_status === 'pending';
+        detail = waiting ? 'Suggested for review · Nothing decided yet' : 'Suggested for review · A person has decided';
+        status = waiting ? 'Needs review' : row.request_kind === 'approval' ? approvalState(row) : requestState(row.request_status);
+      }
+      ref = requestRef;
       break;
 
     case 'request.hidden':
       text = `${actor} hid ${subjectOrNumber(row)} from their Inbox`;
-      detail = 'Personal organization only · Request and other reviewers unchanged';
+      detail = 'Only their Inbox changed · Other reviewers still see it';
       status = 'Hidden';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
       break;
 
     case 'request.restored':
-      text = `${actor} restored ${subjectOrNumber(row)} to their Inbox`;
-      detail = 'Personal Inbox visibility restored · Workflow unchanged';
+      text = `${actor} put ${subjectOrNumber(row)} back in their Inbox`;
+      detail = 'Only their Inbox changed';
       status = 'Restored';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
       break;
 
-    case 'approval.proposed':
-      text = `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`;
-      detail = 'Human authorization pending · No effect executed';
-      status = row.approval_status ?? 'pending';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+    case 'approval.proposed': {
+      // Agents suggest; the member they work for is not the author.
+      const proposer = row.agent_name ?? actor;
+      const replyTo = asRecord(asRecord(row.request_payload).details).reply_to;
+      text = replyTo && row.request_label
+        ? `${proposer} suggested a ${row.request_label.charAt(0).toLowerCase()}${row.request_label.slice(1)}`
+        : `${proposer} suggested ${str(asRecord(row.request_payload).summary) ?? subject}`;
+      }
+      status = approvalState(row);
+      detail = status === 'Needs review' ? 'Waiting for approval · Nothing has happened yet' : 'Suggested for approval';
+      ref = requestRef;
       break;
 
     case 'approval.vote_recorded':
-      text = `${actor} recorded an approval vote for ${subject}`;
-      detail = 'Human vote recorded · Quorum and current membership rechecked';
-      status = row.approval_status ?? 'pending';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${actor} reviewed ${subject}`;
+      detail = 'Their answer counts toward the approvals it needs';
+      status = approvalState(row);
+      ref = requestRef;
       break;
 
     case 'approval.revised':
-      text = `${actor} submitted a new version of ${subject}`;
-      detail = 'Earlier votes superseded · New authorization hash required';
-      status = row.approval_status ?? 'pending';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${actor} changed ${subject} after review`;
+      detail = 'Earlier approvals no longer count · It needs review again';
+      status = approvalState(row);
+      ref = requestRef;
       break;
 
     case 'approval.routed':
-      text = `${actor} routed ${subject}`;
-      detail = 'Assignment changed within the immutable review policy';
-      status = row.approval_status ?? 'pending';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${actor} changed who reviews ${subject}`;
+      detail = 'The approval rules stayed the same';
+      status = approvalState(row);
+      ref = requestRef;
       break;
 
     case 'approval.finalized':
-      text = `Required human reviewers authorized ${subject}`;
-      detail = `Authorization approved · Work ${row.approval_work_status ?? 'ready'} · Effect ${row.approval_effect_status ?? 'not required'}`;
-      status = row.approval_status ?? 'approved';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${capitalize(subject)} was approved`;
+      detail = 'Every required reviewer approved';
+      status = 'Approved';
+      ref = requestRef;
       break;
 
     case 'approval.expired':
-      text = `${subject} expired without authorization`;
-      detail = 'No approval by timeout · Dependent work cancelled';
-      status = 'expired';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${capitalize(subject)} expired before anyone approved it`;
+      detail = 'Nothing was done';
+      status = 'Expired';
+      ref = requestRef;
       break;
 
     case 'decision.recorded':
@@ -282,39 +414,44 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
               ? `${actor} approved invoice ${documentNumber(row) ?? subject}`
               : `${actor} approved agreement ${documentNumber(row) ?? subject}`;
       detail = decisionDetail(row);
-      status = row.request_status ?? '';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      status = row.decision === 'decline' ? 'Declined' : requestState(row.request_status);
+      ref = requestRef;
       break;
 
     case 'effect.assigned':
-      text = `${actor} assigned ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
-      detail = `Waiting on a ${row.effect_role ?? 'reviewer'} reviewer · Nothing executed`;
-      status = row.effect_status ?? 'pending';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${actor} passed ${effectNoun(row)} to ${reviewerRole(row.effect_role)}`;
+      detail = row.effect_status === 'pending' || row.effect_status === 'assigned'
+        ? `Waiting on ${reviewerRole(row.effect_role)} · Nothing has been done yet`
+        : 'Handed over for a person to finish';
+      status = effectState(row.effect_status);
+      ref = requestRef;
       break;
 
     case 'effect.executed':
       if (row.effect_status === 'simulated') {
-        text = `${actor} simulated ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
-        detail = row.effect_simulation_summary ?? EFFECT_SIMULATED_REASON;
-        status = 'simulated';
+        text = `${actor} did a practice run of ${effectNoun(row)}`;
+        detail = row.effect_simulation_summary
+          ? `Practice run: ${row.effect_simulation_summary} · Nothing really happened`
+          : 'Practice run · Nothing was really sent, paid, granted or signed';
+        status = 'Practice run';
       } else {
-        text = `${actor} tried ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
-        detail = EFFECT_UNAVAILABLE_REASON;
-        status = row.effect_status ?? 'unavailable';
+        text = `${actor} tried to finish ${effectNoun(row)}`;
+        detail = 'Hermes can’t do this itself · Nothing was sent, paid, granted or signed';
+        status = effectState(row.effect_status);
       }
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
       break;
 
     case 'effect.cancelled':
-      text = `${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'An effect'} was cancelled`;
-      detail = row.effect_cancelled_reason ?? 'Superseded by a new document version';
-      status = 'cancelled';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `${capitalize(effectNoun(row))} was cancelled`;
+      detail = 'A newer version of the document replaced the one that was approved';
+      status = 'Cancelled';
+      ref = requestRef;
       break;
 
-    case 'document.created':
-      text = `${actor} saved ${row.document_kind ?? 'a document'} ${documentNumber(row) ?? ''}`.trim();
+    case 'document.created': {
+      const kind = row.document_kind === 'invoice' || row.document_kind === 'agreement' ? row.document_kind : null;
+      text = kind ? `${actor} saved ${kind} ${documentNumber(row) ?? ''}`.trim() : `${actor} saved a document`;
       detail =
         row.document_kind === 'invoice'
           ? 'Saved in Library · Not sent · No money moved'
@@ -322,67 +459,238 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       status = 'Saved';
       ref = row.document_id ? { section: 'library', view: 'documents', id: row.document_id } : null;
       break;
+    }
 
     case 'document.versioned':
-      text = `${actor} saved version ${row.document_version ?? ''} of ${documentNumber(row) ?? subject}`.trim();
-      detail = 'Pending effects cancelled · Re-rendering';
-      status = 'Versioned';
+      text = `${actor} revised ${documentNumber(row) ?? subject}`;
+      detail = 'Anything waiting on the earlier version was cancelled';
+      status = 'Revised';
       ref = row.document_id ? { section: 'library', view: 'documents', id: row.document_id } : null;
       break;
 
     case 'subject.redacted':
       text = 'An applicant’s data was erased';
-      detail = 'The audit trail keeps ids and event kinds only';
+      detail = 'History keeps a record that something happened, without their details';
       status = 'Erased';
       ref = { section: 'history', view: 'all' };
       break;
 
     case 'member.invited':
-    case 'member.joined':
-    case 'member.role_changed':
-    case 'member.removed': {
-      const who = row.member_name ?? 'a member';
-      const verb =
-        row.kind === 'member.invited'
-          ? 'invited'
-          : row.kind === 'member.joined'
-            ? 'welcomed'
-            : row.kind === 'member.role_changed'
-              ? 'changed the role of'
-              : 'removed';
-      text = `${actor} ${verb} ${who}`;
-      detail = 'Membership is the authorization lookup; nothing else changed';
-      status = 'Members';
+      text = `${actor} invited ${row.member_name ?? 'a new member'}`;
+      detail = 'They can join once they accept';
+      status = 'Invited';
       ref = { section: 'members' };
       break;
-    }
+
+    case 'member.joined':
+      text = `${row.member_name ?? 'A new member'} joined the workspace`;
+      detail = 'They can now sign in';
+      status = 'Joined';
+      ref = { section: 'members' };
+      break;
+
+    case 'member.role_changed':
+      text = `${actor} changed what ${row.member_name ?? 'a member'} can do`;
+      detail = 'Nothing else about them changed';
+      status = 'Changed';
+      ref = { section: 'members' };
+      break;
+
+    case 'member.removed':
+      text = `${actor} removed ${row.member_name ?? 'a member'}`;
+      detail = 'They can no longer sign in to this workspace';
+      status = 'Removed';
+      ref = { section: 'members' };
+      break;
+
+    case 'agent.joined':
+      text = `${row.agent_name ?? 'An agent'} joined the workspace`;
+      status = 'Joined';
+      break;
+
+    case 'instruction.saved':
+      text = `${actor} updated ${row.agent_name ? `${row.agent_name}’s` : 'the agent’s'} instructions`;
+      status = 'Updated';
+      break;
+
+    case 'instruction.proposed':
+      text = `${actor} suggested new instructions for ${agentInSentence(row)}`;
+      detail = 'A person decides whether to use them';
+      status = 'Suggested';
+      break;
+
+    case 'context.set':
+      text = `${actor} updated the background notes the agent reads`;
+      status = 'Updated';
+      break;
+
+    case 'settings.changed':
+      if (row.actor_type === 'system') {
+        text = 'Hermes switched the workspace to a model that is available';
+        detail = 'The earlier default model could no longer be used';
+      } else if (row.agent_name) {
+        text = `${actor} changed ${row.agent_name}’s settings`;
+      } else {
+        text = `${actor} changed a workspace setting`;
+      }
+      status = 'Changed';
+      break;
+
+    case 'session.shared':
+      text = `${actor} shared a conversation`;
+      status = 'Shared';
+      break;
+
+    case 'session.unshared':
+      text = `${actor} stopped sharing a conversation`;
+      status = 'Private';
+      break;
+
+    case 'provider_key.added':
+      text = `${actor} connected a model provider`;
+      status = 'Connected';
+      break;
+
+    case 'provider_key.verified':
+      text = `${actor} checked a model provider connection`;
+      status = 'Checked';
+      break;
+
+    case 'provider_key.revoked':
+      text = `${actor} disconnected a model provider`;
+      status = 'Disconnected';
+      break;
+
+    case 'provider_key.attested':
+      text = `${actor} confirmed a model provider’s data terms`;
+      status = 'Confirmed';
+      break;
+
+    case 'provider_key.rewrapped':
+      text = 'Hermes renewed the encryption on saved model provider connections';
+      detail = 'Routine security upkeep · Nothing else changed';
+      status = 'Done';
+      break;
+
+    case 'slack.connected':
+      text = `${actor} connected Slack`;
+      status = 'Connected';
+      break;
+
+    case 'slack.disconnected':
+      text = `${actor} disconnected Slack`;
+      status = 'Disconnected';
+      break;
+
+    case 'slack.credential_rewrapped':
+      text = 'Hermes renewed the encryption on the Slack connection';
+      detail = 'Routine security upkeep · Nothing else changed';
+      status = 'Done';
+      break;
+
+    case 'workspace.created':
+      text = `${actor} created the workspace`;
+      status = 'Created';
+      break;
+
+    case 'workspace.deletion_scheduled':
+      text = `${actor} scheduled this workspace for deletion`;
+      detail = 'An Admin can cancel it before it happens';
+      status = 'Scheduled';
+      break;
+
+    case 'workspace.deletion_cancelled':
+      text = `${actor} cancelled the workspace deletion`;
+      status = 'Cancelled';
+      break;
+
+    case 'workspace.deleted':
+      text = `${actor} deleted the workspace`;
+      status = 'Deleted';
+      break;
+
+    case 'run.errored':
+      text = `${capitalize(agentInSentence(row))} stopped because something went wrong`;
+      detail = 'Nothing was sent · Someone can try again from the conversation';
+      status = 'Stopped';
+      break;
+
+    case 'run.retried':
+      text = row.actor_type === 'system'
+        ? `Hermes had ${agentInSentence(row)} try again`
+        : `${actor} asked ${agentInSentence(row)} to try again`;
+      status = 'Retried';
+      break;
+
+    case 'run.retry_cancelled':
+      text = `${actor} cancelled a retry for ${agentInSentence(row)}`;
+      status = 'Cancelled';
+      break;
+
+    case 'usage.cap_warning':
+      text = 'The workspace is close to its daily usage limit';
+      detail = 'An Admin can change the limit';
+      status = 'Warning';
+      break;
+
+    case 'validator.failed':
+      text = 'Hermes found a decision that was not made by a person';
+      detail = 'The nightly check flags this so an Admin can look into it';
+      status = 'Needs attention';
+      break;
 
     case 'gmail.connected':
-      text = `${actor} connected a Gmail outreach sender`;
-      detail = 'Dedicated sender · Exact approved email revisions only';
+      text = `${actor} connected a Gmail account for sending`;
+      detail = 'Hermes sends only emails a person approved';
       status = 'Connected';
       ref = { section: 'settings', view: 'Email' };
       break;
 
     case 'outbound_email.sent':
-      text = `${actor} sent ${subject}`;
-      detail = 'Exact approved email revision · Gmail delivery confirmed';
+      text = `${capitalize(subject)} was sent`;
+      detail = 'Sent from Gmail exactly as approved';
       status = 'Sent';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
       break;
 
     case 'outbound_email.simulated':
-      text = `A reply to ${subject} was simulated`;
-      detail = 'Exact approved reply · This environment simulates delivery; nothing was sent';
-      status = 'Simulated';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      text = `Practice send: ${subject}`;
+      detail = 'This deployment doesn’t deliver email, so nothing left Hermes';
+      status = 'Not sent';
+      ref = requestRef;
+      break;
+
+    case 'partner.invoice_received':
+      text = `${actor} submitted an invoice`;
+      detail = 'Waiting for the team to review it';
+      status = 'Received';
+      ref = requestRef;
+      break;
+
+    case 'partner.invoice_corrected':
+      text = `${actor} submitted a corrected invoice`;
+      detail = 'It replaces the earlier one';
+      status = 'Corrected';
+      ref = requestRef;
+      break;
+
+    case 'partner.decision_acknowledged':
+      text = `The partner was shown the decision on ${subject}`;
+      status = 'Seen';
+      ref = requestRef;
       break;
 
     case 'email_handoff.completed':
-      text = `${actor} marked ${subject} handled`;
-      detail = 'Email hand-off closed by a person it was addressed to';
+      text = `${actor} marked ${isEmailHandoff(row) ? `“${handoffSubject(row)}”` : subject} handled`;
+      detail = 'Closed by someone on the receiving team';
       status = 'Handled';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
+      break;
+
+    case 'email_triage.retried':
+      text = row.actor_type === 'system' ? 'Hermes asked the agent to read an email again' : `${actor} asked the agent to read an email again`;
+      detail = row.actor_type === 'system' ? 'The model provider was busy · Retried automatically after a wait' : 'The last attempt did not finish';
+      status = 'Retried';
       break;
 
     case 'email_triage.retried':
@@ -394,9 +702,8 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
 
     case 'inbound_email.received':
       text = 'An email arrived at a role inbox';
-      detail = 'Stored after sanitizing and sender checks · Handed to the inbox agent';
+      detail = 'Checked and saved · The agent will read it';
       status = 'Received';
-      ref = null;
       break;
 
     case 'email_inbox.created':
@@ -404,14 +711,10 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       text = `${actor} ${row.kind === 'email_inbox.created' ? 'added' : 'removed'} a role inbox`;
       detail = row.kind === 'email_inbox.created' ? 'New forwarding address for a role' : 'Its stored emails were deleted';
       status = row.kind === 'email_inbox.created' ? 'Added' : 'Removed';
-      ref = null;
       break;
 
     default:
-      text = `${actor} · ${row.kind}`;
-      detail = '';
-      status = '';
-      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      ref = requestRef;
       break;
   }
 

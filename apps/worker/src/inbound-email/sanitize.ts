@@ -470,7 +470,7 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
         const tiny = ['width', 'height'].some((dimension) => /^[01]$/u.test((attrs.get(dimension) ?? '').trim()));
         if (tiny) continue; // a tracking pixel: counted, never shown
         const host = hostOf(src.startsWith('//') ? `https:${src}` : src) ?? 'another site';
-        write(`<span class="hermes-image-blocked">[Image from ${escapeHtml(host)} not loaded${alt ? `: ${escapeHtml(alt)}` : ''}]</span>`);
+        write(`<span class="hermes-image-blocked">Image not shown${alt ? `: ${escapeHtml(alt)}` : ''} (from ${escapeHtml(host)})</span>`);
       } else if (alt) {
         write(`<span class="hermes-image-blocked">[Image: ${escapeHtml(alt)}]</span>`);
       }

@@ -69,14 +69,14 @@ test('every main screen renders', async ({ page }) => {
   await expect(appPane.getByRole('heading', { name: 'Instructions for Iris' })).toBeVisible();
   await page.screenshot(shot('09-agent-skills'));
 
-  // 10. Agent → Traces.
-  await agentView('Traces');
-  await expect(appPane.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  // 10. Agent → Activity.
+  await agentView('Activity');
+  await expect(appPane.getByRole('heading', { name: 'Activity' })).toBeVisible();
   await page.screenshot(shot('10-traces'));
 
   // 11. Trace detail, with ThinkingState driven by the run's real steps.
   await appPane.getByRole('button', { name: /^Open/ }).first().click();
-  await expect(appPane.getByText('Allowed tools')).toBeVisible();
+  await expect(appPane.getByText('What it was allowed to do')).toBeVisible();
   await page.screenshot(shot('11-trace-detail'));
 
   // 12. History.

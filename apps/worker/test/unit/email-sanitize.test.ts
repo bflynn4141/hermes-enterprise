@@ -46,7 +46,7 @@ describe('sanitizeEmailHtml', () => {
     expect(result.links).toEqual([{ href: 'https://evil.example/pay?x=1', text: 'paypal.com/login', mismatch: true }]);
     expect(result.remoteImagesBlocked).toBe(2);
     // The tracking pixel disappears; a real image leaves a note saying it was not loaded.
-    expect(result.html).toContain('[Image from cdn.example not loaded: Logo]');
+    expect(result.html).toContain('Image not shown: Logo (from cdn.example)');
     expect(result.html).not.toContain('tracker.example');
   });
 
@@ -91,7 +91,7 @@ describe('sanitizeEmailHtml', () => {
     const result = sanitizeEmailHtml('<p>&lt;script&gt;alert(1)&lt;/script&gt; &amp; "quotes"</p><img alt="&quot; onerror=x" src="https://a.example/i.png">');
     expect(result.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;quotes&quot;');
     expect(result.html).not.toContain('<script');
-    expect(result.html).toContain('not loaded: &quot; onerror=x]');
+    expect(result.html).toContain('Image not shown: &quot; onerror=x');
   });
 
   it('inlines a cid image from the message and nothing larger than the cap', () => {

@@ -115,7 +115,7 @@ export function FirstRunConversation({
 function Intro({ agentName, onContinue }: { agentName: string; onContinue: () => void }) {
   return <>
     <IrisPrompt>
-      <p>Your organization has assigned you {agentName}. Let’s configure your first Partner Program workflow.</p>
+      <p>Your organization has assigned you {agentName}. Let’s set up how we find Partner Program prospects together.</p>
       <p>I can research and screen professional evidence. You stay in control of every decision, message, access change, agreement, and payment.</p>
     </IrisPrompt>
     <div className="first-run-actions"><button type="button" className="first-run-primary" onClick={onContinue}>Continue</button></div>
@@ -138,7 +138,7 @@ function Criteria({ agentName, state, onAction }: { agentName: string; state: Fi
 
 function Boundaries({ state, error, onAction }: { state: FirstRunState; error?: string | null; onAction: (action: FirstRunAction) => void }) {
   return <>
-    <IrisPrompt><p>Confirm where I stop. Your first AgentCash search will also require a separate approval in Inbox and is capped at $0.15.</p></IrisPrompt>
+    <IrisPrompt><p>Confirm where I stop. My first paid search for people, made through the AgentCash search service, needs its own approval in Inbox and costs at most $0.15.</p></IrisPrompt>
     <div className="first-run-boundaries" aria-label="Human review boundaries">
       {DEFAULT_BOUNDARIES.map((boundary) => <div className="first-run-boundary" key={boundary.id}>
         <span className="first-run-boundary-check"><Icon name="check" size={13} /></span><span>{boundary.label}</span>
@@ -178,8 +178,8 @@ export function FirstRunWorkingAgreement({ state, agreement: supplied }: { state
     <div className="first-run-agreement-heading"><div><Glass name="agreement" size={32} /><span><h2>Working agreement</h2><p>Partner Program</p></span></div><span className={agreement.readyForWork ? 'is-ready' : ''}>{agreement.readyForWork ? 'Saved' : 'Draft'}</span></div>
     <p className="first-run-mode"><Icon name="loop" size={16} /><span><strong>Work until review</strong>The agent gathers evidence, then stops where a person owns the decision.</span></p>
     <div className="first-run-agreement-fields">
-      {[['Goal', agreement.goal], ['Trigger', agreement.trigger], ['Criteria', agreement.inputs], ['Done', agreement.done]].map(([label, value]) => <div className="first-run-agreement-field is-filled" key={label}><span>{label}</span><p>{value}</p></div>)}
-      <div className="first-run-agreement-field first-run-agreement-loop is-filled"><span>Loop</span><div className="first-run-agreement-stages">{agreement.stages.map((stage, index) => <span key={stage}>{stage}{index < agreement.stages.length - 1 ? <Icon name="arrow" size={12} /> : null}</span>)}</div></div>
+      {[['Goal', agreement.goal], ['Starts when', agreement.trigger], ['Criteria', agreement.inputs], ['Done when', agreement.done]].map(([label, value]) => <div className="first-run-agreement-field is-filled" key={label}><span>{label}</span><p>{value}</p></div>)}
+      <div className="first-run-agreement-field first-run-agreement-loop is-filled"><span>Steps</span><div className="first-run-agreement-stages">{agreement.stages.map((stage, index) => <span key={stage}>{stage}{index < agreement.stages.length - 1 ? <Icon name="arrow" size={12} /> : null}</span>)}</div></div>
       <div className="first-run-agreement-field first-run-agreement-reviews is-filled"><span>Reviews</span><ul>{agreement.reviews.map((review) => <li key={review.id}><Icon name="shield" size={13} /><span>{review.label}</span><strong>{review.reviewer}</strong></li>)}</ul></div>
     </div>
   </aside>;

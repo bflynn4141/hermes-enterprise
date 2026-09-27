@@ -36,7 +36,7 @@ import { consumeRate } from '../auth/rate-limit.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { publishEvents } from '../jobs.js';
 import { retryEmailTriage } from '../inbound-email/triage.js';
-import { DERIVED_EMAIL_STATUS_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
+import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
 import { ensureInboxApprovals, inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
 import { emailCautionResourceKey, emailInboxResourceKey } from '@hermes/shared';
 import { RouteError } from './errors.js';
@@ -257,10 +257,13 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
 /** Recent messages as list rows; `where` filters `m` with $1 = workspace and $2 = the id it names. */
 async function listItems(work: TenantWork, where: 'inbox' | 'message', id: string): Promise<InboundEmailListItem[]> {
   const rows = await work.tx.query<{
-    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; can_retry: boolean;
+    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[];
+    can_retry: boolean; retrying: boolean; problem: string | null;
   }>(
     `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, ${DERIVED_EMAIL_STATUS_SQL} AS status,
-            ${EMAIL_RETRYABLE_SQL} AS can_retry
+            ${EMAIL_RETRYABLE_SQL} AS can_retry,
+            (m.status = 'received' AND m.triage_attempt > 1 AND NOT ${EMAIL_RETRYABLE_SQL}) AS retrying,
+            ${EMAIL_PROBLEM_SQL} AS problem
        FROM inbound_email_messages m
        JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
        LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
@@ -276,6 +279,8 @@ async function listItems(work: TenantWork, where: 'inbox' | 'message', id: strin
     status: row.status,
     request_ids: row.request_ids.slice(0, 10),
     can_retry: row.can_retry,
+    retrying: row.retrying,
+    problem: row.problem,
   }));
 }
 

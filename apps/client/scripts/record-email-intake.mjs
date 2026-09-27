@@ -314,7 +314,7 @@ async function story(page, base, chapter) {
   await pause(page, 2_500);
 
   await say('What Hermes checked', 'The server’s checks come first: the domain verified the sender, and the tracking pixel and remote logo never loaded.');
-  await moveTo(page, app.locator('.email-message-checks').first());
+  await moveTo(page, app.locator('.email-message-trust').first());
   await pause(page, 5_500);
   await say('The email, rendered safely', 'The email renders in a locked-down frame: no scripts, no remote loads. Every link shows where it really goes.');
   await scrollTo(page, app.locator('.email-frame').first(), { block: 'start' });
@@ -333,7 +333,7 @@ async function story(page, base, chapter) {
   await pause(page, 4_000);
 
   await say('Maya approves the reply', 'Nothing is sent until a person approves. Maya approves this exact reply.');
-  await pressGuarded(page, 'Approve and send reply', () => say('A recent sign-in first', 'Approving needs a sign-in from the last five minutes, so Maya confirms it is her, then approves.'));
+  await pressGuarded(page, 'Approve and send', () => say('A recent sign-in first', 'Approving needs a sign-in from the last five minutes, so Maya confirms it is her, then approves.'));
   await pause(page, 3_000);
   await scrollTo(page, app.getByRole('heading', { name: 'Decision and result' }), { block: 'start' });
   await say('Delivered, here simulated', 'Approved and queued. This development build simulates delivery, so nothing actually left the machine.');
@@ -350,7 +350,7 @@ async function story(page, base, chapter) {
   await openItem(page, /^Finance: September/);
   await pause(page, 3_000);
   await say('The hand-off to Finance', 'Dana sees Iris’s note and the same checked email. The hand-off cannot pay, sign or reply.');
-  await scrollTo(page, app.locator('.email-message-checks').first(), { block: 'start' });
+  await scrollTo(page, app.locator('.email-message-trust').first(), { block: 'start' });
   await pause(page, 3_000);
   await scrollTo(page, app.locator('.email-message-extras').first(), { block: 'end' });
   await pause(page, 2_500);

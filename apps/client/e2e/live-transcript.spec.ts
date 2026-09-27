@@ -299,7 +299,8 @@ test('T5 · activity is one collapsed line above the reply, and only when a tool
   await expect(page.locator('.pane-iris .activity-done')).not.toHaveAttribute('open', /.*/);
   await summary.click();
   await expect(page.locator('.pane-iris .activity-done')).toHaveAttribute('open', /.*/);
-  await expect(page.locator('.pane-iris .activity-done').getByText('propose_request')).toBeVisible();
+  await expect(page.locator('.pane-iris .activity-done').getByText('Prepared a review request')).toBeVisible();
+  await expect(page.locator('.pane-iris .activity-done').getByText('propose_request')).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

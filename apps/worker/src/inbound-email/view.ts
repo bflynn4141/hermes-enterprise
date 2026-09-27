@@ -53,6 +53,23 @@ export const EMAIL_RETRYABLE_SQL = `(i.status = 'active' AND cardinality(m.reque
          AND j.done_at IS NULL AND j.last_error IS NULL))
   ))`;
 
+/**
+ * SQL for why a message needs a person, in words the interface maps to a
+ * sentence: the model was busy, a setting needs fixing, the inbox's agent has
+ * no owner, the inbox is paused, or something else. Null when nothing is wrong.
+ */
+export const EMAIL_PROBLEM_SQL = `CASE
+    WHEN m.status = 'no_action' AND m.triage_error = 'inbox_paused' THEN 'inbox_paused'
+    WHEN (${DERIVED_EMAIL_STATUS_SQL}) = 'failed' THEN CASE
+      WHEN COALESCE(r.error->>'reason', m.triage_error) IN
+        ('hermes_provider_rate_limited', 'hermes_provider_unavailable', 'rate_limited', 'engine_paused') THEN 'provider_busy'
+      WHEN COALESCE(r.error->>'reason', m.triage_error) IN
+        ('no_key', 'key_invalid', 'key_unverified', 'provider_not_allowed', 'unknown_model') THEN 'needs_setup'
+      WHEN m.triage_error = 'inbox_owner_missing' THEN 'no_owner'
+      ELSE 'other'
+    END
+  END`;
+
 interface MessageRow {
   id: string;
   inbox_id: string;

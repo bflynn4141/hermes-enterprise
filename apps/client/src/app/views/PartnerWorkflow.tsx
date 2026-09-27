@@ -18,12 +18,22 @@ import { Glass, Icon } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
 import { useStepUp } from './use-step-up.js';
 
+/** Reason codes as sentences; the server's own text is never shown (docs/DESIGN.md). */
+const WORKFLOW_ERRORS: Readonly<Record<string, string>> = {
+  workflow_readiness_incomplete: 'One of the agents is not fully set up for its role yet. The handoff stays off.',
+  workflow_not_configured: 'Choose a person and an agent for both teams before turning the handoff on.',
+  bad_partner_workflow_setup: 'Choose a person and an agent for both teams, then save again.',
+  bad_partner_workflow_admission: 'That setting could not be saved. Refresh and try again.',
+  unknown_agent: 'One of those agents no longer exists. Refresh and choose again.',
+  admin_required: 'Only a workspace Admin can change this.',
+  not_admin: 'Only a workspace Admin can change this.',
+  csrf_failed: 'Refresh this page and try again.',
+  forbidden_origin: 'Refresh this page and try again.',
+};
+
 function workflowError(error: unknown): string {
-  if (!(error instanceof RestError)) return 'Could not complete that action.';
-  if (error.reason === 'workflow_readiness_incomplete') {
-    return 'The native profiles did not match. The handoff remains disabled.';
-  }
-  return error.message || 'Could not complete that action.';
+  if (!(error instanceof RestError)) return 'Could not complete that action. Nothing was changed.';
+  return WORKFLOW_ERRORS[error.reason] ?? 'Could not complete that action. Nothing was changed.';
 }
 
 /** Saving the roles grants Finance, so the server asks for what a role change asks for (C97). */
@@ -371,7 +381,7 @@ export function PartnerWorkflow() {
         <EmptyState
           icon="agreement"
           title="Partnerships → Finance"
-          detail={workflow.actions.configure ? 'Bind both roles to turn this on.' : 'Not set up yet.'}
+          detail={workflow.actions.configure ? 'Choose a person and an agent for both teams to turn this on.' : 'Not set up yet.'}
           action={workflow.actions.configure && form !== 'setup'
             ? <Button primary onClick={() => setForm('setup')}>Configure roles</Button>
             : undefined}

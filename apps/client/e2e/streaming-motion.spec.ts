@@ -6,14 +6,14 @@ import type {} from './stream-handoff-fixture.js';
 
 const finalAnswer = 'Leah scores 82 of 100. Customer impact is unverified.';
 
-test('a real stream reveals fluidly while exact tool activity remains visible', async ({ page }) => {
+test('a real stream reveals fluidly while tool activity remains visible in plain words', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Message Iris' }).fill('Review the newest partner application');
   await page.getByRole('button', { name: 'Send message' }).click();
 
   const liveTools = page.getByRole('list', { name: 'Tool activity' });
-  await expect(liveTools.getByText('get_document_text', { exact: true })).toBeVisible();
   await expect(liveTools).toContainText('Reading a source document');
+  await expect(liveTools.getByText('get_document_text', { exact: true })).toHaveCount(0);
 
   const text = page.locator('.stream-text .lead-text');
   await expect(text).toBeVisible();

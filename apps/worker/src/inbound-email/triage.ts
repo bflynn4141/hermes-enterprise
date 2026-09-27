@@ -168,6 +168,15 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
         }),
         jobIds,
         runMode: 'intake',
+        display: {
+          kind: 'email',
+          text: `New email from ${facts.name ?? facts.address}: ${row.subject || '(no subject)'}`.slice(0, 1000),
+          blocks: [{
+            type: 'card',
+            title: (facts.name ? `${facts.name} <${facts.address}>` : facts.address).slice(0, 300),
+            subtitle: (row.subject || '(no subject)').slice(0, 600),
+          }],
+        },
         ...(env.MODEL_SCRIPTED === '1' ? { scriptedScript: 'email_triage' } : {}),
       });
     } catch (error) {

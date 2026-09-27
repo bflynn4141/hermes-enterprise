@@ -45,9 +45,8 @@ describe('approval decision copy', () => {
     view.capabilities.allowed_decisions = [];
     view.capabilities.reason = 'You already voted on this revision.';
     const html = renderToStaticMarkup(<ApprovalDecisionHeader view={view} />);
-    expect(html).toContain('1/2 approved');
-    expect(html).toContain('0/1 approved');
-    expect(html).toContain('Parallel review');
+    expect(html).toContain('1 of 2 approved');
+    expect(html).not.toMatch(/\d\/\d approved/u);
     expect(html).toContain('You already voted on this revision.');
   });
 
@@ -68,10 +67,10 @@ describe('approval decision copy', () => {
     const view = [...approvalFixtures().views.values()][0]!;
     view.payload.evidence[0]!.ref = 'javascript:alert(1)';
     const html = renderToStaticMarkup(<ApprovalEvidence view={view} />);
-    expect(html).toContain('Agent’s note');
-    expect(html).toContain('Reference:');
+    expect(html).toContain('Note');
+    expect(html).not.toContain('Reference:');
     expect(html).not.toContain('href=');
     view.payload.evidence = [];
-    expect(renderToStaticMarkup(<ApprovalEvidence view={view} />)).toContain('No source references were supplied');
+    expect(renderToStaticMarkup(<ApprovalEvidence view={view} />)).toContain('No sources came with this request');
   });
 });

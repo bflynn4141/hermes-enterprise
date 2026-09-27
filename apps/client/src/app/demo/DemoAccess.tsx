@@ -104,9 +104,9 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
         <p className="demo-access-lede">
           Hermes Teams Demo gives each employee an agent configured for their role. The agents
           research, draft and prepare handoffs, and every consequential step waits for a person
-          to decide. This staging deployment is the live demo, open to invited organizations.
-          Request a Member invite below with the passcode you were sent, then open a session
-          with your agent and ask it to screen a partner.
+          to decide. This is the live demo, open to invited organizations. Request a Member
+          invite below with the passcode you were sent, then start a conversation with your
+          agent and ask it to screen a partner.
         </p>
 
         {SHARE_LINKS.length > 0 && (

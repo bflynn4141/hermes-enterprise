@@ -19,7 +19,10 @@ records the reasoning. This page is the operator and developer reference.
 3. **The agent reads it** (`inbound-email/triage.ts`) in an intake-mode run in
    its owner's "Email · <inbox>" session. It sees the sender facts and the
    visible text between nonce markers, and can call only `suggest_reply`,
-   `suggest_handoff` and `get_workspace_context`.
+   `suggest_handoff` and `get_workspace_context`. Those instructions go to
+   the model only (`run_turns`); the conversation stores the turn as an
+   email card (message kind `email`: sender and subject), and cards are kept
+   out of later turns' history.
 4. **Suggestions reach people** (`inbound-email/suggestions.ts`):
    - a reply is a communication approval in the Inbox, showing the original
      email rendered safely above the suggested words;
@@ -52,6 +55,24 @@ id carry the number, so every retry is a fresh job and a fresh intake run.
 Suggestion tools find their message by `triage_run_id`, so after a retry the
 failed run can no longer attach anything to the message. Each retry writes an
 `email_triage.retried` event naming the failed run.
+
+## How it reads on screen
+
+Wording follows [DESIGN.md](DESIGN.md). A suggested reply shows what to check
+first, then the reply marked "Not sent", then the original email. Warnings are
+written by the client from each warning's code and the stored facts, so older
+messages read the same as new ones and no mail-protocol names appear. Admin →
+Role inboxes uses one status vocabulary (Waiting for Iris, Reading, Ready for
+review, No reply needed, Trying again soon, Couldn't read it) and says why a
+read failed.
+
+While Role inboxes is open, its counts and recent messages refresh every five
+seconds after the previous read completes. This picks up new arrivals and
+finished triage attempts without reloading. Refreshing pauses when the tab is
+hidden, resumes immediately on return, and stops when the page closes. A
+temporary connection failure keeps the last readable rows with a retry notice;
+only an explicit access-denied response hides message content. A retry or inbox
+change invalidates older reads so they cannot overwrite the newer result.
 
 ## What the reviewer can trust
 

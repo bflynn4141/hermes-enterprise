@@ -77,9 +77,9 @@ describe('runtime capacity contracts', () => {
 
   it('uses stable operator labels for every grant lifecycle state', () => {
     expect(runtimeGrantStatusLabel({ status: 'prepared', capacity_state: null })).toBe('Prepared');
-    expect(runtimeGrantStatusLabel({ status: 'linked', capacity_state: 'available' })).toBe('Verified and available');
+    expect(runtimeGrantStatusLabel({ status: 'linked', capacity_state: 'available' })).toBe('Ready');
     expect(runtimeGrantStatusLabel({ status: 'linked', capacity_state: 'reserved' })).toBe('Reserved');
-    expect(runtimeGrantStatusLabel({ status: 'linked', capacity_state: 'quarantined' })).toBe('Quarantined');
+    expect(runtimeGrantStatusLabel({ status: 'linked', capacity_state: 'quarantined' })).toBe('Paused for checks');
     expect(runtimeGrantStatusLabel({ status: 'consumed', capacity_state: 'assigned' })).toBe('Assigned');
     expect(runtimeGrantStatusLabel({ status: 'revoked', capacity_state: null })).toBe('Revoked');
     expect(runtimeGrantStatusLabel({ status: 'expired', capacity_state: null })).toBe('Expired');
@@ -88,8 +88,8 @@ describe('runtime capacity contracts', () => {
   it('never includes an untrusted server error or secret in operator copy', () => {
     const error = new RestError(409, 'capacity_not_ready', 'control-secret private@example.test', null, 'trace-safe');
     const copy = runtimeCapacityErrorMessage(error, 'register');
-    expect(copy).toContain('did not prove');
-    expect(copy).toContain('trace-safe');
+    expect(copy).toContain('did not pass');
+    expect(copy).not.toContain('trace-safe');
     expect(copy).not.toContain('control-secret');
     expect(copy).not.toContain('private@example.test');
   });

@@ -223,6 +223,9 @@ export const emailHandoffTaskPayloadSchema = z.object({
   inbound_email_id: z.uuid(),
   from_role_slug: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
   to_role_slug: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+  /** Display names at hand-off time; older hand-offs carry only the slugs. */
+  from_role_name: z.string().trim().min(1).max(120).optional(),
+  to_role_name: z.string().trim().min(1).max(120).optional(),
 }).strict();
 export type EmailHandoffTaskPayload = z.infer<typeof emailHandoffTaskPayloadSchema>;
 
