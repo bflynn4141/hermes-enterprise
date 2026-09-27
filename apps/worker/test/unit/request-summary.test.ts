@@ -32,6 +32,18 @@ describe('decision summaries', () => {
     expect(member.consequence).toBe('Saves an unsigned agreement. Nothing is signed or sent.');
   });
 
+  it('counts approvals toward a decision that needs several people (C95)', () => {
+    const row = { ...baseRow({ number: 'AGR-42' }), kind: 'agreement' as const };
+    // The viewer approved already: waiting on one more person.
+    expect(decisionSummary(row, null, false, 'Admins, 2 different people', { required: 2, recorded: 1, covered: true }).approval_requirement).toMatchObject({
+      pending_for_viewer: false, waiting_on_others: true, remaining_approvals: 1,
+      current: [{ label: 'Admins, 2 different people', approvals_recorded: 1, quorum: 2 }],
+    });
+    // Enough people, but not one from each group: still one to go.
+    expect(decisionSummary(row, null, true, 'Admins and Finance, one of each', { required: 2, recorded: 2, covered: false }).approval_requirement)
+      .toMatchObject({ pending_for_viewer: true, remaining_approvals: 1, current: [{ approvals_recorded: 2, quorum: 2 }] });
+  });
+
   it('does not assign an approval vote to a setup task', () => {
     const row = { ...baseRow({ description: 'Connect the workspace provider' }), kind: 'task' as const };
     expect(decisionSummary(row, null, true).approval_requirement).toMatchObject({ pending_for_viewer: false, waiting_on_others: false, remaining_approvals: 0, current: [] });

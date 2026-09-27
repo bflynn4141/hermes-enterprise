@@ -25,6 +25,7 @@ import type {
   Attachment,
   AttachmentRef,
   DecisionResult,
+  DecisionPending,
   InvitationEntity,
   MaskedProviderKey,
   MemberEntity,
@@ -102,7 +103,8 @@ export interface Adapter {
   answerContext(sessionId: string, key: string, value: string): Promise<void>;
   /** Declare, put the bytes, complete. Returns the ready row. */
   upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string; agentId?: string }): Promise<Attachment>;
-  decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | 'reauth_required'>;
+  /** A `pending` result means this approval counted and the decision needs more people (C95). */
+  decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | DecisionPending | 'reauth_required'>;
   applyCommand(sessionId: string, command: BlockCommand): void;
   activateSession(sessionId: string): Promise<void>;
   updateSessionSettings(sessionId: string, settings: SessionSettings): Promise<void>;
@@ -1216,7 +1218,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     return ready;
   }
 
-  async function decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | 'reauth_required'> {
+  async function decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | DecisionPending | 'reauth_required'> {
     try {
       if (reviewed && reviewed.id !== requestId) throw new Error('The reviewed request does not match this decision.');
       const binding = reviewed && (reviewed.kind === 'invoice' || reviewed.kind === 'agreement')

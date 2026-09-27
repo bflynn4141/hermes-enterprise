@@ -60,7 +60,7 @@ break that guarantee. Instructions and skill settings stay editable, as today.
 | 0 | Safety fixes: Finance authority from server-written subject keys, not payloads; the two-person payment rule enforced; a workspace legal name instead of a hardcoded party. | Nothing new to click; closes known gaps first. | Done, #184 (C90) |
 | 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | Done, #185 (C91) |
 | 2 | Roles as data: a roles table seeded with Partnerships and Finance replaces the fixed checks; job roles persist on members; many people per role; invitations pick from the table; reviewer tags become role membership. | Admin → Roles: see who holds each role, add roles, staff them. Unblocks 3–5. | Done (C92) |
-| 3 | Approval routing screen: per approval type, which roles (and whether Admins) approve, how many different people an action needs, and whether the requester may approve. No steps, named people or multi-person decisions yet. | Payments need three Finance people; a new member's roles say what they can approve. | Done (C93) |
+| 3 | Approval routing screen: per approval type, which roles (and whether Admins) approve, how many different people it needs, one from each group, whether the requester may approve, and for invoices and payments a different rule above an amount. No steps or named people yet. | Payments need three Finance people; a new member's roles say what they can approve. | Done (C93). Invoices and payments can use a different rule above an amount (C94), and decisions can need several people, one from each group (C95). |
 | 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Set up a third role's agent from the UI. | |
 | 5 | Configurable handoffs: role to role, chosen trigger and request type, more than two lanes. | Wire a new cross-role flow without code. | Wait for a second real workflow |
 
@@ -91,8 +91,6 @@ Agent security docs and Hermes Agent v2026.9.24 source.
 - Parked tool-call decisions (operation approvals) have no step-up, and
   `propose_approval` is not covered by the operation switches.
 - `docs/APPROVAL-EXPANSION-STATUS.md` predates the shipped routes and runtime.
-- Decisions take one person in this version; multi-person decisions would
-  need votes on legacy requests like typed approvals have.
 - Approval requests raised by workflows (outreach drafts, a new member's first
   search, record changes, Shared Intelligence) keep their own seeded policies.
   The Approvals screen lists them read-only (C97); an Admin cannot route them
@@ -101,4 +99,3 @@ Agent security docs and Hermes Agent v2026.9.24 source.
   job also binds them to the Finance lane), so the Invite dialog shows that
   role ticked and fixed (C97). Inviting someone for a job without its role
   would need invitations to record that the Admin chose roles explicitly.
-- Amount thresholds ("over $5k") are not supported yet.

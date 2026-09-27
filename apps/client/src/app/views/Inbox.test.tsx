@@ -4,7 +4,7 @@ import { mockUuid, type EffectEntity, type Ref, type RequestEntity } from '@herm
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState, reduce, type AppState } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, SIMULATED_EFFECT_HONESTY, legacyEffectStatusLabel } from './Inbox.js';
+import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, SIMULATED_EFFECT_HONESTY, approvalProgressLine, legacyEffectStatusLabel, viewerApprovedLine } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
   const payload = kind === 'application'
@@ -354,6 +354,29 @@ describe('legacy effect execute honesty', () => {
     status: 'unavailable',
     reason: 'Not executed. This legacy effect has no configured executor; no email, payment, access or signature action was completed.',
   };
+
+  it('names who carries an effect out in the server’s words when it sends them', () => {
+    const routed = { ...pending, approver_label: 'Admins or Finance' };
+    expect(legacyEffectStatusLabel(routed)).toBe('Pending · no executor · needs Admins or Finance');
+    expect(legacyEffectStatusLabel(routed, 'simulated')).toBe('Waiting on Admins or Finance');
+    const confirming = { ...routed, confirmations: { required: 2, recorded: 1, by_viewer: true } };
+    expect(legacyEffectStatusLabel(confirming)).toBe('1 of 2 confirmations · Admins or Finance');
+    expect(renderToStaticMarkup(<LegacyEffectsPanel effects={[confirming]} />)).toContain('Waiting on another person');
+  });
+
+  it('counts approvals toward a decision that needs several people (C95)', () => {
+    const requirement = (recorded: number, quorum: number) => ({
+      mode: 'single' as const, completed_steps: 0, total_steps: 1, remaining_approvals: quorum - recorded,
+      current: [{ label: 'Admins, 2 different people', approvals_recorded: recorded, quorum }],
+      pending_for_viewer: true, waiting_on_others: false, expires_at: null,
+    });
+    expect(approvalProgressLine(requirement(1, 2))).toBe('1 of 2 approvals recorded.');
+    expect(approvalProgressLine(requirement(0, 2))).toBeNull();
+    expect(approvalProgressLine(requirement(0, 1))).toBeNull();
+    expect(approvalProgressLine(undefined)).toBeNull();
+    expect(viewerApprovedLine(1)).toBe('You approved this. Waiting for one more person.');
+    expect(viewerApprovedLine(2)).toBe('You approved this. Waiting for 2 more people.');
+  });
 
   it('labels pending effects as having no executor and offers Record attempt, never Execute', () => {
     expect(legacyEffectStatusLabel(pending)).toContain('no executor');

@@ -9,6 +9,9 @@
 // of it is true or none of it is:
 //
 //   1. lock the request row, and refuse anything that is not `pending`;
+//   1a. for an approval, record this person's confirmation (C95). When the
+//      rule needs more people than have approved so far, stop here: publish
+//      that the request changed and answer "pending". Otherwise go on;
 //   2. INSERT decisions, under UNIQUE(request_id) — the reason two tabs cannot
 //      produce two decisions;
 //   3. UPDATE requests SET status = <resulting> WHERE id = $1 AND status =
@@ -43,7 +46,15 @@ import { workspaceLegalName } from './legal-name.js';
 import { type TenantWork } from '../routes/tenant.js';
 import { RouteError } from '../routes/errors.js';
 import { plannedEffects } from './effects.js';
-import { loadApprovalRoutes } from './approval-routing.js';
+import {
+  decisionProgress,
+  loadApprovalRoutes,
+  loadApprovalViewer,
+  primaryRole,
+  progressComplete,
+  requestAmount,
+  routedRule,
+} from './approval-routing.js';
 import { REQUEST_AUDIENCE_PREDICATE } from './requests.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';
 
@@ -57,6 +68,13 @@ export interface DecisionOutcome {
   readonly conflict: boolean;
 }
 
+/** An approval recorded, with the decision still waiting on more people (C95). */
+export interface DecisionPendingOutcome {
+  readonly pending: true;
+  readonly required: number;
+  readonly recorded: number;
+}
+
 interface RequestRow {
   id: string;
   kind: RequestKind;
@@ -66,6 +84,7 @@ interface RequestRow {
   payload: unknown;
   version: number;
   subject_key: string | null;
+  requester_id: string | null;
 }
 
 interface PartnerDecisionBinding {
@@ -78,11 +97,16 @@ interface PartnerDecisionBinding {
   lineageRootId: string;
 }
 
+/**
+ * `principalOk` answers whether the handoff's named Finance person is part of
+ * this decision: the person pressing, or (for an approval that needed more
+ * than one person, C95) one of the approvals that count.
+ */
 async function lockPartnerDecisionBinding(
   tx: Tx,
   workspaceId: string,
   requestId: string,
-  userId: string,
+  principalOk: (principalId: string) => boolean,
 ): Promise<PartnerDecisionBinding | null> {
   const mapping = await tx.query<{ handoff_id: string }>(
     `SELECT handoff_id FROM partner_workflow_executions
@@ -163,7 +187,7 @@ async function lockPartnerDecisionBinding(
       PARTNER_INVOICE_REVIEW_DEFINITION.version, PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest],
   );
   const row = result.rows[0];
-  const current = row && row.finance_principal_id === userId
+  const current = row && principalOk(row.finance_principal_id)
     && row.superseded_by_handoff_id === null
     && row.validation_status === 'passed' && row.human_decision_status === 'pending'
     && row.source_record_revision === row.engagement_revision
@@ -346,7 +370,7 @@ export async function recordDecision(
   decision: Decision,
   note: string | null,
   review: { expected_version?: unknown; expected_payload_hash?: unknown } = {},
-): Promise<DecisionOutcome> {
+): Promise<DecisionOutcome | DecisionPendingOutcome> {
   // Partner corrections use the same advisory lock before touching the
   // handoff/request pair. Taking it before the request row prevents an
   // opposite lock order between a correction and a Finance decision.
@@ -364,6 +388,7 @@ export async function recordDecision(
   // transaction committed, and it takes the conflict path below.
   const found = await work.tx.query<RequestRow>(
     `SELECT id, kind, status, session_id, label, payload, subject_key,
+            (SELECT s.owner_id FROM sessions s WHERE s.id = r.session_id) AS requester_id,
             GREATEST(0, EXTRACT(EPOCH FROM updated_at)::int) AS version
        FROM requests r WHERE r.id = $1 AND ${REQUEST_AUDIENCE_PREDICATE} FOR UPDATE OF r`,
     [requestId, work.userId],
@@ -410,8 +435,39 @@ export async function recordDecision(
     }
   }
 
+  // An approval is first this person's confirmation. The primary key makes a
+  // second press by the same person a no-op, and the row lock above means two
+  // people pressing at once are counted one after the other. The count re-reads
+  // who each confirmer is now, so one who lost the role no longer counts. With
+  // the default rules (one person) the first press completes it, and every row
+  // below is exactly what it was before C95.
+  let counted: readonly string[] = [];
+  if (decision === 'approve') {
+    await work.tx.query(
+      `INSERT INTO decision_confirmations (workspace_id, request_id, user_id)
+       VALUES ($1, $2, $3) ON CONFLICT (request_id, user_id) DO NOTHING`,
+      [work.workspaceId, requestId, work.userId],
+    );
+    const viewer = await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
+    const progress = await decisionProgress(work.tx, request, viewer);
+    if (!progressComplete(progress)) {
+      work.jobs.push(...(await publishEvents(work.tx, work.workspaceId, [{
+        kind: 'entity.updated',
+        payload: {
+          entity_type: 'request',
+          entity_id: requestId,
+          ref: { section: 'inbox', view: 'request', id: requestId },
+          version: null,
+        },
+      }])));
+      return { pending: true, required: progress.required, recorded: progress.recorded };
+    }
+    counted = progress.counted;
+  }
+
   const partnerBinding = request.kind === 'invoice'
-    ? await lockPartnerDecisionBinding(work.tx, work.workspaceId, requestId, work.userId)
+    ? await lockPartnerDecisionBinding(work.tx, work.workspaceId, requestId,
+      (principalId) => principalId === work.userId || counted.includes(principalId))
     : null;
 
   const resulting = RESULTING_STATUS[request.kind][decision];
@@ -454,9 +510,10 @@ export async function recordDecision(
   const routes = await loadApprovalRoutes(work.tx, work.workspaceId);
   for (const base of plannedEffects(request.kind, decision)) {
     // Who carries it out and how many people it takes come from the
-    // workspace's rule (decision C93); the rule is read again at each press.
-    const rule = routes[base.kind].rule;
-    const planned = { ...base, requiredRole: rule.roles[0] ?? 'admin', approvalsRequired: rule.approvals_required };
+    // workspace's rule at the invoice's amount (decisions C93, C94); the rule
+    // is read again at each press.
+    const { rule } = routedRule(routes[base.kind], requestAmount(request));
+    const planned = { ...base, requiredRole: primaryRole(rule), approvalsRequired: rule.approvals_required };
     const assignee = await assigneeFor(work.tx, work.workspaceId, planned.requiredRole, work.userId);
     const { rows } = await work.tx.query<{ id: string }>(
       `INSERT INTO effects
