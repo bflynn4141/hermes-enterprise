@@ -11,6 +11,7 @@ import { ADMIN, MAX_ACTION_APPROVALS, type ApprovalRoute, type ApprovalRouteKey,
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminApprovalsWorkflow } from './AdminApprovalsWorkflow.js';
 import { roleHolders, sortRoles } from './AdminRoles.js';
 import { useWorkspaceLists } from './lists.js';
 import {
@@ -94,6 +95,7 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     </div></header>
     {group('Decisions', 'Closing a request an agent prepared. One person decides.', decisions)}
     {group('Actions after approval', 'What happens once a request is approved. These can need more than one person.', actions)}
+    <AdminApprovalsWorkflow />
   </>;
 }
 

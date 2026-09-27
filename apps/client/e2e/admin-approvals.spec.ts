@@ -34,6 +34,12 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   const payment = actions.getByRole('button', { name: /^Pay an approved invoice/ });
   await expect(payment).toContainText('Finance · 2 different people · Default');
   await expect(actions.getByRole('button', { name: /^Grant access/ })).toContainText('Access reviewer · Default');
+  // Workflow-raised approvals are listed so nothing is hidden, and have no controls.
+  const workflow = pane.getByRole('list', { name: 'Set by the workflow' });
+  await expect(workflow.getByRole('listitem')).toHaveCount(4);
+  await expect(workflow.getByRole('button')).toHaveCount(0);
+  await expect(workflow.getByRole('listitem').filter({ hasText: 'Partner engagement record changes' })).toContainText('Reviewed by the Finance person on the handoff');
+  await expect(pane.getByText('These reviewers come from the workflow that raises them and cannot be changed here yet.')).toBeVisible();
   await shoot(page, 'approvals-list');
 
   await payment.click();
