@@ -39,7 +39,7 @@ const EMAIL_TRIAGE_KEY_SQL = `CASE WHEN m.triage_attempt <= 1 THEN 'email-triage
 /**
  * SQL for whether a person may ask the agent to read a message again; `m` is
  * the message, `i` its inbox and `r` its triage run (LEFT JOIN). Either the
- * run failed before suggesting anything, or the message is still `received`
+ * run failed or completed without a suggestion, or the message is still `received`
  * but the job for this attempt has finished or already failed once, so it is
  * either never going to run or waiting out a backoff. A job that is queued or
  * running without an error is left alone, and so is an automatic retry that
@@ -47,6 +47,7 @@ const EMAIL_TRIAGE_KEY_SQL = `CASE WHEN m.triage_attempt <= 1 THEN 'email-triage
  */
 export const EMAIL_RETRYABLE_SQL = `(i.status = 'active' AND cardinality(m.request_ids) = 0 AND (
     (${DERIVED_EMAIL_STATUS_SQL}) = 'failed'
+    OR (m.status = 'triaging' AND r.status = 'completed')
     OR (m.status = 'received' AND NOT EXISTS (
       SELECT 1 FROM jobs j
        WHERE j.workspace_id = m.workspace_id AND j.kind = 'email_triage' AND j.key = ${EMAIL_TRIAGE_KEY_SQL}
