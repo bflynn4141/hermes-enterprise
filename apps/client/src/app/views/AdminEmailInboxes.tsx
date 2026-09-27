@@ -83,7 +83,33 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   </ul>;
 }
 
-function NewInbox({ roles, agents, onCreated, onClose }: {
+const RUNTIME_WORDS: Record<AgentDirectoryEntry['runtime']['source'], string> = {
+  cloud_capacity: 'Cloud runtime',
+  cloud_provisioned: 'Cloud runtime',
+  deployment: 'deployment runtime',
+  none: 'no runtime',
+};
+
+/**
+ * How the inbox picker names an agent. Two agents can share a name and an
+ * owner (staging has two "Iris · Brian Flynn"), so the role goes in whenever
+ * the agent holds one, and where it runs is added only when the name, owner
+ * and role still leave two agents looking the same.
+ */
+export function inboxAgentLabel(agent: AgentDirectoryEntry, peers: readonly AgentDirectoryEntry[]): string {
+  const base = (entry: AgentDirectoryEntry): string =>
+    [entry.name, entry.owner?.name, entry.role?.team.name].filter(Boolean).join(' · ');
+  const label = base(agent);
+  const twin = peers.some((peer) => peer.id !== agent.id && base(peer) === label);
+  return twin ? `${label} · ${agent.runtime.label ?? RUNTIME_WORDS[agent.runtime.source]}` : label;
+}
+
+/** The agent a new inbox for `roleSlug` starts with: the one holding that role, if any. */
+export function preferredInboxAgent(agents: readonly AgentDirectoryEntry[], roleSlug: string): AgentDirectoryEntry | undefined {
+  return agents.find((agent) => agent.role?.team.slug === roleSlug) ?? agents[0];
+}
+
+export function NewInbox({ roles, agents, onCreated, onClose }: {
   roles: readonly WorkspaceRole[];
   agents: readonly AgentDirectoryEntry[];
   onCreated: (inbox: EmailInbox) => void;
@@ -93,7 +119,7 @@ function NewInbox({ roles, agents, onCreated, onClose }: {
   const state = useAppState();
   const owned = useMemo(() => agents.filter((agent) => agent.owner && agent.status === 'started'), [agents]);
   const [roleSlug, setRoleSlug] = useState(roles.find((role) => role.slug === 'partnerships')?.slug ?? roles[0]?.slug ?? '');
-  const [agentId, setAgentId] = useState(owned[0]?.id ?? '');
+  const [agentId, setAgentId] = useState(preferredInboxAgent(owned, roleSlug)?.id ?? '');
   const [label, setLabel] = useState(roles.find((role) => role.slug === roleSlug)?.name ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -117,13 +143,16 @@ function NewInbox({ roles, agents, onCreated, onClose }: {
       <label>Role
         <select value={roleSlug} onChange={(event) => {
           setRoleSlug(event.target.value);
+          // Follow the role to its own agent; with none, keep the Admin's pick.
+          const match = owned.find((agent) => agent.role?.team.slug === event.target.value);
+          if (match) setAgentId(match.id);
           setLabel(roles.find((role) => role.slug === event.target.value)?.name ?? label);
         }}>{roles.map((role) => <option key={role.slug} value={role.slug}>{role.name}</option>)}</select>
       </label>
       <label>Agent that reads it
         <select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
           {owned.length === 0 && <option value="">No agent with an owner</option>}
-          {owned.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {agent.owner?.name}</option>)}
+          {owned.map((agent) => <option key={agent.id} value={agent.id}>{inboxAgentLabel(agent, owned)}</option>)}
         </select>
       </label>
       <label>Name

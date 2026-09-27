@@ -75,6 +75,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       approvalWritesStepUp: params.get('approvals') === 'stepup',
       agentWritesStepUp: params.get('agents') === 'stepup',
       unmanagedAgent: params.get('agentRuntime') === 'none',
+      sameNamedAgents: params.get('agentNames') === 'same',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
       turn: params.get('turn') === 'proposes_request' ? 'proposes_request' : params.get('turn') === 'waiting' ? 'waiting' : 'completed',
