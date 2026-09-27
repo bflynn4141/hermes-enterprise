@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -118,6 +118,11 @@ interface MockOptions {
   agentWritesStepUp?: boolean;
   /** Iris has no Hermes runtime, so an Admin may change its skills (C96). */
   unmanagedAgent?: boolean;
+  /**
+   * The staging demo's look-alikes: the Finance agent is also named Iris and
+   * also owned by Maya, so only its role and runtime tell the two apart.
+   */
+  sameNamedAgents?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -766,9 +771,11 @@ export function createMockBackend(input: MockOptions = {}) {
    */
   const agentConfig: Record<string, { name: string | null; model_id: string | null; managed: boolean }> = {
     [AGENT]: { name: null, model_id: null, managed: !options.unmanagedAgent },
-    [FINANCE_AGENT]: { name: null, model_id: null, managed: true },
+    [FINANCE_AGENT]: { name: options.sameNamedAgents ? partnershipsAgentName : null, model_id: null, managed: true },
   };
   const removedAssignments = new Set<string>();
+  const EMAIL_INTAKE_DOMAIN = 'in.mock.hermes.test';
+  let emailInboxes: EmailInbox[] = [];
   const skillCatalog = [
     { key: 'partner-program-screening', name: 'Partner program screening', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', version: '1.8.0', digest: hashForMock(96), tools: ['list_partner_candidates', 'get_partner_candidate', 'propose_approval', 'publish_partner_invoice_review'], template: 'partnerships-agent' },
     { key: 'partner-invoice-review', name: 'Partner invoice review', description: 'Check authorized partner invoices and prepare an invoice draft for human review. It cannot approve or pay.', version: '1.0.1', digest: hashForMock(97), tools: ['get_partner_handoff_result', 'list_requests', 'get_request'], template: 'finance-agent' },
@@ -802,12 +809,13 @@ export function createMockBackend(input: MockOptions = {}) {
       approvals: { revision: agentPermissions.revision, required: required(agentPermissions) },
       viewer: { can_configure: true, can_view_conversations: true },
     }];
-    if (alex?.user_id) items.push({
+    const financeOwner = options.sameNamedAgents ? maya : alex;
+    if (financeOwner?.user_id) items.push({
       id: FINANCE_AGENT, name: agentConfig[FINANCE_AGENT]!.name ?? 'Ledger', responsibility: 'Finance review',
-      status: 'started', context_scope: 'private', owner: person(alex),
-      role: partnerConfigured ? { team: { slug: 'finance', name: 'Finance' }, role_template_key: 'finance-agent', principal: person(alex)! } : null,
+      status: 'started', context_scope: 'private', owner: person(financeOwner),
+      role: partnerConfigured ? { team: { slug: 'finance', name: 'Finance' }, role_template_key: 'finance-agent', principal: person(financeOwner)! } : null,
       skills: directorySkills(FINANCE_AGENT),
-      runtime: { source: 'cloud_capacity', label: 'hermes-pool-04', state: 'connected' },
+      runtime: { source: 'cloud_capacity', label: options.sameNamedAgents ? 'finance-pool-01' : 'hermes-pool-04', state: 'connected' },
       model: agentModel(FINANCE_AGENT),
       approvals: { revision: ledgerPermissions.revision, required: required(ledgerPermissions) },
       viewer: { can_configure: true, can_view_conversations: false },
@@ -2074,6 +2082,36 @@ export function createMockBackend(input: MockOptions = {}) {
       if (seat !== 'admin') return fail(403, 'admin_required');
       const items = agentDirectory();
       return json({ items, total: items.length });
+    }
+    // Admin → Role inboxes (C98), without mail: addresses on a fixture domain.
+    if (p('/email/inboxes') && method === 'GET') return json({ domain: EMAIL_INTAKE_DOMAIN, inboxes: emailInboxes, can_manage: seat === 'admin' });
+    if (p('/email/inboxes') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const agent = agentDirectory().find((entry) => entry.id === body.agent_id);
+      if (!agent) return fail(422, 'unknown_agent');
+      if (!agent.owner) return fail(422, 'agent_owner_missing');
+      const slug = String(body.role_slug ?? '');
+      if (!roles.some((row) => row.slug === slug)) return fail(422, 'unknown_role');
+      const inbox = {
+        id: mockUuid(1_600 + emailInboxes.length), address: `${slug.replace(/_/gu, '-')}-mock${emailInboxes.length + 1}@${EMAIL_INTAKE_DOMAIN}`,
+        label: String(body.label ?? '').trim(), role_slug: slug, agent: { id: agent.id, name: agent.name },
+        status: 'active' as const, created_at: iso(), message_count: 0, latest_received_at: null,
+      };
+      emailInboxes = [...emailInboxes, inbox];
+      return json(inbox, 201);
+    }
+    const emailInboxMatch = match(new RegExp(`^/w/${WS}/email/inboxes/([^/]+)(/messages)?$`));
+    if (emailInboxMatch) {
+      const inbox = emailInboxes.find((row) => row.id === emailInboxMatch[1]);
+      if (!inbox) return fail(404, 'unknown_inbox');
+      if (emailInboxMatch[2] && method === 'GET') return json({ messages: [] });
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      if (method === 'PATCH') {
+        const next = { ...inbox, status: body.status === 'paused' ? 'paused' as const : 'active' as const };
+        emailInboxes = emailInboxes.map((row) => row.id === inbox.id ? next : row);
+        return json(next);
+      }
+      if (method === 'DELETE') { emailInboxes = emailInboxes.filter((row) => row.id !== inbox.id); return new Response(null, { status: 204 }); }
     }
     const adminAgentMatch = match(new RegExp(`^/w/${WS}/admin/agents/([^/]+)$`));
     if (adminAgentMatch && method === 'PATCH') {
