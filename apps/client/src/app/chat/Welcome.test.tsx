@@ -86,7 +86,8 @@ describe('Iris welcome', () => {
     }} find={null} />);
     expect(html).toContain('msg-agent-handoff');
     expect(html).toContain('Message from');
-    expect(html).toContain('@agent-partnerships');
+    // The agent's profile handle is internal; the notice names the agent.
+    expect(html).not.toContain('@agent-partnerships');
     expect(html).toContain('Review the Finance handoff.');
     expect(html).not.toContain('class="msg-user"');
   });

@@ -24,6 +24,7 @@ import { AgentFileExtractionError, waitForAgentFileReady } from './wait-agent-fi
 import { useToolPhase } from './RunSurface.js';
 import { readableStep, readableWaitingLabel, runErrorSentence } from '../tool-copy.js';
 import { providerName } from '../copy/names.js';
+import { emailTurn } from './email-turn.js';
 import type { SessionState } from '../../model/store.js';
 
 const COMPOSER_MAX_HEIGHT = 132;
@@ -142,6 +143,10 @@ export function Composer({ session }: { session: SessionState }) {
   const toolPhase = useToolPhase(run);
   const activeStep = status?.steps.find((step) => step.state === 'active');
   const workingPhase = toolPhase ?? (activeStep ? readableStep(activeStep) : null);
+  // A run that read a role-inbox email is retried from the email itself
+  // (automatically when the model was busy, or Try again in Role inboxes),
+  // never from here: a second retry path would read the email twice.
+  const emailRun = Boolean(status && session.messages.some((message) => message.run_id === status.id && emailTurn(message)));
 
   return (
     <div className="composer-wrap">
@@ -155,7 +160,7 @@ export function Composer({ session }: { session: SessionState }) {
                 ? `${readableWaitingLabel(status.waiting_label) ?? 'Waiting'} · Nothing sent`
                 : status.status === 'stopped'
                   ? 'Stopped · Completed work kept'
-                  : `${runErrorSentence(status.error)} · Completed work kept`}
+                  : emailRun ? `${runErrorSentence(status.error)} · Nothing was sent` : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
           {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
@@ -164,7 +169,7 @@ export function Composer({ session }: { session: SessionState }) {
               Stop work
             </Button>
           )}
-          {(status.status === 'stopped' || status.status === 'error') && status.error?.retryable !== false && (
+          {(status.status === 'stopped' || status.status === 'error') && status.error?.retryable !== false && !emailRun && (
             <Button onClick={() => void adapter.retry(session.id, status.id).catch((error: unknown) => setRefusal(refusalFor(error, refusalContext)))}>
               {status.status === 'error' ? 'Retry remaining step' : 'Resume'}
             </Button>

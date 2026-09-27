@@ -38,6 +38,8 @@ import { ActivityArea } from './ActivityArea.js';
 import { RunActivity, RunStream } from './RunSurface.js';
 import { FocusLink } from './FocusLink.js';
 import { canReleaseRunStream, collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
+import { emailTurn } from './email-turn.js';
+export { emailTurn } from './email-turn.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
@@ -451,23 +453,6 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
   );
 }
 
-/**
- * A received email as the conversation shows it: who wrote and about what.
- * New turns carry this as a card block (kind `email`); turns stored before
- * that carried the agent's instructions as their text, so those are read for
- * their From and Subject lines only and never shown whole.
- */
-export function emailTurn(message: Pick<Message, 'kind' | 'text' | 'blocks'>): { from: string; subject: string } | null {
-  if (message.kind === 'email') {
-    const card = message.blocks.find((block) => block.type === 'card');
-    return { from: card?.title ?? 'Someone', subject: card?.subtitle ?? message.text };
-  }
-  if (message.kind !== null || !/^A new email arrived at the .+ inbox \(/u.test(message.text)) return null;
-  const from = /^- From: (.+?), (?:a member|a known contact|a first-time sender)/mu.exec(message.text)?.[1] ?? 'Someone';
-  const subject = /^Subject: (.*)$/mu.exec(message.text)?.[1] ?? '(no subject)';
-  return { from, subject };
-}
-
 function EmailTurn({ message, email }: { message: Message; email: { from: string; subject: string } }) {
   return (
     <div className="msg-email" data-message-id={message.id} role="note" aria-label={`New email from ${email.from}`}>
@@ -491,7 +476,6 @@ function UserMessage({ message }: { message: Message }) {
         <summary>
           <span>Message from</span>
           <strong>{bot.display}</strong>
-          {bot.profile && <code>@{bot.profile}</code>}
         </summary>
         <div className="msg-agent-handoff-body">{bot.body}</div>
       </details>

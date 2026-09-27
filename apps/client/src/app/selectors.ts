@@ -105,7 +105,11 @@ export function requestStatusLabel(request: RequestEntity): string {
   if (request.kind === 'approval' && request.approval) return approvalReviewerLabel(request);
   switch (request.status) {
     case 'pending':
-      return request.kind === 'task' ? 'Ready to continue' : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? [money, 'Invoice draft'].filter(Boolean).join(' · ') : 'Agreement draft · Unsigned';
+      return request.kind === 'task'
+        ? (request.payload as { task_type?: string; to_role_name?: string } | undefined)?.task_type === 'email_handoff'
+          ? `Handed to ${(request.payload as { to_role_name?: string }).to_role_name ?? 'another team'}`
+          : 'Ready to continue'
+        : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? [money, 'Invoice draft'].filter(Boolean).join(' · ') : 'Agreement draft · Unsigned';
     case 'declined':
       return 'Declined · No message sent';
     case 'admitted':
