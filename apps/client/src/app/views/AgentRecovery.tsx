@@ -1,13 +1,15 @@
 // A wake is a durable admission request. Only the server can say whether Iris
 // is queued, working, blocked or eligible to retry; a click is never progress.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TRACE, type AgentRecoveryView, type AgentWakeInput } from '@hermes/shared';
+import { TRACE, type AgentRecoveryView, type AgentWakeInput, type TraceEntity } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
 import { RestError } from '../../model/rest.js';
-import { uuid, type Store } from '../../model/store.js';
+import { entityData, uuid, type Store } from '../../model/store.js';
 import { useAdapter, useAppState, useNav, useStore } from '../store-context.js';
 import { catalogRows, LIST_KEYS } from '../selectors.js';
 import { Button } from '../ui/primitives.js';
+import { modelName } from '../copy/names.js';
+import { runErrorSentence } from '../tool-copy.js';
 
 const POLL_MS = 15_000;
 type WakeAction = AgentWakeInput['action'];
@@ -50,13 +52,28 @@ export function createRecoverySubmitter(send: (input: AgentWakeInput) => Promise
   };
 }
 
+/** Refusals the wake route writes, by reason. The server's text is never shown (docs/DESIGN.md). */
+const WAKE_REFUSALS: Readonly<Record<string, string>> = {
+  stale_attempt: 'This task changed. Refresh its status and try again.',
+  expected_attempt_required: 'This task changed. Refresh its status and try again.',
+  run_active: 'This task is already running.',
+  run_completed: 'This task has already finished.',
+  engine_paused: 'Hermes is updating. Try again in a moment.',
+  unknown_run: 'This task isn’t available anymore.',
+  platform_capacity: 'Hermes is at capacity right now. Try again in a few minutes.',
+  max_concurrent_runs: 'This workspace is already running as many tasks as it allows. Try again when one finishes.',
+  daily_token_cap: 'This workspace has used its daily allowance. Try again after it resets.',
+  rate_limited: 'Too many requests right now. Wait a minute, then try again.',
+};
+
 function errorCopy(error: unknown, mutation: boolean): string {
   if (error instanceof RestError) {
-    if (error.reason === 'unknown_route') return 'Recovery controls are unavailable on this server. Refresh after the update finishes.';
+    if (error.reason === 'unknown_route') return 'Recovery controls aren’t available yet. Refresh after the update finishes.';
     if (error.signedOut) return 'Sign in again to check or resume the agent.';
     if (error.reason === 'forbidden' || error.status === 403) return 'You do not have permission to resume this task.';
-    if (error.reason === 'contract_violation') return 'The recovery response could not be read. Refresh to check the current status.';
-    if (error.status < 500) return error.message;
+    if (error.reason === 'contract_violation') return 'The task’s status couldn’t be read. Refresh to check it.';
+    const known = WAKE_REFUSALS[error.reason];
+    if (known) return known;
   }
   return mutation
     ? 'Could not confirm the request. Refresh status or try again; the same request will be reused.'
@@ -180,8 +197,54 @@ export function useAgentRecovery(runId?: string) {
   return { view, error, busy, loading, reload, act };
 }
 
+/**
+ * Server sentences on the recovery view that use words docs/DESIGN.md keeps off
+ * the screen, rewritten. Everything else the recovery route writes is already
+ * a plain sentence and is shown as written.
+ */
+const RECOVERY_REWRITES: Readonly<Record<string, string>> = {
+  'The engine is paused for a deployment. Retry when it is ready.': 'Hermes is updating. Retry in a moment.',
+  'The workspace reached its daily token limit. Retry after the limit resets or is updated.': 'This workspace has used its daily allowance. Retry after it resets or an Admin raises it.',
+  'The provider requested an extended wait. Automatic retry is paused; check the model connection before retrying.': 'The model asked for a longer wait, so automatic retries are paused. Check the model connection before retrying.',
+  'Reconnect the model provider in Settings before retrying.': 'Reconnect Nous Portal in Admin → Model providers before retrying.',
+  'The failed attempt’s model settings are no longer available. Start a new turn instead.': 'The model this task used isn’t available anymore. Send a new message instead.',
+  'This task already created reviewed work. Open its trace to continue without duplicating it.': 'This task already created reviewed work. Open what it did to continue without repeating it.',
+  'This task reached a tool that may have changed something. Review its trace before starting another attempt.': 'This task may have already changed something. Review what it did before trying again.',
+  'Scheduled work is not enabled in this environment.': 'Scheduled work isn’t turned on for this workspace.',
+};
+
+/** Words that mean the sentence was written for an operator, not a person. */
+const TECHNICAL = /[a-z]+_[a-z_]+|ECONN|\b[45]\d\d\b|https?:|\bruntime\b|\bengine\b|\bprovider\b|\btoken\b|[{}]|Error:|failed with|\bHTTP\b/i;
+
+const STATE_SENTENCE: Record<AgentRecoveryView['state'], string> = {
+  idle: 'Nothing is running right now.',
+  queued: 'Waiting to start.',
+  working: 'Working on this task now.',
+  waiting: 'Waiting for you.',
+  retryable: 'This task stopped before it finished. You can retry it.',
+  retry_scheduled: 'This task stopped before it finished. It will try again on its own.',
+  blocked: 'This task can’t continue yet. Open what it did to see why.',
+  stopped: 'This task was stopped. You can retry it when you’re ready.',
+};
+
+/**
+ * The recovery view's sentence as a person should read it. When the server
+ * fell back to the run's own error text, the run's reason is mapped instead;
+ * a sentence written for an operator gets the plain one for its state.
+ */
+export function recoverySentence(view: AgentRecoveryView, runError?: { reason?: string | null; message?: string | null } | null): string {
+  const message = view.message.trim();
+  const rewritten = RECOVERY_REWRITES[message];
+  if (rewritten) return rewritten;
+  if (runError && runError.message?.trim() === message) return runErrorSentence(runError);
+  if (!message || TECHNICAL.test(message)) return runError && view.state !== 'idle' ? runErrorSentence(runError) : STATE_SENTENCE[view.state];
+  return message;
+}
+
 interface RecoveryControlsProps {
   view: AgentRecoveryView | null;
+  /** The run's error, when the client has it, so its reason can be put into words. */
+  runError?: { reason?: string | null; message?: string | null } | null;
   modelLabel?: string | null;
   error: string | null;
   busy: WakeAction | null;
@@ -193,19 +256,19 @@ interface RecoveryControlsProps {
   onTrace: (runId: string) => void;
 }
 
-export function AgentRecoveryControls({ view, modelLabel, error, busy, loading, historical, now, onAction, onRefresh, onTrace }: RecoveryControlsProps) {
+export function AgentRecoveryControls({ view, runError, modelLabel, error, busy, loading, historical, now, onAction, onRefresh, onTrace }: RecoveryControlsProps) {
   const disabled = busy !== null || loading;
   return (
     <div className="agent-recovery" aria-label="Task recovery" data-recovery-state={view?.state ?? 'loading'} aria-busy={busy !== null || loading}>
       {loading && !view && <p className="meta">Checking task status…</p>}
       {view && <>
         <div className="agent-recovery-copy">
-          <p aria-live="polite">{view.message}</p>
+          <p aria-live="polite">{recoverySentence(view, runError)}</p>
           {view.state === 'retry_scheduled' && <p className="meta agent-recovery-countdown">{retryCountdown(view.next_retry_at, now)}</p>}
           {(view.attempt !== null || view.model_id) && <p className="meta">
             {view.attempt !== null && <span>{view.state === 'retry_scheduled' ? `Attempt ${view.attempt} of 3` : `Attempt ${view.attempt}`}</span>}
             {view.attempt !== null && view.model_id && ' · '}
-            {view.model_id && <span title={view.model_id}>{view.can_retry ? 'Retry with ' : ''}{modelLabel ?? view.model_id}</span>}
+            {view.model_id && <span>{view.can_retry ? 'Retry with ' : ''}{modelLabel ?? modelName(view.model_id)}</span>}
           </p>}
         </div>
         <div className="agent-recovery-actions">
@@ -231,10 +294,13 @@ export function RecoveryControlView({ recovery, historical }: { recovery: Return
     return () => clearInterval(timer);
   }, [recovery.view?.state, recovery.view?.next_retry_at]);
   const modelId = recovery.view?.model_id;
-  const modelLabel = modelId === 'nous:deepseek/deepseek-v4.1-flash'
-    ? 'DeepSeek V4.1 Flash'
-    : catalogRows(state).find((model) => model.model_id === modelId)?.label;
-  return <AgentRecoveryControls {...recovery} {...(historical ? { historical } : {})} {...(modelLabel ? { modelLabel } : {})} now={now}
+  const modelLabel = modelId ? modelName(modelId, catalogRows(state)) : null;
+  const runId = recovery.view?.run_id ?? null;
+  const liveRun = recovery.view?.session_id ? state.sessions[recovery.view.session_id]?.run : null;
+  const runError = runId
+    ? (liveRun?.id === runId ? liveRun.error : null) ?? entityData<TraceEntity>(state, 'trace', runId)?.error ?? null
+    : null;
+  return <AgentRecoveryControls {...recovery} runError={runError} {...(historical ? { historical } : {})} {...(modelLabel ? { modelLabel } : {})} now={now}
     onAction={(action) => void recovery.act(action)} onRefresh={() => void recovery.reload(true)} onTrace={(id) => nav(TRACE(id))} />;
 }
 

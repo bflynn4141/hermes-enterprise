@@ -115,7 +115,7 @@ describe('live run activity', () => {
     expect(html).not.toContain('Thinking…');
   });
 
-  it('shows exact tool calls with human wording as their lifecycle advances', () => {
+  it('shows each tool call in human wording, never by its id, as its lifecycle advances', () => {
     const value = session({
       ...run(),
       steps: [
@@ -125,9 +125,9 @@ describe('live run activity', () => {
       ],
     });
     const html = render(<RunActivity session={value} />);
-    expect(html).toContain('get_partner_candidate');
+    expect(html).not.toContain('get_partner_candidate');
     expect(html).toContain('Reviewing a partner candidate');
-    expect(html).toContain('list_partner_candidates');
+    expect(html).not.toContain('list_partner_candidates');
     expect(html).toContain('Checked partner candidates');
   });
 });

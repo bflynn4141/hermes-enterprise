@@ -116,7 +116,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch, readOnl
                     {sessionRowTitle(session)}
                     {session.unread && <span className="unread-dot" aria-label="Unread" />}
                   </span>
-                  <span className="sr-status">{session.status}</span>
+                  {sessionStatusWords(session.status) && <span className="sr-status">{sessionStatusWords(session.status)}</span>}
                 </button>
               )}
               <span className="sr-when">
@@ -195,4 +195,28 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch, readOnl
       <div className="p-meta">{readOnly ? 'Historical sessions are available to read.' : 'Archiving changes organization only; runs and approvals are unaffected.'}</div>
     </Popover>
   );
+}
+
+/**
+ * A session's status as a word, or nothing when there is nothing to say.
+ * `v_session_status` writes idle/working/waiting/stopping and the client adds
+ * the finished ones; none of them is shown raw (docs/DESIGN.md).
+ */
+const SESSION_STATUS_WORDS: Readonly<Record<string, string>> = {
+  working: 'Working',
+  waiting: 'Needs you',
+  stopping: 'Stopping',
+  stopped: 'Stopped',
+  error: 'Stopped with a problem',
+  failed: 'Stopped with a problem',
+  queued: 'Queued',
+};
+
+export function sessionStatusWords(status: string | null | undefined): string | null {
+  const value = (status ?? '').trim();
+  const known = SESSION_STATUS_WORDS[value.toLowerCase()];
+  if (known) return known;
+  // An enum this table does not list (idle, completed, …) says nothing worth a
+  // line; a value that is already prose ("Needs review") is shown as it is.
+  return /^[a-z0-9_]*$/.test(value) ? null : value;
 }

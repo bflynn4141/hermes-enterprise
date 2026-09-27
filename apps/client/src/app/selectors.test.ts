@@ -52,3 +52,22 @@ describe('memberCounts', () => {
     expect(memberCounts(state)).toEqual({ joined: 2, invited: 1 });
   });
 });
+
+describe('requestStatusLabel', () => {
+  it('names every status in words and never shows a raw enum', async () => {
+    const { requestStatusLabel } = await import('./selectors.js');
+    const request = (status: string) => ({ id: 'r', kind: 'task', status, label: 'A task', payload: {} }) as unknown as Parameters<typeof requestStatusLabel>[0];
+    expect(requestStatusLabel(request('withdrawn'))).toBe('Withdrawn · Nothing sent');
+    expect(requestStatusLabel(request('some_future_status'))).not.toContain('some_future_status');
+  });
+});
+
+describe('sessionStatusWords', () => {
+  it('hides idle, maps the enums and keeps prose', async () => {
+    const { sessionStatusWords } = await import('./chat/SessionsPopover.js');
+    expect(sessionStatusWords('idle')).toBeNull();
+    expect(sessionStatusWords('working')).toBe('Working');
+    expect(sessionStatusWords('error')).toBe('Stopped with a problem');
+    expect(sessionStatusWords('Needs review')).toBe('Needs review');
+  });
+});

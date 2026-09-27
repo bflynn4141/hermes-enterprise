@@ -11,6 +11,8 @@ import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AgentHead, AgentTabsRow } from './Agent.js';
 import { agentName } from '../selectors.js';
 import { readableTool } from '../tool-copy.js';
+import { readableFields } from '../copy/fields.js';
+import { FieldList } from '../copy/FieldList.js';
 import './agent-settings.css';
 
 export function AgentPermissions() {
@@ -99,12 +101,12 @@ export function ApprovalSwitches({ workspaceId, agentId, agentName: name }: { wo
   </>;
 }
 
-/** Each top-level argument as a labelled value; the exact JSON stays one click away. */
+/**
+ * What the action would use, as labelled values in words. Identifiers and JSON
+ * stay out (docs/DESIGN.md); the exact arguments are in the run's record.
+ */
 function ApprovalArguments({ value }: { value: Record<string, unknown> }) {
-  const entries = Object.entries(value);
-  const text = (item: unknown): string => typeof item === 'string' ? item : typeof item === 'number' || typeof item === 'boolean' ? String(item) : item == null ? '—' : JSON.stringify(item);
   return <div className="agent-approval-arguments">
-    {entries.length === 0 ? <p className="meta">No arguments.</p> : <dl>{entries.map(([key, item]) => <div key={key}><dt>{key.replace(/[_-]+/g, ' ')}</dt><dd>{text(item)}</dd></div>)}</dl>}
-    <details><summary>Exact arguments</summary><pre>{JSON.stringify(value, null, 2)}</pre></details>
+    <FieldList fields={readableFields(value)} empty="No details to show." label="Action details" />
   </div>;
 }

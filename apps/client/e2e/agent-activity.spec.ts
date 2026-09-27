@@ -10,8 +10,8 @@ test('the overview stays live after Iris is collapsed', async ({ page }) => {
   const card = activity(page);
 
   await expect(card.getByRole('status')).toHaveText('Waiting for you');
-  await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
-  await expect(card.getByText('propose_request', { exact: true })).toBeVisible();
+  await expect(card.getByText('Last step', { exact: true })).toBeVisible();
+  await expect(card.getByText('propose_request', { exact: true })).toHaveCount(0);
   await expect(card.getByText('Prepared a review request', { exact: true })).toBeVisible();
 
   await page.getByRole('textbox', { name: 'Message Iris' }).fill('Review the newest partner application');
@@ -23,9 +23,9 @@ test('the overview stays live after Iris is collapsed', async ({ page }) => {
   await expect(card.getByRole('status')).toHaveText('Working now');
   // The mock advances every 220 ms, so a loaded runner can legitimately miss
   // the first tool after already observing the working state. Any later exact
-  // tool pair proves the collapsed overview kept consuming the same live run.
+  // tool line proves the collapsed overview kept consuming the same live run.
   await expect(card).toContainText(
-    /(?:Review(?:ing|ed) a request\s*·\s*get_request|Read(?:ing)? a source document\s*·\s*get_document_text|Prepar(?:ing|ed) a review request\s*·\s*propose_request)/,
+    /(?:Review(?:ing|ed) a request|Read(?:ing)? a source document|Prepar(?:ing|ed) a review request)/,
   );
 
   const animation = await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName);
@@ -61,7 +61,7 @@ test('a completed no-tool Hermes run never looks like it is still thinking', asy
   const card = activity(page);
   await expect(card.getByRole('status')).toHaveText('Idle');
   await expect(card.getByText('Explain partner screening', { exact: true })).toBeVisible();
-  await expect(card.getByText('Response completed · No tool calls', { exact: true })).toBeVisible();
+  await expect(card.getByText('Replied without using any tools', { exact: true })).toBeVisible();
   await expect(card.getByText('Thinking', { exact: true })).toHaveCount(0);
   await expect(card.locator('.agent-tool-pair')).toHaveCount(0);
   expect(await runningAnimations(card.locator('.agent-activity-status i'))).toBe(0);
@@ -72,8 +72,9 @@ test('a completed run keeps its last tool visible when the pane is narrow', asyn
   await page.goto('/?activity=completed-tool');
   const card = activity(page);
   await expect(card.getByRole('status')).toHaveText('Idle');
-  await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
-  await expect(card).toContainText(/Read a source document\s*·\s*get_document_text/);
+  await expect(card.getByText('Last step', { exact: true })).toBeVisible();
+  await expect(card).toContainText('Read a source document');
+  await expect(card).not.toContainText('get_document_text');
   await expect(card.locator('.agent-tool-pair')).toHaveAttribute('data-tool-state', 'complete');
   expect(await runningAnimations(card.locator('.agent-tool-pair i'))).toBe(0);
   expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
