@@ -29,6 +29,15 @@ import {
   type ApprovalRouteUpdate,
   approvalEvidenceViewSchema,
   type ApprovalEvidenceView,
+  emailInboxListSchema,
+  emailInboxSchema,
+  inboundEmailListSchema,
+  inboundEmailViewSchema,
+  type CreateEmailInboxInput,
+  type EmailInbox,
+  type EmailInboxList,
+  type InboundEmailList,
+  type InboundEmailView,
   agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
   catalogPageSchema,
@@ -513,6 +522,21 @@ export function createRest(options: RestOptions) {
     /** Replaces the workspace roles a member holds. Needs a recent sign-in; never your own row. */
     setMemberRoles: (workspaceId: string, id: string, roleSlugs: string[]) => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { reviewer_roles: roleSlugs }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
+
+    // --- role inboxes (C98): Admins configure; the role's people read ---
+    listEmailInboxes: (workspaceId: string) => request('GET', `${ws(workspaceId)}/email/inboxes`, emailInboxListSchema) as Promise<EmailInboxList>,
+    createEmailInbox: (workspaceId: string, body: CreateEmailInboxInput) =>
+      request('POST', `${ws(workspaceId)}/email/inboxes`, emailInboxSchema, body) as Promise<EmailInbox>,
+    setEmailInboxStatus: (workspaceId: string, id: string, status: 'active' | 'paused') =>
+      request('PATCH', `${ws(workspaceId)}/email/inboxes/${id}`, emailInboxSchema, { status }) as Promise<EmailInbox>,
+    deleteEmailInbox: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/email/inboxes/${id}`),
+    listInboxMessages: (workspaceId: string, id: string) =>
+      request('GET', `${ws(workspaceId)}/email/inboxes/${id}/messages`, inboundEmailListSchema) as Promise<InboundEmailList>,
+    getInboundEmail: (workspaceId: string, id: string) =>
+      request('GET', `${ws(workspaceId)}/email/messages/${id}`, inboundEmailViewSchema) as Promise<InboundEmailView>,
+    /** Closes a hand-off; guarded like a decision (Origin, surface, CSRF, step-up). */
+    completeEmailHandoff: (workspaceId: string, requestId: string) =>
+      send('POST', `${ws(workspaceId)}/email/handoffs/${requestId}/complete`, {}, { requestedFrom: 'inbox' }),
 
     // --- workspace roles (Admin only; writes need a recent sign-in) ---
     listRoles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/roles`, workspaceRoleListSchema),

@@ -226,6 +226,29 @@ describe('role-aware native readiness', () => {
     expect(matchesEnterpriseReadiness({ ...attested, agentCashWalletPresent: false }, partnerships)).toBe(false);
   });
 
+  it('accepts the email intake tools beyond a role, and nothing else (C98)', () => {
+    const partnerships = assignment({
+      skill_key: 'partner-program-screening',
+      runtime_name: 'enterprise_bridge:partner-program-screening-v1-8',
+      name: 'Partner program screening', version: '1.8.0',
+      artifact_digest: `sha256:${'a'.repeat(64)}`,
+      capability_grants: ['partner.handoff.publish'],
+    });
+    const attested = readiness({
+      skills: [{
+        name: partnerships.runtime_name, version: partnerships.version,
+        artifactDigest: partnerships.artifact_digest!,
+        contentDigest: partnerships.artifact_digest!,
+      }],
+      toolNames: enterpriseReadinessToolNames(partnerships),
+      agentCashEnabled: true, agentCashWalletPresent: true,
+    });
+    const withInbox = { ...attested, toolNames: [...attested.toolNames!, 'suggest_reply', 'suggest_handoff', 'get_workspace_context'] };
+    expect(matchesEnterpriseReadiness(withInbox, partnerships)).toBe(true);
+    expect(matchesEnterpriseReadiness({ ...attested, toolNames: [...attested.toolNames!, 'fetch_url'] }, partnerships)).toBe(false);
+    expect(matchesEnterpriseReadiness({ ...attested, toolNames: [...attested.toolNames!, 'suggest_reply', 'suggest_reply'] }, partnerships)).toBe(false);
+  });
+
   it('preserves the prior readiness rule for original 1.7 and unassigned profiles', () => {
     const legacy = assignment({
       skill_key: 'partner-program-screening', runtime_name: 'enterprise_bridge:partner-program-screening',

@@ -90,6 +90,8 @@ export const JOB_KINDS = [
   // Exact revision-bound outreach after a human approves and a dedicated
   // sender account is connected.
   'outbound_email_send',
+  // A received email at a role inbox, handed to its agent once (C98).
+  'email_triage',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -885,6 +887,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'outbound_email_send':
       await (await import('./outbound-email/send-job.js')).runOutboundEmailSendJob(env, job);
+      return;
+    case 'email_triage':
+      await (await import('./inbound-email/triage.js')).runEmailTriageJob(env, job);
       return;
     case 'reverify':
       {

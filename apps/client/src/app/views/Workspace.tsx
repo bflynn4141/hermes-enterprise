@@ -33,6 +33,7 @@ import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
+import { AdminEmailInboxes } from './AdminEmailInboxes.js';
 import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
 import { useStepUp } from './use-step-up.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
@@ -1177,6 +1178,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'Agents' && <AgentsTab />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailTab />}
+      {selected === 'Inboxes' && <AdminEmailInboxes />}
       {selected === 'Provider keys' && <ProviderKeysTab />}
       {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
       {selected === 'Usage' && <UsageTab />}

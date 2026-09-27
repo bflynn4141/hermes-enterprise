@@ -13,6 +13,7 @@
     "screenshots:readme": "E2E_PORT=4197 UPDATE_README_SCREENSHOTS=1 playwright test readme-screenshots.spec.ts",
     "e2e": "playwright test",
     "e2e:live": "node scripts/e2e-live.mjs",
+    "email-intake:record": "node scripts/record-email-intake.mjs",
     "acceptance:native-staging": "node scripts/native-staging-acceptance.mjs",
     "dev:step-up": "node scripts/dev-step-up.mjs"
   },

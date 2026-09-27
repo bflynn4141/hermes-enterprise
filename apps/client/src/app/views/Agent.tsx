@@ -78,7 +78,7 @@ export function requestRowCopy(request: RequestEntity): RequestRowCopy {
 }
 
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
-  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
+  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? ((request.payload as { task_type?: unknown } | null)?.task_type === 'email_handoff' ? 'Email hand-off' : 'Setup task') : approvalTypeLabel(request);
   const copy = requestRowCopy(request);
   return (
     <div className="list-row request-row">

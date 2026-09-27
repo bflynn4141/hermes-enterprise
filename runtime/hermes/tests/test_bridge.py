@@ -242,6 +242,13 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result, {"error": "missing context"})
         request.assert_not_called()
 
+    def test_tool_discovery_says_it_accepts_email_intake_tools(self):
+        bridge = self.bridge()
+        tool = {"name": "suggest_reply", "parameters": {"type": "object"}}
+        with patch.object(bridge, "request", return_value=(200, {"tools": [tool]})) as request:
+            self.assertEqual([item["name"] for item in bridge.tools()], ["suggest_reply"])
+        self.assertTrue(request.call_args.args[1].endswith("/tools?features=email-intake"))
+
     def test_duplicate_schema_fails_closed(self):
         bridge = self.bridge()
         tool = {"name": "enterprise_echo", "parameters": {"type": "object"}}

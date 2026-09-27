@@ -1,5 +1,5 @@
 import runtimeContract from '../../../../runtime/hermes/contract.json';
-import type { EnterpriseSkillAssignment } from '@hermes/shared';
+import { EMAIL_INTAKE_TOOL_NAMES, type EnterpriseSkillAssignment } from '@hermes/shared';
 import {
   assignmentToolNames,
   resolveEnterpriseSkillAssignment,
@@ -90,6 +90,19 @@ function sameNames(actual: readonly string[], expected: readonly string[]): bool
     expected.every((name) => actual.includes(name));
 }
 
+/**
+ * A role's exact tools, plus at most the email intake tools (C98): a bridge
+ * that supports role inboxes registers those for an agent with an inbox. Any
+ * other extra tool, or a missing role tool, is still a mismatch.
+ */
+function sameNamesWithIntake(actual: readonly string[], expected: readonly string[]): boolean {
+  const intake = new Set<string>(EMAIL_INTAKE_TOOL_NAMES);
+  const extras = actual.filter((name) => !expected.includes(name));
+  return new Set(actual).size === actual.length &&
+    expected.every((name) => actual.includes(name)) &&
+    extras.every((name) => intake.has(name));
+}
+
 function matchesManagedRuntimeIdentity(
   readiness: HermesEnterpriseReadiness,
   expected: ManagedRuntimeIdentity,
@@ -147,7 +160,7 @@ export function matchesEnterpriseReadiness(
     readiness.skills[0]?.version === assignment.version &&
     readiness.skills[0]?.artifactDigest === assignment.artifact_digest &&
     readiness.skills[0]?.contentDigest === assignment.artifact_digest &&
-    sameNames(readiness.toolNames, expectedTools);
+    sameNamesWithIntake(readiness.toolNames, expectedTools);
 }
 
 /** Admission gate for the new workflow; legacy compatibility can never pass. */
@@ -206,7 +219,7 @@ export function matchesManagedRuntimeAttestation(
     skill.name === manifest.runtime_name && skill.version === manifest.version &&
     skill.artifactDigest === manifest.artifact_digest &&
     skill.contentDigest === expectedContentDigest &&
-    sameNames(readiness.toolNames, expectedTools);
+    sameNamesWithIntake(readiness.toolNames, expectedTools);
 }
 
 /** Exact managed readiness for an unowned warm profile. The discovery grant is

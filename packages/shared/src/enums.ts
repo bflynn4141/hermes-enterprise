@@ -205,6 +205,12 @@ export const EVENT_KINDS = [
   'partner.invoice_received',
   'partner.invoice_corrected',
   'partner.decision_acknowledged',
+  // Email intake (C98): ids and kinds only, never addresses or message text.
+  'email_inbox.created',
+  'email_inbox.removed',
+  'inbound_email.received',
+  'outbound_email.simulated',
+  'email_handoff.completed',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
@@ -240,5 +246,9 @@ export const errorClassSchema = z.enum(ERROR_CLASSES);
 export const eventKindSchema = z.enum(EVENT_KINDS);
 export const actorTypeSchema = z.enum(ACTOR_TYPES);
 export const sessionModeSchema = z.enum(SESSION_MODES);
+/** A run's mode: a session's, or `intake` for a run reading a received email (C98). */
+export const RUN_MODES = [...SESSION_MODES, 'intake'] as const;
+export type RunMode = (typeof RUN_MODES)[number];
+export const runModeSchema = z.enum(RUN_MODES);
 export const messageRoleSchema = z.enum(MESSAGE_ROLES);
 export const messageStatusSchema = z.enum(MESSAGE_STATUSES);

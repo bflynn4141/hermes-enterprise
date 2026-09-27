@@ -94,6 +94,15 @@ function mailbox(name: string, address: string): string {
   return `${encodedWord(name)} <${address}>`;
 }
 
+/**
+ * Message ids from a stored header, one token each. A header value is never
+ * copied through: anything that is not `<local@domain>` without whitespace,
+ * and so could not carry a CR or LF, is dropped.
+ */
+function messageIds(value: string | null | undefined): string[] {
+  return (value ?? '').match(/<[^<>\s]{3,990}>/gu) ?? [];
+}
+
 /** Build the exact plain-text RFC 5322 message reviewed in the approval. */
 export function rawGmailMessage(input: {
   senderName?: string;
@@ -102,12 +111,20 @@ export function rawGmailMessage(input: {
   recipientAddress: string;
   subject: string;
   body: string;
+  /** Threading for a reply (C98). Only well-formed message ids are written. */
+  inReplyTo?: string | null;
+  references?: string | null;
 }): string {
   const body = Buffer.from(input.body.replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
+  const inReplyTo = messageIds(input.inReplyTo).at(-1);
+  const references = messageIds(input.references).slice(-50);
   const message = [
     `From: ${input.senderName ? mailbox(input.senderName, input.senderAddress) : input.senderAddress}`,
     `To: ${mailbox(input.recipientName, input.recipientAddress)}`,
     `Subject: ${encodedWord(input.subject)}`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+    // Folded one id per line: fifty ids would pass the 998-character line limit.
+    ...(references.length > 0 ? [`References: ${references.join('\r\n ')}`] : []),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',

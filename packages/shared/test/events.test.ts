@@ -92,6 +92,17 @@ describe('event contract', () => {
   });
 });
 
+describe('run modes (C98)', () => {
+  it('parses a run.started for an email intake run, which clients must not treat as a contract break', () => {
+    const started = mockRunStream('completed').find((event) => event.kind === 'run.started');
+    if (!started) throw new Error('the mock stream has no run.started');
+    const intake = { ...started, payload: { ...started.payload, mode: 'intake' } };
+    expect(safeParseStreamEvent(intake).success).toBe(true);
+    const unknown = { ...started, payload: { ...started.payload, mode: 'autopilot' } };
+    expect(safeParseStreamEvent(unknown).success).toBe(false);
+  });
+});
+
 describe('refs', () => {
   it('parses the demo shapes and rejects an unknown section', () => {
     expect(refSchema.parse(REQ('leah'))).toEqual({ section: 'inbox', view: 'request', id: 'leah' });

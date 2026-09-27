@@ -42,6 +42,7 @@ export const ADMIN_SETTINGS_GROUPS = [
     items: [
       { id: 'Slack', label: 'Slack' },
       { id: 'Email', label: 'Email' },
+      { id: 'Inboxes', label: 'Role inboxes' },
     ],
   },
   {
@@ -69,6 +70,7 @@ export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   'Runtime capacity': 'Agent capacity',
   Slack: 'Slack',
   Email: 'Email',
+  Inboxes: 'Role inboxes',
   intelligence: 'Shared Intelligence',
 };
 

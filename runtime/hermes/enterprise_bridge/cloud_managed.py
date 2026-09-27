@@ -75,6 +75,11 @@ PARTNER_TOOLS = frozenset({
     "save_review_note", "set_context_field", "ask_for_context", "set_focus",
     "propose_request", "propose_approval", "propose_instruction",
 })
+# Tools a Worker may add to any role for an agent that reads a role inbox
+# (decision C98). They only suggest: replies and hand-offs wait for a person,
+# and the Worker allows nothing else in a run reading an email. Mirrors
+# EMAIL_INTAKE_TOOL_NAMES in packages/shared/src/email-intake.ts.
+EMAIL_INTAKE_TOOLS = frozenset({"suggest_reply", "suggest_handoff", "get_workspace_context"})
 ROLE_BINDINGS = {
     ("enterprise_bridge:partner-program-screening", "1.7.0"): {
         "skill_key": "partner-program-screening",
@@ -92,6 +97,12 @@ ROLE_BINDINGS = {
         "tools": frozenset({"get_partner_handoff_result", "list_requests", "get_request"}),
     },
 }
+
+
+def discovery_matches_binding(discovered, role_tools):
+    """Every role tool, and nothing beyond it except the email intake tools."""
+    names = set(discovered)
+    return role_tools <= names and names - role_tools <= EMAIL_INTAKE_TOOLS
 
 
 def managed_flag_enabled(environ=None):
@@ -452,7 +463,7 @@ def _initializer(settings, state, enterprise_tool_names):
             identity["base"], identity["token"], plugin_root=pathlib.Path(__file__).parent,
         )
         binding = _validate_binding(assignment)
-        if set(enterprise_tool_names) != binding["tools"]:
+        if not discovery_matches_binding(enterprise_tool_names, binding["tools"]):
             raise RuntimeError("Worker tool discovery differs from the exact role binding")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:

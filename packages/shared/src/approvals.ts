@@ -137,6 +137,16 @@ export const communicationDetailsSchema = z
     body: longText,
     attachments: z.array(z.object({ id: identifier, label: shortText }).strict()).max(25).default([]),
     scheduled_for: isoDateTime.optional(),
+    /**
+     * A reply to a message a role inbox received (C98). Server-written by
+     * `suggest_email_reply`, never by the model: it names the inbox and the
+     * exact stored message, which become approval resources, and whether the
+     * server flagged the sender, which selects the stricter policy.
+     */
+    reply_to: z
+      .object({ inbox_id: uuidSchema, message_id: uuidSchema, caution: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -455,7 +465,7 @@ export const approvalEffectOutcomeSchema = z
       'record_change',
       'agent_governance_change',
     ]),
-    status: z.enum(['not_required', 'waiting', 'unavailable', 'executed', 'failed', 'cancelled']),
+    status: z.enum(['not_required', 'waiting', 'unavailable', 'executed', 'simulated', 'failed', 'cancelled']),
     effect_id: uuidSchema.nullable(),
     reason: z.string().trim().max(1000).nullable(),
   })

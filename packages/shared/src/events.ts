@@ -20,6 +20,7 @@ import {
   runStatusSchema,
   runStepStateSchema,
   decisionSchema,
+  runModeSchema,
   sessionModeSchema,
 } from './enums.js';
 
@@ -62,7 +63,8 @@ export const runStartedSchema = event(
       attempt: z.number().int().min(1),
       engine_version: z.number().int().min(1),
       client_turn_id: z.string().min(1).max(128),
-      mode: sessionModeSchema,
+      // A run's mode, which may be `intake` for a run reading an email (C98).
+      mode: runModeSchema,
       model_id: z.string().min(1).max(64),
       effort: z.string().min(1).max(32).nullable(),
       title: z.string().max(200).nullable(),

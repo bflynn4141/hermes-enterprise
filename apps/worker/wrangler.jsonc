@@ -79,6 +79,12 @@
     "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
     "GMAIL_OUTREACH_ENABLED": "0",
     "GMAIL_EVIDENCE_ENABLED": "0",
+    // Email intake (C98). Locally, `wrangler dev` accepts a raw message at
+    // /cdn-cgi/handler/email and hands it to the email() handler. Approved
+    // replies are simulated here because no sender mailbox is connected;
+    // deployed environments stay draft-only until an operator changes it.
+    "EMAIL_INTAKE_DOMAIN": "in.hermes.localhost",
+    "EMAIL_REPLY_MODE": "send_after_approval",
     "INBOX_TRIAGE_MODE": "off",
     "INBOX_TRIAGE_RUBRIC_VERSION": "1",
     "RAINDROP_OBSERVABILITY_MODE": "off",
@@ -227,6 +233,10 @@
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "1",
         // Email execution stays off until a dedicated mailbox is connected and accepted.
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
+        // Email intake (C98): no receiving domain until Email Routing is set up
+        // for this environment, and replies stay drafts until an operator
+        // connects a sender and changes this.
+        "EMAIL_REPLY_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
         "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "active",
@@ -347,6 +357,10 @@
         "PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES": "360",
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
+        // Email intake (C98): no receiving domain until Email Routing is set up
+        // for this environment, and replies stay drafts until an operator
+        // connects a sender and changes this.
+        "EMAIL_REPLY_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
         "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "off",

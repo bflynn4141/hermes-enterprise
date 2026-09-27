@@ -16,7 +16,7 @@ import type { Client } from 'pg';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { loadApprovalView, proposeApproval as proposeEnterpriseApproval } from '../domain/approvals.js';
-import { SYSTEM_USER_ID, withWorkspaceTransaction } from '../jobs.js';
+import { runJobsAfterCommit, SYSTEM_USER_ID, withWorkspaceTransaction } from '../jobs.js';
 import { KeyStoreError, resolveKey } from '../keys/store.js';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 import { estimateCostUsd, loadModel } from '../model/catalog.js';
@@ -692,6 +692,41 @@ export class PgAgentDb implements AgentDb {
         input.agentId,
         input.arguments,
       ));
+  }
+
+  async suggestEmailReply(input: {
+    runId: string;
+    agentId: string;
+    toolCallId: string;
+    arguments: import('@hermes/shared').SuggestEmailReplyInput;
+  }): Promise<{ request_id: string; status: string; sendable: boolean; reviewers: 'owner' | 'owner_and_second_person' }> {
+    // App-role for the same reason as proposeApproval: the message, policy and
+    // resource reads are server domain work, and the agent role cannot read
+    // inbound_email_messages at all (0076).
+    const { suggestEmailReply } = await import('../inbound-email/suggestions.js');
+    const jobs: string[] = [];
+    const result = await withWorkspaceTransaction(this.env, this.workspaceId, (tx) => suggestEmailReply({
+      tx, workspaceId: this.workspaceId, jobs, env: this.env,
+      runId: input.runId, agentId: input.agentId, toolCallId: input.toolCallId,
+    }, input.arguments));
+    if (jobs.length > 0) await runJobsAfterCommit(this.env, this.workspaceId, jobs);
+    return result;
+  }
+
+  async suggestEmailHandoff(input: {
+    runId: string;
+    agentId: string;
+    toolCallId: string;
+    arguments: import('@hermes/shared').SuggestEmailHandoffInput;
+  }): Promise<{ request_id: string; recipients: number }> {
+    const { suggestEmailHandoff } = await import('../inbound-email/suggestions.js');
+    const jobs: string[] = [];
+    const result = await withWorkspaceTransaction(this.env, this.workspaceId, (tx) => suggestEmailHandoff({
+      tx, workspaceId: this.workspaceId, jobs, env: this.env,
+      runId: input.runId, agentId: input.agentId, toolCallId: input.toolCallId,
+    }, input.arguments));
+    if (jobs.length > 0) await runJobsAfterCommit(this.env, this.workspaceId, jobs);
+    return result;
   }
 
   /**

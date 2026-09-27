@@ -113,6 +113,17 @@ describe('wrangler.jsonc', () => {
     }
   });
 
+  it('keeps email-intake replies draft-only in every deployed environment (C98)', () => {
+    // Local development simulates delivery, which is what makes the walkthrough
+    // readable; staging and production never send a reply unless an operator
+    // changes this after connecting a sender.
+    expect((config.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('send_after_approval');
+    for (const scope of Object.values(envs)) {
+      expect((scope.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('draft_only');
+      expect((scope.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
+    }
+  });
+
   it('keeps the first member-approved search bounded in every environment', () => {
     for (const scope of [config, ...Object.values(envs)]) {
       const raw = (scope.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON;

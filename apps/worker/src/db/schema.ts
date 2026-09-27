@@ -1642,6 +1642,53 @@ export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
   sentAt: ts('sent_at'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
+  inboundMessageId: uuid('inbound_message_id'),
+  inReplyTo: text('in_reply_to'),
+  referencesHeader: text('references_header'),
+});
+
+// 0076: role inboxes that receive forwarded mail (decision C98).
+export const emailInboxes = pgTable('email_inboxes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  roleSlug: text('role_slug').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  address: text('address').notNull().unique(),
+  label: text('label').notNull(),
+  status: text('status').notNull().default('active'),
+  createdBy: uuid('created_by'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const emailInboxDirectory = pgTable('email_inbox_directory', {
+  address: text('address').primaryKey(),
+  inboxId: uuid('inbox_id').notNull().unique(),
+  targetWorkspaceId: uuid('target_workspace_id').notNull(),
+});
+
+export const inboundEmailMessages = pgTable('inbound_email_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  inboxId: uuid('inbox_id').notNull(),
+  rawSha256: text('raw_sha256').notNull(),
+  rawSize: integer('raw_size').notNull(),
+  messageId: text('message_id'),
+  inReplyTo: text('in_reply_to'),
+  referencesHeader: text('references_header'),
+  subject: text('subject').notNull().default(''),
+  fromAddress: text('from_address').notNull(),
+  fromName: text('from_name'),
+  toAddresses: text('to_addresses').array().notNull(),
+  ccAddresses: text('cc_addresses').array().notNull(),
+  senderFacts: jsonb('sender_facts').notNull(),
+  body: jsonb('body').notNull(),
+  attachments: jsonb('attachments').notNull(),
+  receivedAt: now('received_at'),
+  status: text('status').notNull().default('received'),
+  triageRunId: uuid('triage_run_id'),
+  triageError: text('triage_error'),
+  requestIds: uuid('request_ids').array().notNull(),
 });
 
 export const contactSuppressions = pgTable('contact_suppressions', {
@@ -2443,6 +2490,9 @@ export const ALL_TABLES = {
   gmail_evidence_oauth_states: gmailEvidenceOauthStates,
   mailbox_thread_snapshots: mailboxThreadSnapshots,
   inbound_email_events: inboundEmailEvents,
+  email_inboxes: emailInboxes,
+  email_inbox_directory: emailInboxDirectory,
+  inbound_email_messages: inboundEmailMessages,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

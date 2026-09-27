@@ -83,6 +83,11 @@ export async function submitTurn(input: {
   readonly text: string;
   readonly jobIds: string[];
   readonly scriptedScript?: string;
+  /**
+   * Server-authored only. `intake` narrows a run that reads an untrusted email
+   * to the suggestion tools (C98); the session's own mode is left alone.
+   */
+  readonly runMode?: 'intake';
   /** Server-authored only; browser and external channel bodies cannot set it. */
   readonly turnAuthor?: {
     readonly id: string;
@@ -156,7 +161,7 @@ export async function submitTurn(input: {
        VALUES ($1,$2,$3,$4,'working',$5,$6,$7,$8,$9,1,$10,$11,$12)
        RETURNING id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for`,
       [runId, workspaceId, session.id, session.agent_id, session.model_id, session.effort,
-       DEFAULT_MAX_TURNS, traceId, instanceId, engineVersion, clientTurnId, session.mode],
+       DEFAULT_MAX_TURNS, traceId, instanceId, engineVersion, clientTurnId, input.runMode ?? session.mode],
     );
     inserted = result.rows[0];
     await tx.query('RELEASE SAVEPOINT run_insert');
