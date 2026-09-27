@@ -114,6 +114,10 @@ interface MockOptions {
   roleWritesStepUp?: boolean;
   /** Approval rule and member role writes answer `reauth_required` until the step-up cookie is set. */
   approvalWritesStepUp?: boolean;
+  /** Admin → Agents writes (name, model, skills) answer `reauth_required` until the step-up cookie is set. */
+  agentWritesStepUp?: boolean;
+  /** Iris has no Hermes runtime, so an Admin may change its skills (C96). */
+  unmanagedAgent?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -670,10 +674,13 @@ export function createMockBackend(input: MockOptions = {}) {
     data_boundary: 'Only completed runs you own are shown. A proposal uses verified excerpts from final user-visible messages; private traces, tool arguments/results, hidden reasoning, credentials, and other members\' work stay out.',
   });
   const confirmedNotes: ContextNote[] = [];
-  const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [], pending_approvals_visible: true };
+  // Iris is a Partnerships agent: every catalogued operation but reading a
+  // Finance handoff result, which only the Finance skill has.
+  const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.filter((operation) => operation.id !== 'read_handoff_results').map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [], pending_approvals_visible: true };
   // Alex's private Finance agent as an Admin who does not own it sees it: the
   // switches are there, and whatever is waiting behind them is not.
-  const ledgerPermissions: AgentPermissions = { agent_id: FINANCE_AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.filter((operation) => operation.id === 'prepare_drafts').map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: true })), pending_approvals: [], pending_approvals_visible: seat !== 'admin' };
+  // A Finance agent's one catalogued tool reads handoff results (C96).
+  const ledgerPermissions: AgentPermissions = { agent_id: FINANCE_AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.filter((operation) => operation.id === 'read_handoff_results').map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [], pending_approvals_visible: seat !== 'admin' };
   const permissionsFor = (agentId: string): AgentPermissions => agentId === FINANCE_AGENT ? ledgerPermissions : agentPermissions;
   if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
 
@@ -749,6 +756,32 @@ export function createMockBackend(input: MockOptions = {}) {
     ],
     updated_at: iso(),
   };
+  /**
+   * Admin → Agents configuration (C96), mirroring the server: a name and a
+   * model per agent, removed catalog skills, and which agents run on a Hermes
+   * runtime that attests its skill (both mock agents do, unless
+   * `?agentRuntime=none` frees Iris).
+   */
+  const agentConfig: Record<string, { name: string | null; model_id: string | null; managed: boolean }> = {
+    [AGENT]: { name: null, model_id: null, managed: !options.unmanagedAgent },
+    [FINANCE_AGENT]: { name: null, model_id: null, managed: true },
+  };
+  const removedAssignments = new Set<string>();
+  const skillCatalog = [
+    { key: 'partner-program-screening', name: 'Partner program screening', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', version: '1.8.0', digest: hashForMock(96), tools: ['list_partner_candidates', 'get_partner_candidate', 'propose_approval', 'publish_partner_invoice_review'], template: 'partnerships-agent' },
+    { key: 'partner-invoice-review', name: 'Partner invoice review', description: 'Check authorized partner invoices and prepare an invoice draft for human review. It cannot approve or pay.', version: '1.0.1', digest: hashForMock(97), tools: ['get_partner_handoff_result', 'list_requests', 'get_request'], template: 'finance-agent' },
+  ];
+  const liveAssignments = (agentId: string): EnterpriseSkillAssignment[] =>
+    [agentId === FINANCE_AGENT ? ledgerAssignment : skillAssignment].filter((assignment) => !removedAssignments.has(assignment.id));
+  const agentModel = (agentId: string): AgentDirectoryEntry['model'] => {
+    const own = agentConfig[agentId]?.model_id;
+    const row = catalog.find((entry) => entry.model_id === (own ?? settingsView.defaults.model_id));
+    const id = own ?? settingsView.defaults.model_id;
+    return { id, label: row?.label ?? id, source: own ? 'agent' : 'workspace_default' };
+  };
+  const directorySkills = (agentId: string) => liveAssignments(agentId)
+    .map((assignment) => ({ assignment_id: assignment.id, skill_key: assignment.skill_key, name: assignment.name, version: assignment.version, state: assignment.state }));
+
   /** Admin → Agents. Configuration only, like the server: no session, run or waiting-action content. */
   const agentDirectory = (): AgentDirectoryEntry[] => {
     const maya = members.find((member) => member.id === MAYA_MEMBER);
@@ -758,20 +791,22 @@ export function createMockBackend(input: MockOptions = {}) {
       .map((operation) => ({ id: operation.id, label: operation.label }));
     const person = (member: MemberEntity | undefined) => member?.user_id ? { member_id: member.id, user_id: member.user_id, name: member.name } : null;
     const items: AgentDirectoryEntry[] = [{
-      id: AGENT, name: partnershipsAgentName, responsibility: options.partnerWorkflow ? 'Partnerships Manager' : 'Partner Program',
+      id: AGENT, name: agentConfig[AGENT]!.name ?? partnershipsAgentName, responsibility: options.partnerWorkflow ? 'Partnerships Manager' : 'Partner Program',
       status: 'started', context_scope: 'private', owner: person(maya),
       role: partnerConfigured && maya?.user_id ? { team: { slug: 'partnerships', name: 'Partnerships' }, role_template_key: 'partnerships-agent', principal: person(maya)! } : null,
-      skills: [{ assignment_id: skillAssignment.id, skill_key: skillAssignment.skill_key, name: skillAssignment.name, version: skillAssignment.version, state: skillAssignment.state }],
-      runtime: { source: 'cloud_capacity', label: 'hermes-pool-03', state: 'connected' },
+      skills: directorySkills(AGENT),
+      runtime: agentConfig[AGENT]!.managed ? { source: 'cloud_capacity', label: 'hermes-pool-03', state: 'connected' } : { source: 'none', label: null, state: 'not_connected' },
+      model: agentModel(AGENT),
       approvals: { revision: agentPermissions.revision, required: required(agentPermissions) },
       viewer: { can_configure: true, can_view_conversations: true },
     }];
     if (alex?.user_id) items.push({
-      id: FINANCE_AGENT, name: 'Ledger', responsibility: 'Finance review',
+      id: FINANCE_AGENT, name: agentConfig[FINANCE_AGENT]!.name ?? 'Ledger', responsibility: 'Finance review',
       status: 'started', context_scope: 'private', owner: person(alex),
       role: partnerConfigured ? { team: { slug: 'finance', name: 'Finance' }, role_template_key: 'finance-agent', principal: person(alex)! } : null,
-      skills: [{ assignment_id: ledgerAssignment.id, skill_key: ledgerAssignment.skill_key, name: ledgerAssignment.name, version: ledgerAssignment.version, state: ledgerAssignment.state }],
+      skills: directorySkills(FINANCE_AGENT),
       runtime: { source: 'cloud_capacity', label: 'hermes-pool-04', state: 'connected' },
+      model: agentModel(FINANCE_AGENT),
       approvals: { revision: ledgerPermissions.revision, required: required(ledgerPermissions) },
       viewer: { can_configure: true, can_view_conversations: false },
     });
@@ -1966,6 +2001,24 @@ export function createMockBackend(input: MockOptions = {}) {
       const items = agentDirectory();
       return json({ items, total: items.length });
     }
+    const adminAgentMatch = match(new RegExp(`^/w/${WS}/admin/agents/([^/]+)$`));
+    if (adminAgentMatch && method === 'PATCH') {
+      // Same order as apps/worker/src/routes/admin-agents.ts `patchAdminAgent`.
+      const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+      const extra = Object.keys(body).some((key) => key !== 'name' && key !== 'model_id');
+      if (extra || (!('name' in body) && !('model_id' in body)) || ('name' in body && (!name || name.length > 80))) return fail(422, 'bad_agent_update', 'an agent needs a name of 1 to 80 characters, or a model');
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const config = agentConfig[adminAgentMatch[1]!];
+      if (!config) return fail(404, 'unknown_agent', 'no such agent in this workspace');
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_agents_stepup=1');
+      if (options.agentWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      if (typeof body.model_id === 'string' && !catalog.some((row) => row.model_id === body.model_id && row.enabled)) {
+        return fail(422, 'unknown_model', 'that model is not available to this workspace');
+      }
+      if (name) config.name = name;
+      if ('model_id' in body) config.model_id = typeof body.model_id === 'string' ? body.model_id : null;
+      return json(agentDirectory().find((agent) => agent.id === adminAgentMatch[1]));
+    }
     if (p('/files') && method === 'GET') return page(storedSources);
     if (p('/library-sources') && method === 'GET') return page(librarySources);
     if (p('/shared-intelligence') && method === 'GET') return json(sharedIntelligence());
@@ -2319,12 +2372,43 @@ export function createMockBackend(input: MockOptions = {}) {
         return json({ superseded_handoff_id: handoff.id, handoff_id: successor.id, handoff_revision: 1, intake_event_id: mockUuid(651), payload_hash: hashForMock(82), source_run_id: RUN, finance_run_id: mockUuid(652), input_provenance: inputProvenance, created: true }, 201);
       }
     }
+    if (p('/skill-catalog') && method === 'GET') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      return json({ items: skillCatalog });
+    }
     const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/(${AGENT}|${FINANCE_AGENT})/skill-assignments(?:/([^/]+))?$`));
     if (skillAssignmentsMatch) {
-      const ledger = skillAssignmentsMatch[1] === FINANCE_AGENT;
+      const agentId = skillAssignmentsMatch[1]!;
+      const ledger = agentId === FINANCE_AGENT;
       const current = ledger ? ledgerAssignment : skillAssignment;
-      if (!skillAssignmentsMatch[2] && method === 'GET') return page([current]);
-      if (skillAssignmentsMatch[2] === current.id && method === 'PATCH') {
+      const removed = removedAssignments.has(current.id);
+      if (!skillAssignmentsMatch[2] && method === 'GET') return page(liveAssignments(agentId));
+      if (method === 'POST' || method === 'DELETE') {
+        // Same order as apps/worker/src/routes/skill-assignments.ts.
+        const entry = method === 'POST' ? skillCatalog.find((row) => row.key === body.skill_key) : null;
+        if (method === 'POST' && !entry) return fail(422, 'unknown_skill', 'choose a skill from the catalog');
+        if (seat !== 'admin') return fail(403, 'admin_required');
+        const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_agents_stepup=1');
+        if (options.agentWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+        if (agentConfig[agentId]!.managed) {
+          return fail(409, 'runtime_rebuild_required', 'This agent runs on a Hermes runtime that checks its exact skill when it starts, so its skills can’t change here. The runtime needs a rebuild first; see the runtime runbook in docs/HERMES-AGENT-RUNTIME.md.');
+        }
+        if (method === 'DELETE') {
+          if (skillAssignmentsMatch[2] !== current.id || removed) return fail(404, 'not_found');
+          removedAssignments.add(current.id);
+          return new Response(null, { status: 204 });
+        }
+        const role = agentDirectory().find((agent) => agent.id === agentId)?.role ?? null;
+        if (!role) return fail(422, 'no_lane', 'this agent has no role to attach a skill to');
+        if (!removed && current.skill_key === entry!.key) return fail(409, 'already_assigned', 'this agent already has that skill');
+        if (!removed && current.state === 'active') return fail(409, 'one_active_skill', 'pause or remove the current skill first');
+        if (role.role_template_key !== entry!.template || current.skill_key !== entry!.key) return fail(422, 'skill_role_mismatch', 'that skill belongs to another role');
+        const next: EnterpriseSkillAssignment = { ...current, version: entry!.version, artifact_digest: entry!.digest, state: 'active', schedule: { ...current.schedule, enabled: false }, revision: current.revision + 2, updated_at: new Date().toISOString() };
+        removedAssignments.delete(current.id);
+        if (ledger) ledgerAssignment = next; else skillAssignment = next;
+        return json(next, 201);
+      }
+      if (skillAssignmentsMatch[2] === current.id && !removed && method === 'PATCH') {
         if (body.revision !== current.revision) return fail(409, 'stale_revision');
         const next: EnterpriseSkillAssignment = {
           ...current,

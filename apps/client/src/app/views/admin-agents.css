@@ -15,3 +15,11 @@
 @container app-pane (max-width: 560px) {
   .admin-agents-row { flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; }
 }
+.admin-agents-input { flex: 0 1 320px; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); outline: none; }
+.admin-agents-input:focus { border-color: #9B9AE0; }
+.admin-agents-confirm { align-self: center; }
+@container app-pane (max-width: 560px) {
+  .admin-agents-input { flex-basis: 100%; }
+  .admin-agents-skill-row { flex-direction: column; align-items: flex-start; }
+  .admin-agents-skill-row .admin-roles-actions { margin-left: 0; flex-wrap: wrap; }
+}
