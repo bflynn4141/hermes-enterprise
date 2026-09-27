@@ -81,6 +81,33 @@ A caution never unlocks anything. It adds a second approver (another Admin or
 holder of the role); if the workspace has nobody who could be second, the reply
 is drafted but Hermes will not send it.
 
+## Readable email content
+
+Sender-controlled colors, font sizes and spacing are removed. Only enumerated
+emphasis and alignment styles survive; repeated small/subscript/superscript tags
+become normal-size text. Explicitly hidden content is still removed and counted.
+This trades some email branding for a reviewer being able to read the words
+provided to the agent.
+
+If the HTML has no text and intake uses the plain-text MIME alternative, the
+reviewer sees that same alternative. If HTML or text exceeds the rendering
+budget, review falls back to the bounded plain text rather than a cut-off HTML
+document. Previously stored messages also have their presentation rebuilt at
+read time; a mismatch with the stored model text selects the plain-text view.
+The stored evidence and its hash are not rewritten.
+
+## Connecting a sender after approval
+
+With real delivery enabled, an approved reply without a Gmail connection waits
+without consuming its send-job key. Connecting the matching sender queues it.
+The callback also repairs completed jobs left by older versions, including
+queued replies with zero send attempts. Sent or uncertain deliveries are not
+replayed. Development simulation still records a simulated send without Gmail.
+
+Regression coverage includes delayed connection, historical job recovery,
+repeated connections, invisible styles, nested shrinking tags, large inline
+images, MIME alternatives, and unchanged historical evidence.
+
 ## Configuration
 
 | Variable | Development | Staging / production |
