@@ -108,6 +108,26 @@ proactive discovery while preserving manual use. Each native run snapshots the
 exact managed skill version and non-secret config in its immutable request.
 New role-template assignments default to schedules off.
 
+### Assigning and removing from the catalog (C96)
+
+An Admin can assign a catalog skill to an agent or remove one from Admin →
+Agents. The catalog (`GET /w/:ws/skill-catalog`) lists one entry per skill at
+the version a lane gets today: Partnerships 1.8.0 and Finance 1.0.1, the same
+pair the role setup assigns and strict readiness admits. The Admin sends only
+the skill key; the server chooses the version, the reviewed artifact, the
+agent's lane and the role's default settings, with schedules off. An Admin
+never chooses a version.
+
+Assignment is refused when the agent already has an active skill (readiness
+admits exactly one), when the skill belongs to another role's lane, when the
+agent has no lane, and when the agent runs on a Hermes runtime that attests its
+skill at startup: a changed assignment would only fail admission until the
+runtime is rebuilt, so the product says so (`runtime_rebuild_required`) and
+changes nothing. Removal pauses the assignment and marks it removed rather than
+deleting it, because run and discovery grants refer to it and its revisions are
+the audit trail. Every reader skips a removed assignment, and assigning the
+same skill again reactivates it.
+
 `PARTNER_SCREENING_CONFIG_JSON` remains a rolling-deployment compatibility
 source. Ordinary list and detail reads never import it or enable a schedule.
 Only an explicit setup/execution compatibility path may materialize revision 1;
@@ -140,7 +160,7 @@ draft. Payment and email effects remain pending and have no executor. See
 1. Add a reviewed `SKILL.md` beneath `runtime/hermes/enterprise_bridge/skills/`.
 2. Register it read-only in `enterprise_bridge.register`.
 3. Register its config schema, editable field metadata and semantic capability requirements in `apps/worker/src/enterprise-skills/registry.ts`.
-4. Create an assignment through a reviewed Admin path. Declare only non-secret `metadata.hermes.config` values and keep credentials in the appropriate server-side connection.
+4. Add it to `ENTERPRISE_SKILL_CATALOG` so an Admin can assign it from Admin → Agents, with default settings for its role template. Declare only non-secret `metadata.hermes.config` values and keep credentials in the appropriate server-side connection.
 5. Map its semantic capability grants to exact governed tools and preserve human decision boundaries in the procedure.
 6. Add runtime boundary tests, launcher validation and an end-to-end native probe before enabling the package.
 

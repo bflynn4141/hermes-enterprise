@@ -12,8 +12,8 @@ in build order; each one ships something a person can try.
 | Area | Today | What an Admin can do |
 |---|---|---|
 | Roles | Two, Partnerships and Finance, fixed by database checks. One person and one agent per role. A member's job role lives only on their invitation. | Bind the two roles with raw ids. |
-| Agents | No owner, role, model or skill fields on the agent itself. No create, rename or delete. | Edit a skill assignment's settings, pause state and schedule; toggle approval for three operations. An Admin cannot open another member's private agent. |
-| Skills | Four packages, defined in code with pinned versions. The runtime proves each skill's exact bytes. | Nothing: no assign, unassign or version change. |
+| Agents | A name and an optional model on the agent (C96); owner, role and skills come from their own tables. No create or delete. | Rename any agent, choose the model its new conversations start with, assign or remove a catalog skill on an agent without a managed runtime, edit a skill's settings, pause state and schedule, and toggle approval for six operations. An Admin cannot open another member's private agent. |
+| Skills | Four packages, defined in code with pinned versions. The runtime proves each skill's exact bytes. | Assign or remove a catalog skill at its pinned version (C96). No version choice, and no change on an agent whose runtime attests its skill. |
 | Approval types | Five legacy request kinds, plus ten typed approvals running on a real policy engine (steps, quorum, no self-review, role or person selectors). | Nothing: policies are seeded in code, and an unseeded type fails with `no_applicable_policy`. |
 | Reviewer roles | Free-text tags (`finance`, `access`, `legal`) that gate effects. | API only; no UI. |
 | Handoffs | A generic-looking table with two lanes, five stages and one seeded Partnerships → Finance handoff. | Turn it on or off. |
@@ -60,7 +60,7 @@ break that guarantee. Instructions and skill settings stay editable, as today.
 | 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | Done, #185 (C91) |
 | 2 | Roles as data: a roles table seeded with Partnerships and Finance replaces the fixed checks; job roles persist on members; many people per role; invitations pick from the table; reviewer tags become role membership. | Admin → Roles: see who holds each role, add roles, staff them. Unblocks 3–5. | Done (C92) |
 | 3 | Approval routing screen over the existing policy engine: per approval type, the deciding role or people, steps, quorum and self-review. | Payments need three Finance people; a new member's roles say what they can approve. | Done (C93) |
-| 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Set up a third role's agent from the UI. | |
+| 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Rename an agent, pick its model, swap its catalog skill, and turn on approval for requesting approvals and handoffs. | Done except creation, which needs reserved capacity; see C96 |
 | 5 | Configurable handoffs: role to role, chosen trigger and request type, more than two lanes. | Wire a new cross-role flow without code. | Wait for a second real workflow |
 
 ## How this relates to Nous
@@ -87,8 +87,13 @@ Agent security docs and Hermes Agent v2026.9.24 source.
 
 ## Known gaps carried into later pieces
 
-- Parked tool-call decisions (operation approvals) have no step-up, and
-  `propose_approval` is not covered by the operation switches.
+- Parked tool-call decisions (operation approvals) have no step-up.
+  (`propose_approval` gained a switch in C96.)
+- Creating an agent from the product. A managed agent needs reserved Cloud
+  pool capacity and a fresh readiness proof before it exists, so creation
+  stays with the invitation flow (C96).
+- Changing the skill of an agent whose Hermes runtime attests it needs a
+  runtime rebuild; the product refuses it with `runtime_rebuild_required`.
 - `docs/APPROVAL-EXPANSION-STATUS.md` predates the shipped routes and runtime.
 - Decisions take one person in this version; multi-person decisions would
   need votes on legacy requests like typed approvals have.
