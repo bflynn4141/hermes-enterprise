@@ -130,3 +130,24 @@ for (const fixture of [
     await expect(live).not.toBeChecked();
   });
 }
+
+test('saving the roles without a recent sign-in offers one, and nobody gives themself Finance', async ({ page }) => {
+  await page.goto('/?workflowRole=admin&seat=admin&roles=stepup');
+  const pane = await openHandoffs(page);
+  await pane.getByRole('button', { name: 'Configure roles' }).click();
+  const form = pane.getByRole('form', { name: 'Configure employee roles' });
+  await form.getByLabel('Finance person').selectOption({ label: 'Alex Rivera' });
+  await form.getByLabel('Finance agent').selectOption({ label: 'Ledger · Alex Rivera' });
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(form.getByRole('alert')).toContainText('Saving the roles needs a recent sign-in.');
+  await expect(form.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await expect(pane.getByText('Roles saved.')).toHaveCount(0);
+
+  // With a recent sign-in, the Admin still cannot name themself for Finance.
+  await page.context().addCookies([{ name: 'hermes_roles_stepup', value: '1', url: new URL(page.url()).origin }]);
+  await form.getByLabel('Partnerships person').selectOption({ label: 'Alex Rivera' });
+  await form.getByLabel('Finance person').selectOption({ label: 'Maya Chen' });
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(form.getByRole('alert')).toHaveText('Choose someone other than yourself for Finance.');
+  await expect(form.getByRole('button', { name: 'Sign in again' })).toHaveCount(0);
+});

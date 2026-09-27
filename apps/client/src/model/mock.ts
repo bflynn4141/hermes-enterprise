@@ -110,7 +110,7 @@ interface MockOptions {
   providerKeysLocked?: boolean;
   /** Browser-only fixture for the Admin capacity step-up and lifecycle flow. */
   runtimeCapacityStepUp?: boolean;
-  /** Admin → Roles writes answer `reauth_required` until the step-up cookie is set. */
+  /** Admin → Roles writes, and saving the handoff roles or turning it on, answer `reauth_required` until the step-up cookie is set. */
   roleWritesStepUp?: boolean;
   /** Approval rule and member role writes answer `reauth_required` until the step-up cookie is set. */
   approvalWritesStepUp?: boolean;
@@ -2075,12 +2075,24 @@ export function createMockBackend(input: MockOptions = {}) {
     }
     if (p('/skills')) return page(skills);
     if (p('/partner-workflow/configure') && method === 'POST') {
+      // Same order as apps/worker/src/routes/partner-workflow.ts: Admin, a
+      // recent sign-in, then no Admin handing Finance to themself (C97).
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_roles_stepup=1');
+      if (options.roleWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      const financeUser = (body.finance as { principal_user_id?: unknown } | undefined)?.principal_user_id;
+      const viewer = members.find((member) => member.user_id === viewerUserId);
+      if (financeUser === viewerUserId && !viewer?.reviewer_roles.includes('finance')) {
+        return fail(409, 'self_change', 'another Admin gives you the Finance role');
+      }
       partnerConfigured = true;
       return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
     }
     if (p('/partner-workflow/admission') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      if (body.enabled === true && options.roleWritesStepUp && !(typeof document === 'undefined' || document.cookie.includes('hermes_roles_stepup=1'))) {
+        return fail(401, 'reauth_required', 'Recent sign-in required.');
+      }
       if (body.enabled === true && !partnerConfigured) return fail(409, 'workflow_not_configured', 'Configure both roles before enabling admission.');
       if (body.enabled === true && options.workflowActivation === 'native-mismatch') {
         return fail(409, 'workflow_readiness_incomplete', 'A native profile did not attest the reviewed skill and tool inventory.');
