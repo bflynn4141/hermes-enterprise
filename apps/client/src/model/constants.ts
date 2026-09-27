@@ -94,7 +94,8 @@ export const EMPTY = {
    * four; with one it is a riddle whose answer is one screen away.
    */
   noKey: 'Connect Nous Portal in Settings to start',
-  keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or rotate it`,
+  /** Takes the provider's display name (`providerName`), never its slug (docs/DESIGN.md). */
+  keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or replace it in Admin`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
   overview: (agent: string, automated = false) => automated
@@ -106,13 +107,13 @@ export const EMPTY = {
   historyAll: 'No activity yet',
   historyDecisions: 'No decisions yet',
   historyBlocked: 'Nothing is blocked',
-  traces: 'No runs yet.',
+  traces: 'No activity yet.',
   traceMissing: 'This run is no longer available',
   context: 'No sources yet',
   skills: 'No change proposed',
   libraryUnavailable: 'Not available yet',
   invitations: 'No open invitations',
-  noProvider: 'No provider configured',
+  noProvider: 'No model available',
   /** A key installed before this deployment narrowed to Nous Portal. */
   keyNotAllowed: 'No longer usable — only Nous Portal keys can be used',
   providerKeys: 'Connect Nous Portal to enable models',
@@ -123,11 +124,12 @@ export const EMPTY = {
   shareGone: 'This link is no longer available.',
   blockBroken: 'Could not display this block',
   reconnecting: 'Reconnecting…',
-  redeploying: 'Redeploying. Runs resume in a moment.',
+  redeploying: 'Hermes is updating. Your agents pick up again in a moment.',
   signedOut: 'Signed out. Sign in again to continue — your draft is saved.',
   evicted: 'Your access to this workspace changed',
   pdfPreparing: 'PDF is being prepared',
-  pdfFailed: (reason: string) => `Rendering failed: ${reason}`,
+  /** The reason is the server's and stays in logs; the screen says what happened. */
+  pdfFailed: (_reason: string) => 'The PDF couldn’t be made',
   /**
    * `pdf_status: 'none'` with a `pdf_error` is not "being prepared": it is the
    * server saying there will never be one in this build, because the PDF
@@ -151,7 +153,7 @@ export const AGENT_TABS = [
   { id: 'context', label: 'Context' },
   { id: 'skills', label: 'Skills' },
   { id: 'permissions', label: 'Permissions' },
-  { id: 'traces', label: 'Traces' },
+  { id: 'traces', label: 'Activity' },
 ] as const;
 
 /** localStorage keys. Drafts are scoped by workspace and user (spec §12.4). */

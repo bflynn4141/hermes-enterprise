@@ -19,9 +19,13 @@
 //                       breaks the roving focus below, and 60 rows render in
 //                       under a frame. If a workspace ever wants 3,000 rows in
 //                       one group this is the line to revisit.
-//   Priced.             Input/output per million and the context window, from
-//                       the catalog row. Labelled "est." because the provider
-//                       does the billing and `pricing_verified_on` is a date.
+//   Priced, in words.   A cost tier from the catalog row's per-million price,
+//                       and a note when the model reads long documents. Not
+//                       the dollar figures: they are per million tokens, a
+//                       unit docs/DESIGN.md keeps off the screen, and the
+//                       provider does the billing anyway. The tier is an
+//                       honest comparison between rows, which is what a
+//                       person picking a model needs.
 //   Honest about tools. The run engine calls a tool on every step, so a model
 //                       without tool calling is shown greyed with the reason
 //                       rather than omitted. The server agrees: such a row
@@ -36,24 +40,44 @@ import { Icon } from '../ui/icons.js';
 import { MenuItem, Popover } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
 import { catalogRows } from '../selectors.js';
+import { providerName, vendorName } from '../copy/names.js';
 import type { SessionState } from '../../model/store.js';
 
 /** One page. Big enough to browse, small enough to render in a frame. */
 export const MODEL_PAGE = 60;
 
-/** USD per million, as a person reads it. */
-export function priceLabel(entry: Pick<CatalogEntry, 'pricing_per_million'>): string {
-  const money = (value: number): string =>
-    value === 0 ? 'free' : value < 1 ? `$${value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}` : `$${value.toFixed(2)}`;
-  return `${money(entry.pricing_per_million.input)} in · ${money(entry.pricing_per_million.output)} out /M est.`;
+/**
+ * A model's cost as a tier a person can compare across rows. Keyed off the
+ * output price per million, which dominates what a task costs: up to $1 is
+ * low, up to $10 standard, above that higher.
+ */
+export function costLabel(entry: Pick<CatalogEntry, 'pricing_per_million'>): string {
+  const { input, output } = entry.pricing_per_million;
+  if (input === 0 && output === 0) return 'Free';
+  if (output <= 1) return 'Low cost';
+  if (output <= 10) return 'Standard cost';
+  return 'Higher cost';
 }
 
-/** 200000 -> "200K", 1000000 -> "1M". A context window, not a number. */
-export function contextLabel(length: number | null): string | null {
+/** How much a model can read at once, when that is worth saying. */
+export function lengthLabel(length: number | null): string | null {
   if (length === null) return null;
-  if (length >= 1_000_000) return `${Math.round(length / 100_000) / 10}M ctx`;
-  if (length >= 1_000) return `${Math.round(length / 1_000)}K ctx`;
-  return `${length} ctx`;
+  if (length >= 500_000) return 'Reads very long documents';
+  if (length >= 100_000) return 'Reads long documents';
+  return null;
+}
+
+/** Why a row can't be picked, in words. Never the provider slug or the server's prose. */
+export function unavailableLabel(row: Pick<CatalogEntry, 'provider' | 'disabled_code' | 'disabled_reason'>): string {
+  const provider = providerName(row.provider);
+  switch (row.disabled_code) {
+    case 'no_key': return `Connect ${provider} to use this model`;
+    case 'key_unverified': return `Verify your ${provider} key to use this model`;
+    case 'key_invalid': return `Your ${provider} key was rejected`;
+    case 'provider_not_allowed': return 'Not offered in this workspace';
+    case 'catalog': return /tool/i.test(row.disabled_reason ?? '') ? 'Can’t use tools, which every task needs' : 'Not available in this workspace';
+    default: return 'Not available right now';
+  }
 }
 
 /**
@@ -225,7 +249,7 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
       <div className="row">
         <span className="p-title">Model</span>
         <span className="grow" />
-        <span className="p-meta">This session · Next turn</span>
+        <span className="p-meta">Applies to your next message</span>
       </div>
 
       <div className="search">
@@ -247,17 +271,17 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
         {groups.map((group) => (
           <div key={group.vendor} className="model-group">
             <div className="model-group-head" role="presentation">
-              {group.vendor}
+              {vendorName(group.vendor)}
             </div>
             {group.rows.map((row) => (
               <MenuItem
                 key={row.model_id}
                 checked={selected === row.model_id}
                 disabled={!row.enabled}
-                title={row.enabled ? row.model_id : row.disabled_reason ?? undefined}
+                title={row.enabled ? undefined : unavailableLabel(row)}
                 sub={subtitle(row)}
                 right={
-                  <span className="model-tags">
+                  <span className="model-tags" data-model-id={row.model_id}>
                     {modelRouteLabel(row) && <span className="model-route">{modelRouteLabel(row)}</span>}
                     {row.model_id === companyDefault && (
                       <span className="model-pin" title="The workspace default, set in Settings">
@@ -336,10 +360,9 @@ const UNPRICED = '1970-01-01';
 
 /** The line under a model's name: why not, or what it costs. */
 function subtitle(row: CatalogEntry): string {
-  if (!row.enabled) return row.disabled_reason ?? `No verified ${row.provider} key`;
-  if (row.pricing_verified_on === UNPRICED) return `via ${row.provider}`;
-  const context = contextLabel(row.context_length);
-  return [priceLabel(row), context].filter(Boolean).join(' · ');
+  if (!row.enabled) return unavailableLabel(row);
+  if (row.pricing_verified_on === UNPRICED) return `via ${providerName(row.provider)}`;
+  return [costLabel(row), lengthLabel(row.context_length)].filter(Boolean).join(' · ');
 }
 
 /**

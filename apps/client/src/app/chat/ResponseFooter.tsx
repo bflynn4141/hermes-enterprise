@@ -1,5 +1,5 @@
 // The completed-response footer: Worked disclosure, Copy, Add to Collective,
-// Helpful / Not helpful, View trace, Continue in a new session.
+// Helpful / Not helpful, See what it did, Continue in a new session.
 //
 // Two changes from the demo. Worked time is `runs.active_ms` — the "historical
 // fixture" branch is gone, because there are no fixtures left to be historical
@@ -12,6 +12,7 @@ import { useAdapter, useNav } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
 import { Ack, Button, Disclosure, IconButton, MenuItem, Popover, formatWorked } from '../ui/primitives.js';
 import type { SessionState } from '../../model/store.js';
+import { readableDoneLabel } from '../tool-copy.js';
 
 export function ResponseFooter({ message, session, workspaceId }: { message: Message; session: SessionState; workspaceId: string }) {
   const adapter = useAdapter();
@@ -60,7 +61,7 @@ export function ResponseFooter({ message, session, workspaceId }: { message: Mes
   return (
     <div className="col" style={{ gap: 0 }}>
       <div className="msg-footer">
-        <button type="button" className="worked" aria-expanded={open} aria-controls={`worked-${message.id}`} onClick={() => setOpen((value) => !value)} title="Active execution time; excludes time waiting for a human">
+        <button type="button" className="worked" aria-expanded={open} aria-controls={`worked-${message.id}`} onClick={() => setOpen((value) => !value)} title="Time spent working; excludes time waiting for a person">
           {worked}
           <span className="chev" aria-hidden="true">
             ⌄
@@ -88,7 +89,7 @@ export function ResponseFooter({ message, session, workspaceId }: { message: Mes
                   nav(message.run_id ? { section: 'agents', view: 'trace', id: message.run_id } : { section: 'agents', view: 'traces' });
                 }}
               >
-                View trace
+                See what it did
               </MenuItem>
               <MenuItem
                 small
@@ -122,7 +123,7 @@ export function ResponseFooter({ message, session, workspaceId }: { message: Mes
           {(message.steps ?? []).map((step, index) => (
             <div className="row" key={index}>
               <Icon name="check" size={16} style={{ color: 'var(--muted)' }} />
-              <span>{step}</span>
+              <span>{readableDoneLabel(step)}</span>
             </div>
           ))}
           {message.guidance && (
@@ -131,7 +132,7 @@ export function ResponseFooter({ message, session, workspaceId }: { message: Mes
               <span>Applied guidance: “{message.guidance}”</span>
             </div>
           )}
-          <div className="fixture-note">Active execution time recorded by the run; it excludes time waiting for a human decision.</div>
+          <div className="fixture-note">Time the agent spent working on this reply. It leaves out time spent waiting for a person to decide.</div>
         </div>
       </Disclosure>
     </div>

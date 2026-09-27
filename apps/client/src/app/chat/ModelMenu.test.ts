@@ -7,7 +7,8 @@
 // a per-million price and a context window read to a person.
 import { describe, expect, it } from 'vitest';
 import type { CatalogEntry } from '@hermes/shared';
-import { contextLabel, groupByVendor, modelRouteLabel, priceLabel } from './ModelMenu.js';
+import { costLabel, groupByVendor, lengthLabel, modelRouteLabel, unavailableLabel } from './ModelMenu.js';
+import { vendorName } from '../copy/names.js';
 
 const entry = (model_id: string, over: Partial<CatalogEntry> = {}): CatalogEntry => ({
   model_id,
@@ -68,29 +69,32 @@ describe('grouping the model list by vendor', () => {
   });
 });
 
-describe('the price and context copy', () => {
-  it('reads sub-dollar prices without a wall of zeroes', () => {
-    expect(priceLabel(entry('x', { pricing_per_million: { input: 0.27, output: 0.85, input_off_peak: null, output_off_peak: null, cached_input: null } }))).toBe(
-      '$0.27 in · $0.85 out /M est.',
-    );
+describe('the cost and length copy', () => {
+  const priced = (input: number, output: number) => entry('x', { pricing_per_million: { input, output, input_off_peak: null, output_off_peak: null, cached_input: null } });
+
+  it('says a cost tier rather than a per-million price', () => {
+    expect(costLabel(priced(0.27, 0.85))).toBe('Low cost');
+    expect(costLabel(priced(1.25, 10))).toBe('Standard cost');
+    expect(costLabel(priced(3, 15))).toBe('Higher cost');
+    expect(costLabel(priced(0, 0))).toBe('Free');
+    expect(costLabel(priced(3, 15))).not.toMatch(/\$|\/M|est\./);
   });
 
-  it('says free rather than $0.00, and keeps two decimals above a dollar', () => {
-    expect(priceLabel(entry('x', { pricing_per_million: { input: 0, output: 15, input_off_peak: null, output_off_peak: null, cached_input: null } }))).toBe(
-      'free in · $15.00 out /M est.',
-    );
+  it('mentions length only when a model reads long documents', () => {
+    expect(lengthLabel(1_000_000)).toBe('Reads very long documents');
+    expect(lengthLabel(200_000)).toBe('Reads long documents');
+    expect(lengthLabel(32_000)).toBeNull();
+    expect(lengthLabel(null)).toBeNull();
   });
 
-  it('always says est., because the provider does the billing', () => {
-    expect(priceLabel(entry('x'))).toContain('est.');
+  it('says why a row is unavailable with the provider’s brand name', () => {
+    expect(unavailableLabel({ provider: 'nous_portal', disabled_code: 'no_key', disabled_reason: 'Add your nous_portal key' })).toBe('Connect Nous Portal to use this model');
+    expect(unavailableLabel({ provider: 'nous_portal', disabled_code: 'catalog', disabled_reason: 'This model has no tool calling, which every run needs.' })).toBe('Can’t use tools, which every task needs');
+    expect(unavailableLabel({ provider: 'nous_portal', disabled_code: null, disabled_reason: 'raw server text' })).not.toContain('raw');
   });
 
-  it('renders a context window as a person says it', () => {
-    expect(contextLabel(200_000)).toBe('200K ctx');
-    expect(contextLabel(1_000_000)).toBe('1M ctx');
-    expect(contextLabel(131_072)).toBe('131K ctx');
-    expect(contextLabel(512)).toBe('512 ctx');
-    expect(contextLabel(null)).toBeNull();
+  it('names vendor groups by brand', () => {
+    expect(['anthropic', 'meta-llama', 'openai', 'x-ai', 'unknown-lab'].map(vendorName)).toEqual(['Anthropic', 'Meta', 'OpenAI', 'xAI', 'Unknown lab']);
   });
 });
 

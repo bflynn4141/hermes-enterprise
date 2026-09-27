@@ -24,7 +24,7 @@ import { useReducedMotion } from 'motion/react';
 import { LoadingState, TaskRows, ToolChips } from '@hermes/motion-components';
 import type { Message, Run, RunStep } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
-import { readableStep, readableTool, readableWaitingLabel } from '../tool-copy.js';
+import { readableStep, readableTool, readableWaitingLabel, runErrorSentence } from '../tool-copy.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
 import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
@@ -68,11 +68,10 @@ function toolSteps(steps: readonly RunStep[]) {
       label: readableStep(step),
       chip: step.state === 'done' ? 'Done' : step.state === 'failed' ? 'Failed' : 'Running',
       mono: false,
-      detailMono: true,
-      // The exact tool id stays readable in the mono sub text, and the 8 KB
-      // truncation marker the engine puts on a tool result renders after it
-      // rather than being hidden.
-      detail: [{ text: step.label }, ...(step.detail ? [{ text: step.detail }] : [])],
+      detailMono: false,
+      // The step's own prose detail, when it has one. The tool id stays in the
+      // data: docs/DESIGN.md keeps identifiers off the screen.
+      detail: step.detail ? [{ text: step.detail }] : [],
     }));
 }
 
@@ -168,7 +167,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
     }));
 
   // The run's own question ("Feedback destination", "Waiting for your
-  // approval · …") names the row; the step's tool id is a detail underneath.
+  // approval · …") names the row; the step's prose detail sits underneath.
   const waitingLabel = readableWaitingLabel(run.waiting_label);
   const waitingRows =
     run.status === 'waiting'
@@ -180,7 +179,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
             amount: 'Waiting',
             status: 'blocked' as const,
             details: [
-              ...(step.tool_call_id ? [{ label: 'Tool', meta: step.label }] : []),
+              ...(step.tool_call_id ? [{ label: 'Step', meta: readableStep(step) }] : []),
               ...(step.detail ? [{ label: 'Detail', meta: step.detail }] : []),
             ],
           }))
@@ -214,8 +213,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
               {liveTools.map((step) => (
                 <div className="live-tool-row" data-state={step.state} role="listitem" key={step.id}>
                   <span className="live-tool-dot" aria-hidden="true" />
-                  <span>{step.state === 'active' ? readableTool(step.label, true) : step.state === 'failed' ? 'Tool failed' : readableTool(step.label, false)}</span>
-                  <code>{step.label}</code>
+                  <span>{step.state === 'active' ? readableTool(step.label, true) : step.state === 'failed' ? `${readableTool(step.label, true)} · Didn’t finish` : readableTool(step.label, false)}</span>
                 </div>
               ))}
             </div>
@@ -249,7 +247,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
           rows={rows}
           labels={{
             completed: 'Done',
-            failed: run.error?.message ?? 'Failed',
+            failed: run.error ? runErrorSentence(run.error) : 'Failed',
             blocked: waitingLabel ?? 'Waiting',
           }}
           onRetry={readOnly ? undefined : (key) => {

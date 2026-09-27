@@ -171,6 +171,28 @@ import {
   type RuntimeDiscoveryGrantInput,
 } from './runtime-capacity.js';
 
+/**
+ * The sentence a failed request carries as its `message`.
+ *
+ * docs/DESIGN.md: a screen never shows the server's error text, a status line
+ * like "POST /w/… failed with 409", or a schema dump. Code branches on
+ * `reason` and `status`; anything that renders `message` gets one of these.
+ * The server's own text is kept on `detail` for logs and debugging.
+ */
+export function plainRestMessage(status: number, reason: string): string {
+  if (reason === 'contract_violation') return 'Hermes sent an answer this page couldn’t read. Refresh the page and try again.';
+  if (reason === 'reauth_required') return 'Confirm it’s you, then try again.';
+  if (status === 401) return 'You’ve been signed out. Sign in again to continue.';
+  if (status === 403) return 'You don’t have permission to do that.';
+  if (status === 404) return 'That isn’t available anymore. Refresh to see the latest.';
+  if (status === 409) return 'Something changed while you were working. Refresh and try again.';
+  if (status === 413) return 'That’s too large to save. Try something smaller.';
+  if (status === 429) return 'Too many requests right now. Wait a minute, then try again.';
+  if (status >= 500) return 'Something went wrong on our side. Nothing was changed. Try again in a moment.';
+  if (status >= 400) return 'That couldn’t be saved. Check the details and try again.';
+  return 'Something went wrong. Nothing was changed.';
+}
+
 export class RestError extends Error {
   constructor(
     readonly status: number,
@@ -178,6 +200,8 @@ export class RestError extends Error {
     message: string,
     readonly retryAfter: number | null = null,
     readonly traceId: string | null = null,
+    /** The server's own text or the parse failure. For logs, never for a screen. */
+    readonly detail: string | null = null,
   ) {
     super(message);
     this.name = 'RestError';
@@ -263,19 +287,21 @@ export function createRest(options: RestOptions) {
         if (response.status === 204 || !schema) return undefined;
         const json: unknown = await response.json();
         const parsed = schema.safeParse(json);
-        if (!parsed.success) throw new RestError(response.status, 'contract_violation', `${path}: ${parsed.error.message}`);
+        if (!parsed.success) {
+          throw new RestError(response.status, 'contract_violation', plainRestMessage(response.status, 'contract_violation'), null, null, `${method} ${path}: ${parsed.error.message}`);
+        }
         return parsed.data;
       }
 
       const retryAfter = Number(response.headers.get('Retry-After') ?? '') || null;
       let reason = 'http_error';
-      let message = `${method} ${path} failed with ${response.status}`;
+      let detail = `${method} ${path} failed with ${response.status}`;
       let traceId: string | null = null;
       try {
         const parsed = errorBodySchema.safeParse(await response.json());
         if (parsed.success) {
           reason = parsed.data.reason;
-          message = parsed.data.error;
+          detail = parsed.data.error;
           traceId = parsed.data.trace_id ?? null;
         }
       } catch {
@@ -288,7 +314,7 @@ export function createRest(options: RestOptions) {
         continue;
       }
 
-      const error = new RestError(response.status, reason, message, retryAfter, traceId);
+      const error = new RestError(response.status, reason, plainRestMessage(response.status, reason), retryAfter, traceId, detail);
       if (error.signedOut) options.onSignedOut?.();
       throw error;
     }
@@ -619,7 +645,7 @@ export function createRest(options: RestOptions) {
     putBytes: async (upload: AttachmentUpload['upload'], body: Blob | ArrayBuffer) => {
       if (!upload.direct) {
         const response = await fetchImpl(upload.url, { method: 'PUT', headers: upload.headers, body: body as BodyInit });
-        if (!response.ok) throw new RestError(response.status, 'upload_failed', `PUT to storage failed with ${response.status}`);
+        if (!response.ok) throw new RestError(response.status, 'upload_failed', 'The file couldn’t be uploaded. Try again.', null, null, `PUT to storage failed with ${response.status}`);
         return;
       }
       await request('PUT', new URL(upload.url, 'http://placeholder.invalid').pathname, directUploadResultSchema, undefined, {

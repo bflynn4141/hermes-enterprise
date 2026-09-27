@@ -108,13 +108,13 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
 
   await page.reload();
   await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Traces' }).click();
-  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Activity' }).click();
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
   await page.getByRole('button', { name: 'Open →' }).first().click();
 
   // The detail, not the list row. The two are the same entity kind and the
   // list fills half of it, so this is also the regression test for the forced
-  // refetch: without it the pane said "This run called no tools" for a run
+  // refetch: without it the pane said "It didn’t use any tools" for a run
   // that called one.
   const app = pane(page);
   // The detail heading is the session, the runtime and the mode; the model
@@ -124,14 +124,15 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
   await expect(app.getByText('Prepared a review request').first()).toBeVisible();
 
-  await app.getByRole('button', { name: 'Show arguments and result' }).first().click();
-  await expect(app.getByText('propose_request.arguments.json')).toBeVisible();
-  await expect(app.getByText('propose_request.result.json')).toBeVisible();
-  // The result envelope, as the model saw it.
-  await expect(app.getByText('"awaiting"').first()).toBeVisible();
+  await app.getByRole('button', { name: 'Show details' }).first().click();
+  await expect(app.getByText('What it was given', { exact: true })).toBeVisible();
+  await expect(app.getByText('What came back', { exact: true })).toBeVisible();
+  // The result, as the model saw it, in labelled words rather than JSON.
+  await expect(app.getByText(/awaiting/).first()).toBeVisible();
+  await expect(app.getByText('propose_request.arguments.json')).toHaveCount(0);
 
   // And nothing on this screen advances the run.
-  await expect(app.getByText('Opening a trace never advances a run or decides anything.', { exact: false })).toBeVisible();
+  await expect(app.getByText('Opening this page never continues the work or decides anything.', { exact: false })).toBeVisible();
   await context.close();
 });
 
@@ -456,8 +457,8 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('No standing instructions saved yet')).toBeVisible();
   await expect(app.getByText('No skills assigned yet.')).toBeVisible();
 
-  await app.getByRole('tab', { name: 'Traces' }).click();
-  await expect(app.getByText('No runs yet.')).toBeVisible();
+  await app.getByRole('tab', { name: 'Activity' }).click();
+  await expect(app.getByText('No activity yet.')).toBeVisible();
 
   await page.getByRole('button', { name: 'History', exact: true }).first().click();
   await expect(app.getByText('No decisions yet').first()).toBeVisible();

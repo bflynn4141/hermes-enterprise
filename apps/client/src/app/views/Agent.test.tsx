@@ -9,7 +9,8 @@ describe('trace failure detail', () => {
       message: 'The selected model is rate limited. Wait a moment, then retry.', step_id: 'hermes',
     }} />);
     expect(html).toContain('Run failed · Safe to retry');
-    expect(html).toContain('The selected model is rate limited. Wait a moment, then retry.');
+    expect(html).toContain('The model is busy right now. Try again in a minute.');
+    expect(html).not.toContain('rate limited');
     expect(html).toContain('role="status"');
   });
 
@@ -19,6 +20,6 @@ describe('trace failure detail', () => {
       message: 'The selected model connection needs attention. Reconnect it before retrying.', step_id: 'hermes',
     }} />);
     expect(html).toContain('Run failed · Action required');
-    expect(html).toContain('Reconnect it before retrying.');
+    expect(html).toContain('An Admin needs to reconnect it');
   });
 });

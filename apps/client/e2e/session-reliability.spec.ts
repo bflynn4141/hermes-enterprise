@@ -182,7 +182,7 @@ async function selectAlternate(page: Page) {
   await page.getByRole('button', { name: /^Model:/ }).click();
   const menu = page.getByRole('dialog', { name: 'Model', exact: true });
   await menu.getByRole('textbox', { name: 'Search models' }).fill('step-3.7-flash');
-  await menu.locator(`.menu-item[title="${ALTERNATE}"]`).click();
+  await menu.locator(`.menu-item:has([data-model-id="${ALTERNATE}"])`).click();
   await page.keyboard.press('Escape');
 }
 

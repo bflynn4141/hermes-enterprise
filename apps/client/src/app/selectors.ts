@@ -120,8 +120,11 @@ export function requestStatusLabel(request: RequestEntity): string {
       return 'Changes requested · New version required';
     case 'expired':
       return 'Expired · No authorization';
+    case 'withdrawn':
+      return 'Withdrawn · Nothing sent';
     default:
-      return request.status;
+      // A status this build does not know yet: never the raw enum (docs/DESIGN.md).
+      return 'Status updated · Open to see details';
   }
 }
 
@@ -140,8 +143,8 @@ export function describeRef(state: AppState, app: Ref): [string, string] {
   const view = app.view;
   if (section === 'agents') {
     if (view === 'setup') return [agent, `${agent} / Ready to start`];
-    if (view === 'trace') return [agent, `${agent} / Run detail`];
-    if (view === 'traces') return [agent, `${agent} / Traces`];
+    if (view === 'trace') return [agent, `${agent} / What it did`];
+    if (view === 'traces') return [agent, `${agent} / Activity`];
     if (view === 'context') return [agent, app.field ? `${agent} / ${app.field}` : `${agent} / Context`];
     if (view === 'skills') return [agent, `${agent} / Skills`];
     if (view === 'permissions') return [agent, `${agent} / Permissions`];

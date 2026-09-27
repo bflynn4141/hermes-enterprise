@@ -46,3 +46,13 @@ describe('requestRowCopy', () => {
     });
   });
 });
+
+describe('traceModeLabel', () => {
+  it('names an email-intake run and never falls back to the type string', async () => {
+    const { traceModeLabel } = await import('./Agent.js');
+    expect(traceModeLabel({ mode: 'intake', type: 'Hermes Agent · intake' })).toBe('Reading an email');
+    expect(traceModeLabel({ mode: undefined, type: 'Hermes Agent · intake' })).toBe('Reading an email');
+    expect(traceModeLabel({ mode: 'work', type: 'Hermes Agent · work' })).toBe('Work mode');
+    expect(traceModeLabel({ mode: undefined, type: 'Hermes Agent · something_new' })).toBe('Agent task');
+  });
+});

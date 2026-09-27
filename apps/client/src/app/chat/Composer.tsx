@@ -23,6 +23,7 @@ import { refusalFor, type Refusal } from './refusal.js';
 import { AgentFileExtractionError, waitForAgentFileReady } from './wait-agent-file-ready.js';
 import { useToolPhase } from './RunSurface.js';
 import { readableStep, readableWaitingLabel, runErrorSentence } from '../tool-copy.js';
+import { providerName } from '../copy/names.js';
 import type { SessionState } from '../../model/store.js';
 
 const COMPOSER_MAX_HEIGHT = 132;
@@ -62,6 +63,7 @@ export function Composer({ session }: { session: SessionState }) {
   const catalog = catalogRows(state);
   const model = catalog.find((row) => row.model_id === session.model) ?? catalog[0];
   const modelRoute = model ? modelRouteLabel(model) : null;
+  const refusalContext = { provider: model?.provider ?? null, agentName: agent };
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
   // turnAttachments gates source chips: pick stored agent_file / library_source
   // rows, or upload a local file as agent_file then attach once extraction is ready.
@@ -125,7 +127,7 @@ export function Composer({ session }: { session: SessionState }) {
             : adapter.send(session.id, draft);
     if (active) dispatch({ type: 'session/draft-clear', id: session.id });
     void attempt.catch((error: unknown) => {
-      setRefusal(refusalFor(error));
+      setRefusal(refusalFor(error, refusalContext));
       // `adapter.send` restores the draft itself, under whichever id the store
       // is keyed on by then; the other actions clear it here, so they put it back
       // here. Setting it twice is harmless and losing it once is not.
@@ -163,7 +165,7 @@ export function Composer({ session }: { session: SessionState }) {
             </Button>
           )}
           {(status.status === 'stopped' || status.status === 'error') && status.error?.retryable !== false && (
-            <Button onClick={() => void adapter.retry(session.id, status.id).catch((error: unknown) => setRefusal(refusalFor(error)))}>
+            <Button onClick={() => void adapter.retry(session.id, status.id).catch((error: unknown) => setRefusal(refusalFor(error, refusalContext)))}>
               {status.status === 'error' ? 'Retry remaining step' : 'Resume'}
             </Button>
           )}
@@ -191,7 +193,7 @@ export function Composer({ session }: { session: SessionState }) {
         {blocked && (
           <div className="composer-blocked" role="status">
             <span>{state.user.role === 'admin'
-              ? (keys.rejected ? EMPTY.keyRejected(keys.rejected) : 'Connect Nous Portal in Admin to start')
+              ? (keys.rejected ? EMPTY.keyRejected(providerName(keys.rejected)) : 'Connect Nous Portal in Admin to start')
               : 'Ask a workspace Admin to connect Nous Portal.'}</span>
             {state.user.role === 'admin' && <Button small onClick={() => nav(ADMIN('Provider keys'))}>
               Open Admin
@@ -228,7 +230,7 @@ export function Composer({ session }: { session: SessionState }) {
             blocked
               ? EMPTY.noKey
               : contextKey
-                ? run?.waiting_label ?? 'Answer to continue…'
+                ? readableWaitingLabel(run?.waiting_label) ?? 'Answer to continue…'
                 : active
                   ? sendMode === 'queue'
                     ? 'Queue a follow-up…'
@@ -283,7 +285,7 @@ export function Composer({ session }: { session: SessionState }) {
             {/* Named, not just labelled by its own text: the text is the
                 current model, so "the control that changes the model" had no
                 stable name for a screen reader or a test to ask for. */}
-            <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}${modelRoute ? ` · ${modelRoute}` : ''}`} aria-expanded={menu === 'model'} disabled={active} title={active ? 'Model for this run' : model?.model_id} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
+            <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}${modelRoute ? ` · ${modelRoute}` : ''}`} aria-expanded={menu === 'model'} disabled={active} title={active ? 'Model for this run' : model?.label} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
               <span className="composer-model-label">{model?.label ?? EMPTY.noProvider}</span>
               {modelRoute && <span className="composer-model-route">{modelRoute}</span>}
               <Icon name="chevron" size={14} className="composer-selector-chevron" />
@@ -379,7 +381,13 @@ function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; o
       attachSource(ready);
     } catch (caught) {
       setStatus('');
-      setError(caught instanceof AgentFileExtractionError ? caught.message : sourceUploadError(caught));
+      // A failed extraction carries the server's reason; the person gets a
+      // sentence about the file instead (docs/DESIGN.md).
+      setError(caught instanceof AgentFileExtractionError
+        ? (caught.detail?.extraction_status === 'failed' || caught.detail?.status === 'failed'
+          ? 'This file couldn’t be read. Upload a PDF, Markdown or text file and try again.'
+          : 'This file is still being read. Try again in a moment.')
+        : sourceUploadError(caught));
     } finally {
       setUploading(false);
       if (input.current) input.current.value = '';

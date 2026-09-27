@@ -118,6 +118,14 @@ describe('agent activity', () => {
     });
   });
 
+  it('says what a parked approval and a failed run are, in words', () => {
+    const base = { id: RUN, session_id: SESSION, agent_id: AGENT, attempt: 1, title: 'Reply to Priya', steps: [], queue: [] };
+    const waiting = agentActivity(state(session({ status: 'waiting', run: { ...base, status: 'waiting', waiting_for: 'operation_approval:x', waiting_label: 'Approve suggest_reply in Permissions' } })), []);
+    expect(waiting.task).toBe('Waiting for your approval · Suggesting a reply');
+    const failed = agentActivity(state(session({ status: 'error', run: { ...base, status: 'error', error: { class: 'transient', retryable: true, reason: 'hermes_provider_rate_limited', message: 'The selected model is rate limited.', step_id: 'hermes' } } })), []);
+    expect(failed.task).toBe('The model is busy right now. Try again in a minute.');
+  });
+
   it('uses the newest trace as recent activity when no run is live', () => {
     const activity = agentActivity(state(session()), [
       trace({
@@ -144,7 +152,7 @@ describe('agent activity', () => {
       steps: [{ id: 'hermes', label: 'Thinking', state: 'done', tool_call_id: null }],
     })]);
     expect(activity).toMatchObject({
-      state: 'idle', task: 'Screen an application', action: 'Response completed · No tool calls', tool: null,
+      state: 'idle', task: 'Screen an application', action: 'Replied without using any tools', tool: null,
     });
   });
 
@@ -170,7 +178,7 @@ describe('agent activity', () => {
     const activity = agentActivity(state(session()), [trace({ status: 'error', steps: [
       { id: 'call-1', label: 'get_document_text', state: 'failed', tool_call_id: 'call-1' },
     ] })]);
-    expect(activity.tool).toMatchObject({ state: 'failed', summary: 'Tool failed' });
+    expect(activity.tool).toMatchObject({ state: 'failed', summary: 'Reading a source document · Didn’t finish' });
   });
 
   it('does not call a tool active when its run is waiting for a person', () => {

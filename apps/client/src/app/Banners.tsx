@@ -7,6 +7,7 @@ import { useAppState, useAdapter } from './store-context.js';
 import { EMPTY } from '../model/constants.js';
 import { Button } from './ui/primitives.js';
 import { hasVerifiedKey } from './selectors.js';
+import { providerName } from './copy/names.js';
 
 export function ConnectionBanner() {
   const state = useAppState();
@@ -60,7 +61,7 @@ export function ConnectionBanner() {
   if (state.ready && keys.rejected) {
     return (
       <div className="banner banner-quiet" role="status">
-        {EMPTY.keyRejected(keys.rejected)}
+        {EMPTY.keyRejected(providerName(keys.rejected))}
       </div>
     );
   }

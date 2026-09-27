@@ -101,13 +101,13 @@ test.describe('Nous Portal, added through Settings and picked in the composer', 
 
     const menu = page.getByRole('dialog', { name: 'Model' });
     await expect(menu).toBeVisible();
-    await expect(menu.getByText('anthropic', { exact: true })).toBeVisible();
+    await expect(menu.getByText('Anthropic', { exact: true })).toBeVisible();
 
     await menu.getByRole('textbox', { name: 'Search models' }).fill('gemini');
     const gemini = menu.getByRole('menuitemradio', { name: /Gemini/ });
     await expect(gemini).toBeVisible();
-    // The price line is the catalog's, per million, marked as an estimate.
-    await expect(menu.getByText(/\/M est\./).first()).toBeVisible();
+    // The price line is a cost tier in words, not a per-million figure.
+    await expect(menu.getByText(/(Free|Low cost|Standard cost|Higher cost)/).first()).toBeVisible();
 
     await gemini.click();
     await expect(page.getByRole('button', { name: /^Model: .*Gemini/ })).toBeVisible();
