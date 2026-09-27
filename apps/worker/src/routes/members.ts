@@ -279,6 +279,8 @@ export async function listMembers(c: Context<{ Bindings: Env }>): Promise<Respon
       total: rows.length,
     });
   });
+  // Emails and roles: never kept by a shared cache or the browser's back button.
+  c.header('Cache-Control', 'no-store');
   return c.json(body);
 }
 
@@ -301,6 +303,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
       total: rows.length,
     });
   });
+  c.header('Cache-Control', 'no-store');
   return c.json(body);
 }
 
@@ -1078,7 +1081,24 @@ export async function patchMember(c: Context<{ Bindings: Env }>): Promise<Respon
       if (unknown.length > 0) {
         throw new RouteError(`this workspace has no role called ${unknown.join(', ')}`, 'unknown_role', 422);
       }
-      await work.tx.query(`UPDATE members SET reviewer_roles = $2 WHERE id = $1`, [member.id, requested]);
+      // History records a change of roles, as `PUT /roles/:id/members` does;
+      // saving the same roles again is not a change and records nothing.
+      const before = await work.tx.query<{ reviewer_roles: string[] }>(
+        `SELECT reviewer_roles FROM members WHERE id = $1 FOR UPDATE`, [member.id],
+      );
+      const held = new Set(before.rows[0]?.reviewer_roles ?? []);
+      const changed = requested.length !== held.size || requested.some((slug) => !held.has(slug));
+      if (changed) {
+        await work.tx.query(`UPDATE members SET reviewer_roles = $2 WHERE id = $1`, [member.id, requested]);
+        await work.tx.query(
+          `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, member_id)
+           VALUES ($1, 'user', $2, 'member.role_changed', $3)`,
+          [work.workspaceId, work.userId, member.id],
+        );
+        work.jobs.push(...(await publishEvents(work.tx, work.workspaceId, [
+          { kind: 'entity.updated', payload: { entity: 'member', id: member.id, change: 'roles' } },
+        ])));
+      }
     }
 
     if ((input.role === 'admin' || input.role === 'member') && input.role !== member.role) {
