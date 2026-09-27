@@ -389,8 +389,9 @@ test.describe('P2 · triage', () => {
 
     // Narrow: the header still fits, and the link switches to the App pane.
     await page.setViewportSize({ width: 390, height: 844 });
-    const headerWidth = await appHeader.evaluate((header) => ({ client: header.clientWidth, scroll: header.scrollWidth }));
-    expect(headerWidth.scroll).toBeLessThanOrEqual(headerWidth.client);
+    // Measured once the pane has finished resizing: mid-transition the pane is
+    // briefly narrower than its own header, which no one sees.
+    await expect.poll(async () => appHeader.evaluate((header) => header.scrollWidth <= header.clientWidth && header.clientWidth > 200)).toBe(true);
   });
 
   test('the review pane shows the evidence, and Admit records one decision', async ({ page }) => {
@@ -412,7 +413,7 @@ test.describe('P2 · triage', () => {
     await appPane.getByRole('button', { name: 'Admit Leah' }).click();
 
     // The receipt replaces the review, and it is honest about what is pending.
-    await expect(appPane.getByText('Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.')).toBeVisible();
+    await expect(appPane.getByText('Your decision is saved. Anything it leads to, like granting access, paying, signing or sending, happens separately.')).toBeVisible();
     await expect(appPane.getByText('What this implies')).toBeVisible();
     // Legacy Execute must never appear as a successful external action control.
     await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);

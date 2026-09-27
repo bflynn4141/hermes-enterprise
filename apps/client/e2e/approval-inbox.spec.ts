@@ -5,16 +5,16 @@ import { APPROVAL_REVISION_DRAFT_KEY } from '../src/model/approval-revision-draf
 const APPROVALS = '/?scenario=approvals';
 
 const APPROVAL_CASES = [
-  { type: 'run_plan', subject: 'Launch partner research sprint', label: 'Plan and budget', marker: 'Enforced run limits', action: 'Approve plan', effect: null, work: null },
+  { type: 'run_plan', subject: 'Launch partner research sprint', label: 'Plan and budget', marker: 'Usage limits', action: 'Approve plan', effect: null, work: null },
   { type: 'team_commitment', subject: 'Assign the onboarding synthesis', label: 'Team commitment', marker: 'Bounded task', action: 'Accept task', effect: 'Not required', work: 'Work started' },
-  { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'No external effect', work: 'No follow-on work' },
-  { type: 'communication', subject: 'Send pilot invitation', label: 'Communication', marker: 'Illustrative pilot outline.pdf', action: 'Approve send', effect: 'No external effect', work: 'No follow-on work' },
-  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Approve publication', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'Nothing runs automatically', work: 'Nothing else to do' },
+  { type: 'communication', subject: 'Send pilot invitation', label: 'Email', marker: 'Illustrative pilot outline.pdf', action: 'Approve and send', effect: 'Nothing runs automatically', work: 'Nothing else to do' },
+  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Approve publication', effect: 'Nothing runs automatically', work: 'Nothing else to do' },
   { type: 'deliverable', subject: 'Accept onboarding recommendation', label: 'Deliverable', marker: 'Smallest credible onboarding pilot', action: 'Accept result', effect: 'Not required', work: 'Ready to start' },
-  { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'No external effect', work: 'No follow-on work' },
-  { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'No external effect', work: 'No follow-on work' },
-  { type: 'exception', subject: 'Allow a 24-hour review extension', label: 'Exception', marker: 'Rule remains in force', action: 'Allow exception', effect: 'Not required', work: 'No follow-on work' },
-  { type: 'agent_governance', subject: 'Change Rowan’s schedule and tools', label: 'Agent governance', marker: 'Current schedule', action: null, effect: null, work: null },
+  { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'Nothing runs automatically', work: 'Nothing else to do' },
+  { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'Nothing runs automatically', work: 'Nothing else to do' },
+  { type: 'exception', subject: 'Allow a 24-hour review extension', label: 'Exception', marker: 'Rule remains in force', action: 'Allow exception', effect: 'Not required', work: 'Nothing else to do' },
+  { type: 'agent_governance', subject: 'Change Rowan’s schedule and tools', label: 'Agent settings', marker: 'Current schedule', action: null, effect: null, work: null },
 ] as const;
 
 /**
@@ -68,14 +68,14 @@ test.describe('enterprise approval inbox', () => {
     await page.getByRole('button', { name: /^Inbox/ }).click();
     const app = page.getByRole('region', { name: 'Application' });
     await openRequest(app, /Review the partner pilot outreach draft/);
-    await expect(app.getByLabel('Revised email subject')).toHaveValue('Restored subject');
-    await expect(app.getByLabel('Revised email body')).toHaveValue('Restored unsaved email wording.');
-    await expect(app.getByLabel('Revised proposal summary')).toHaveValue('Restored review summary.');
-    await expect(app.getByLabel('What changed', { exact: true })).toHaveValue('Shortened the message.');
+    await expect(app.getByLabel(/^Subject/)).toHaveValue('Restored subject');
+    await expect(app.getByLabel(/^Email/)).toHaveValue('Restored unsaved email wording.');
+    await expect(app.getByLabel('Short summary')).toHaveValue('Restored review summary.');
+    await expect(app.getByLabel('What you changed', { exact: true })).toHaveValue('Shortened the message.');
     await expect(app.locator('.approval-message-body')).not.toContainText('Restored unsaved email wording.');
     await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
-    await expect(app.getByRole('button', { name: 'Submit v2' })).toBeEnabled();
-    await app.getByRole('button', { name: 'Submit v2' }).click();
+    await expect(app.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    await app.getByRole('button', { name: 'Save changes' }).click();
     await expect(app.locator('.approval-message-body')).toContainText('Restored unsaved email wording.');
     await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
   });
@@ -90,15 +90,15 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
     await expect(app.getByText('Taylor Brooks · email address needed')).toBeVisible();
-    await expect(app.getByText('Review copy only · Nothing is sent')).toBeVisible();
+    await expect(app.getByText('Approving saves the email · Nothing is sent')).toBeVisible();
     await expect(app.locator('.approval-message-body')).toContainText('Hi Taylor,');
     const body = await app.locator('.approval-message-body').boundingBox();
     const footer = await app.locator('.approval-footer').boundingBox();
     expect(body!.y).toBeLessThan(footer!.y - 80);
     await expect(app.locator('details').filter({ hasText: 'Request details' }).first()).not.toHaveAttribute('open');
-    await app.locator('summary').filter({ hasText: /^Evidence/ }).click();
+    await app.locator('summary').filter({ hasText: /^Sources/ }).click();
     await app.locator('summary').filter({ hasText: 'Illustrative partner source' }).click();
-    await expect(app.getByText('Stored source facts')).toBeVisible();
+    await expect(app.getByText('What Hermes saved')).toBeVisible();
     await expect(app.getByText('Fictional Partner Cooperative')).toBeVisible();
     await expect(app.getByRole('link', { name: 'Open original source' })).toHaveAttribute('href', 'https://example.invalid/illustrative-pilot');
     await app.getByRole('button', { name: 'Approve draft' }).click();
@@ -115,18 +115,19 @@ test.describe('enterprise approval inbox', () => {
     await app.getByRole('button', { name: 'Request changes' }).click();
     await app.getByLabel('What needs to change').fill('Make the invitation more concise.');
     await app.getByRole('button', { name: 'Send back for changes' }).click();
-    await app.getByRole('button', { name: 'Revise draft' }).click();
-    await app.getByLabel('Revised email subject').fill('A smaller partner pilot');
-    await app.getByLabel('Revised email body').fill('Hi Taylor,\n\nWould a one-week pilot fit your team?\n\nMaya');
-    await app.getByLabel('Revised proposal summary').fill('A concise invitation to a one-week partner pilot.');
-    await app.getByLabel('What changed', { exact: true }).fill('Shortened the invitation and reduced its scope.');
-    await app.getByRole('button', { name: 'Submit v2' }).click();
+    await app.getByRole('button', { name: 'Edit email' }).click();
+    await app.getByLabel(/^Subject/).fill('A smaller partner pilot');
+    await app.getByLabel(/^Email/).fill('Hi Taylor,\n\nWould a one-week pilot fit your team?\n\nMaya');
+    await app.getByLabel('Short summary').fill('A concise invitation to a one-week partner pilot.');
+    await app.getByLabel('What you changed', { exact: true }).fill('Shortened the invitation and reduced its scope.');
+    await app.getByRole('button', { name: 'Save changes' }).click();
     await expect(app.locator('.approval-message')).toContainText('A smaller partner pilot');
     await expect(app.locator('.approval-message-body')).toContainText('Would a one-week pilot fit your team?');
-    await expect(app.getByLabel('Required approvals')).toContainText('0/1 approved');
+    await expect(app.getByLabel('Required approvals')).toContainText('Waiting for approval');
     await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
     await app.getByRole('button', { name: 'Approve draft' }).click();
-    await expect(app.locator('.approval-footer')).toContainText('authorization v2');
+    await expect(app.locator('.approval-footer')).toContainText('Approved');
+    await expect(app.locator('.approval-decision-header')).toContainText('Revised');
     await expect(app.locator('.approval-result-track')).toContainText('Not required');
   });
 
@@ -139,8 +140,8 @@ test.describe('enterprise approval inbox', () => {
     const app = page.getByRole('region', { name: 'Application' });
     await openRequest(app, /Review the partner pilot outreach draft/);
     await app.getByRole('button', { name: 'More approval actions' }).click();
-    await page.getByRole('menuitem', { name: 'Revise draft' }).click();
-    await expect(app.getByLabel('Revised email body')).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Edit email' }).click();
+    await expect(app.getByLabel(/^Email/)).toBeVisible();
     await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
     await app.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
@@ -152,8 +153,8 @@ test.describe('enterprise approval inbox', () => {
     const app = await openInbox(page);
     await expect(app.getByText('Illustrative demo')).toBeVisible();
     await expect(app.getByRole('button', { name: 'Priority' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(app.getByText('urgent', { exact: true })).toBeVisible();
-    await expect(app.getByText('0/1 Workspace owner').first()).toBeVisible();
+    await expect(app.getByText('Urgent', { exact: true })).toBeVisible();
+    await expect(app.getByText('Needs 1 approval').first()).toBeVisible();
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
 
     for (const approval of APPROVAL_CASES.filter((item) => item.type !== 'agent_governance')) {
@@ -248,8 +249,8 @@ test.describe('enterprise approval inbox', () => {
       await expect(result.getByText('Approved', { exact: true })).toBeVisible();
       await expect(result.getByText(approval.work, { exact: true })).toBeVisible();
       await expect(result.getByText(approval.effect, { exact: true })).toBeVisible();
-      if (approval.effect === 'No external effect') {
-        await expect(result.getByText('Illustrative demo only; no external provider is connected and no effect occurred.')).toBeVisible();
+      if (approval.effect === 'Nothing runs automatically') {
+        await expect(result.getByText('Illustrative demo only: nothing happened outside Hermes.')).toBeVisible();
       }
     });
   }
@@ -308,10 +309,10 @@ test.describe('enterprise approval inbox', () => {
     await openRequest(app, /Launch partner research sprint/);
 
     await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
-    const limits = app.getByLabel('Enforced run limits');
-    await expect(limits.getByText('25,000')).toBeVisible();
+    const limits = app.getByLabel('Usage limits');
+    await expect(limits.getByText('25,000 tokens')).toBeVisible();
     await expect(limits.getByText('8', { exact: true })).toBeVisible();
-    await expect(limits.getByText('5,000', { exact: true })).toBeVisible();
+    await expect(limits.getByText('5,000 tokens', { exact: true })).toBeVisible();
     await expect(limits.getByText('2', { exact: true })).toBeVisible();
     await expect(app.getByText('Illustrative scenario. Names, prices, sources and effects shown here are fictional')).toBeVisible();
     await expect(app.getByLabel('Required approvals').getByText('Workspace owner', { exact: true })).toBeVisible();
@@ -319,7 +320,7 @@ test.describe('enterprise approval inbox', () => {
 
     await app.getByRole('button', { name: 'Approve plan' }).click();
     await expect(app.getByText('Waiting for Alex Rivera').first()).toBeVisible();
-    await expect(app.getByText('Human authorization')).toHaveCount(0);
+    await expect(app.getByText('Your team’s decision')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('12');
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
@@ -334,12 +335,12 @@ test.describe('enterprise approval inbox', () => {
   test('authorization completion stays distinct from unavailable external effects', async ({ page }) => {
     const app = await openInbox(page);
     await openRequest(app, /Send pilot invitation/);
-    await app.getByRole('button', { name: 'Approve send' }).click();
+    await app.getByRole('button', { name: 'Approve and send' }).click();
     const result = app.locator('.approval-result-track');
-    await expect(result.getByText('Human authorization')).toBeVisible();
+    await expect(result.getByText('Your team’s decision')).toBeVisible();
     await expect(result.getByText('Approved', { exact: true })).toBeVisible();
-    await expect(result.getByText('No external effect', { exact: true })).toBeVisible();
-    await expect(result.getByText('Illustrative demo only; no external provider is connected and no effect occurred.')).toBeVisible();
+    await expect(result.getByText('Nothing runs automatically', { exact: true })).toBeVisible();
+    await expect(result.getByText('Illustrative demo only: nothing happened outside Hermes.')).toBeVisible();
   });
 
   test('request changes, revision, routing, chat cards and legacy details remain usable', async ({ page }) => {
@@ -348,21 +349,21 @@ test.describe('enterprise approval inbox', () => {
     await app.getByRole('button', { name: 'Request changes' }).click();
     await app.getByLabel('What needs to change').fill('Limit the grant to the source index rather than the whole folder.');
     await app.getByRole('button', { name: 'Send back for changes' }).click();
-    await expect(app.getByRole('button', { name: 'Revise proposal' })).toBeVisible();
-    await app.getByRole('button', { name: 'Revise proposal' }).click();
-    await app.getByLabel('Revised proposal summary').fill('Grant Rowan read-only access to the illustrative source index for 24 hours.');
-    await app.getByLabel('What changed').fill('Narrowed the named resource in the reviewed summary.');
-    await app.getByRole('button', { name: 'Submit v2' }).click();
-    await expect(app.locator('summary').filter({ hasText: 'Temporary access · v2' })).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Edit request' })).toBeVisible();
+    await app.getByRole('button', { name: 'Edit request' }).click();
+    await app.getByLabel('Short summary').fill('Grant Rowan read-only access to the illustrative source index for 24 hours.');
+    await app.getByLabel('What you changed').fill('Narrowed the named resource in the reviewed summary.');
+    await app.getByRole('button', { name: 'Save changes' }).click();
+    await expect(app.locator('summary').filter({ hasText: 'Temporary access · Revised' })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Allow access' })).toBeVisible();
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
     await openRequest(app, /Send pilot invitation/);
     await app.getByRole('button', { name: 'More approval actions' }).click();
-    await page.getByRole('menuitem', { name: 'Route reviewer' }).click();
-    await app.getByLabel('Eligible reviewer').selectOption({ label: 'Alex Rivera · finance, agent_admin' });
-    await app.getByLabel('Routing reason').fill('Alex owns review of this illustrative recipient group.');
-    await app.getByRole('button', { name: 'Route review' }).click();
+    await page.getByRole('menuitem', { name: 'Ask someone else' }).click();
+    await app.getByLabel('Who should decide').selectOption({ label: 'Alex Rivera' });
+    await app.getByLabel('Why', { exact: true }).fill('Alex owns review of this illustrative recipient group.');
+    await app.getByRole('button', { name: 'Ask them' }).click();
     await expect(app.getByText('Waiting for Alex Rivera').first()).toBeVisible();
 
     // Approval receipt cards resolve the same request id as Inbox rows.

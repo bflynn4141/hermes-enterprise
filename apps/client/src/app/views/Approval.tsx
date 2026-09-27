@@ -92,7 +92,13 @@ function RunPlanPreview({ view }: { view: ApprovalView }) {
         <Fact label="Hard cap" strong>{money(budget.cap_minor, budget.currency)}</Fact>
         <Fact label="Retries included">{budget.retries_included.toLocaleString()}</Fact>
       </div>
-      <p className="meta approval-enforcement-caps">Hermes stops the work if it reaches the hard cap or its usage limits, whichever comes first.</p>
+      <div className="approval-facts four approval-enforcement-caps" aria-label="Usage limits">
+        <Fact label="Model use, at most" strong>{budget.total_token_cap.toLocaleString()} tokens</Fact>
+        <Fact label="Model requests, at most" strong>{budget.call_cap.toLocaleString()}</Fact>
+        <Fact label="Longest single answer" strong>{budget.max_output_tokens_per_call.toLocaleString()} tokens</Fact>
+        <Fact label="At the same time" strong>{budget.max_parallel_calls.toLocaleString()}</Fact>
+      </div>
+      <p className="meta">Hermes stops the work at the hard cap or any of these limits, whichever comes first.</p>
       <div className="approval-two-col">
         <section><span className="approval-kicker">Participating agents</span>{details.participating_agents.map((agent) => {
           const identity = [view.identities.requester_agent, ...view.identities.target_agents].find((item) => item.id === agent.agent_id);
@@ -405,7 +411,7 @@ function ResultState({ view }: { view: ApprovalView }) {
     <section className="approval-result" aria-labelledby="approval-result-heading">
       <h2 className="section-title" id="approval-result-heading">Decision and result</h2>
       <div className="approval-result-track">
-        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{approvalStatusLabel(view.status)}</strong><small>Your team's decision</small></span>
+        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{approvalStatusLabel(view.status)}</strong><small>Your team’s decision</small></span>
         <Icon name="arrow" />
         <span data-state={view.work.status === 'completed' || view.work.status === 'admitted' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' || view.work.status === 'admitted' ? 'check' : 'history'} /> <strong>{work}</strong><small>{started ?? approvalWorkReason(view.work.reason) ?? 'What runs next'}</small></span>
         <Icon name="arrow" />
@@ -620,6 +626,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const signInStale = !resolved && (canApprove || canDecline || canRequestChanges) && decisionSignInStale(state.connection.authenticatedAt);
   // A reply to a role inbox is editable before it is approved, like a draft:
   // the edit is a new revision, and the server re-checks its recipient (C98).
+  const isReply = view.payload.approval_type === 'communication' && Boolean(view.payload.details.reply_to);
   const editableDraft = view.payload.approval_type === 'communication' && (view.payload.details.draft_only || Boolean(view.payload.details.reply_to)) && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
@@ -656,7 +663,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
 
       <div className="app-footer approval-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{resolved ? approvalStatusLabel(view.status) : revisionMode ? (editableDraft ? 'Editing the reply · Save your changes to continue' : 'Editing · Save your changes to continue') : approvalEffectCopy(view)}</span>
+          <span className="f-title">{resolved ? approvalStatusLabel(view.status) : revisionMode ? `Editing${editableDraft ? ` the ${isReply ? 'reply' : 'email'}` : ''} · Save your changes to continue` : approvalEffectCopy(view)}</span>
           {error && <span className="f-sub" role="alert">{error}</span>}
           {!error && !needsReauth && signInStale && <span className="f-sub">Recent sign-in required to decide · <a href={adapter.auth.stepUpUrl(typeof window === 'undefined' ? '/' : window.location.href, 'decision') ?? '#'} onClick={(event) => { event.preventDefault(); signInAgain(); }}>Sign in again</a></span>}
         </div>
@@ -667,13 +674,13 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           <span className="approval-more">
             <button ref={menuAnchor} type="button" className="icon-btn" aria-label="More approval actions" aria-expanded={menu} onClick={() => setMenu((open) => !open)}><Icon name="more" /></button>
             <Popover open={menu} onClose={() => setMenu(false)} anchorRef={menuAnchor} align="right" above width={240} label="Approval actions" portal className="menu">
-              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? 'Edit reply' : 'Edit request'}</MenuItem>}
+              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? (isReply ? 'Edit reply' : 'Edit email') : 'Edit request'}</MenuItem>}
               {canDecline && <MenuItem icon="close" onClick={() => { setMenu(false); decide('decline'); }}>Decline</MenuItem>}
               {view.capabilities.can_route && <MenuItem icon="users" onClick={() => { setMenu(false); setRouteMode(true); }}>Ask someone else</MenuItem>}
             </Popover>
           </span>
         )}
-        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? 'Edit reply' : 'Edit request'}</Button>}
+        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? (isReply ? 'Edit reply' : 'Edit email') : 'Edit request'}</Button>}
       </div>
 
       {changeMode && (
@@ -684,7 +691,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
       )}
       {revisionMode && (
         <div className={`approval-inline-form${editableDraft ? ' approval-draft-revision' : ''}`} role="region" aria-label="Revise proposal">
-          {editableDraft && <><label><span>Subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>Reply</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
+          {editableDraft && <><label><span>Subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>{isReply ? 'Reply' : 'Email'}</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
           <label><span>Short summary</span><textarea value={revisionSummary} onChange={(event) => setRevisionSummary(event.target.value)} maxLength={1000} autoFocus /></label>
           <label><span>What you changed</span><input value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} maxLength={2000} /></label>
           <Button onClick={() => { clearApprovalRevisionDraft(revisionDraftStorage()); setRevisionMode(false); setRevisionNote(''); setRevisionSummary(view.payload.summary); if (view.payload.approval_type === 'communication') { setRevisionSubject(view.payload.details.subject ?? ''); setRevisionBody(view.payload.details.body); } }}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Save changes</Button>

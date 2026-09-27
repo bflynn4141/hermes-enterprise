@@ -94,6 +94,7 @@ const RUN_ERROR_SENTENCES: Readonly<Record<string, string>> = {
   hermes_provider_quota: MODEL_QUOTA,
   hermes_provider_rejected: MODEL_REJECTED,
   provider_unavailable: MODEL_DOWN,
+  provider_rate_limited: MODEL_BUSY,
   provider_5xx: MODEL_DOWN,
   provider_rejected: MODEL_REJECTED,
   rate_limited: MODEL_BUSY,

@@ -21,7 +21,7 @@ test('confirmed context can be added, edited, revisited and removed', async ({ p
   await page.getByRole('button', { name: 'Edit →', exact: true }).click();
   await page.getByRole('textbox', { name: 'Context', exact: true }).fill('Developer infrastructure teams.');
   await page.getByRole('button', { name: 'Save note', exact: true }).click();
-  await expect(page.getByText('Confirmed by Brian · Revision 2')).toBeVisible();
+  await expect(page.getByText('Confirmed by Brian · Edited')).toBeVisible();
   await page.getByRole('button', { name: 'Remove', exact: true }).click();
   await page.getByRole('button', { name: 'Remove note', exact: true }).click();
   await expect(page.getByText('No confirmed notes yet.')).toBeVisible();

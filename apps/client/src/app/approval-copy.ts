@@ -143,7 +143,7 @@ export function approvalDecisionPrompt(view: ApprovalView): string {
 }
 
 export function approvalEffectCopy(view: ApprovalView): string {
-  if (isCommunicationDraft(view)) return 'Approving saves the reply · Nothing is sent';
+  if (isCommunicationDraft(view)) return view.payload.approval_type === 'communication' && view.payload.details.reply_to ? 'Approving saves the reply · Nothing is sent' : 'Approving saves the email · Nothing is sent';
   if (view.effect.status === 'simulated') return 'Test mode · Nothing was sent';
   if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
     if (view.status !== 'pending') return 'Your decision is saved · Sending is shown below';
@@ -225,6 +225,9 @@ export function approvalWorkReason(reason: string | null): string | null {
  * so the reviewer gets a sentence chosen from the effect's state instead.
  */
 export function approvalEffectSentence(view: ApprovalView): string {
+  if (view.payload.illustrative && ['unavailable', 'not_required', 'waiting'].includes(view.effect.status)) {
+    return 'Illustrative demo only: nothing happened outside Hermes.';
+  }
   const reply = view.payload.approval_type === 'communication' && Boolean(view.payload.details.reply_to);
   switch (view.effect.status) {
     case 'simulated': return 'This is a test workspace, so nothing was actually sent.';

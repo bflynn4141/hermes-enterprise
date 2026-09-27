@@ -149,7 +149,7 @@ test('notification preferences ack only after a successful save', async ({ page 
   await page.goto('/#settings/Notifications');
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByText('Emails not turned on', { exact: true })).toBeVisible();
-  await expect(app.getByText(/does not send approval, blocked-work or digest emails/)).toBeVisible();
+  await expect(app.getByText(/does not send notification emails yet/)).toBeVisible();
   const toggle = app.getByRole('switch', { name: 'Approval requests' });
   const before = await toggle.isChecked();
   await toggle.click();

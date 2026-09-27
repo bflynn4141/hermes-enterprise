@@ -85,6 +85,17 @@ export function refusalFor(error: unknown, context: RefusalContext = {}): Refusa
     case 'run_in_flight':
       return say(`${agent} is still working on your last message. Wait for it to finish, or stop it first.`);
 
+    case 'context_changed':
+      return say('This question changed. Check your answer and try again.', true);
+    case 'context_source_changed':
+      return say('That source changed since you picked it. Select it again.', true);
+    case 'context_source_missing':
+      return say(`That source is no longer available to ${agent}. Pick another one.`, true);
+    case 'context_source_unready':
+      return say('That source is still being read, or couldn’t be read. Wait a moment or replace it.', true);
+    case 'context_source_budget':
+      return say('Those sources are too long to use together. Pick fewer or shorter ones.', true);
+
     case 'reauth_required':
       return say('Confirm it’s you before sending this.', true);
 

@@ -33,7 +33,7 @@ test.describe('Hermes runtime capacity setup', () => {
     await expect(page).toHaveURL(/runtimeCapacity=stepup/);
 
     await app.getByLabel('Job role').selectOption('finance-agent');
-    await app.getByLabel('Agent ID', { exact: true }).fill(ENTERPRISE_AGENT_ID);
+    await app.getByLabel(/^Agent ID/).fill(ENTERPRISE_AGENT_ID);
     await app.getByRole('button', { name: 'Create setup code' }).click();
 
     const credential = app.getByRole('group', { name: 'New setup code' });
@@ -44,7 +44,7 @@ test.describe('Hermes runtime capacity setup', () => {
     await app.getByRole('button', { name: 'Refresh' }).click();
     await expect(app.getByText('d'.repeat(64))).toHaveCount(0);
 
-    await app.getByLabel('Cloud agent ID', { exact: true }).fill('cmu5pw0yq0006gm0a7e2njary');
+    await app.getByLabel(/^Cloud agent ID/).fill('cmu5pw0yq0006gm0a7e2njary');
     await expect(app.locator('.runtime-grant-state strong').filter({ hasText: /^Finance$/ })).toBeVisible();
     await app.getByLabel('Name for this agent').fill('Finance pool 1');
     await app.getByLabel('Connection address').fill('https://not-ready.example.test/plugin');
