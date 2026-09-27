@@ -47,8 +47,8 @@ const DIAGNOSTIC_CHECKPOINTS = new Set([
   'local_delivery_commit_failed',
 ]);
 const DIAGNOSTIC_REASONS = new Set([
-  // Roles chosen on the invitation (decision C93).
-  'unknown_role', 'too_many_roles',
+  // Roles chosen on the invitation (decision C93), and the recent sign-in they need (C97).
+  'unknown_role', 'too_many_roles', 'reauth_required',
   'bad_body', 'bad_id', 'bad_email', 'admin_required', 'rate_limited', 'not_configured',
   'bad_role_template', 'member_setup_unavailable', 'member_setup_role_unavailable',
   'invitation_mode_conflict', 'invitation_role_conflict',
@@ -90,8 +90,8 @@ export function logInvitationDiagnostic(input: InvitationDiagnostic): void {
 }
 
 const ROUTE_REASONS = new Set([
-  // Roles chosen on the invitation (decision C93).
-  'unknown_role', 'too_many_roles',
+  // Roles chosen on the invitation (decision C93); roles for someone already here (C97).
+  'unknown_role', 'too_many_roles', 'already_member',
   'bad_body',
   'bad_id',
   'bad_email',
@@ -139,6 +139,10 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   no_workspace: 'Workspace not found.',
   bad_workspace_id: 'Workspace not found.',
   invitation_failed: 'The invitation could not be recorded.',
+  reauth_required: 'Inviting someone with roles needs a recent sign-in.',
+  already_member: 'This person is already a member. Change their roles in Manage.',
+  unknown_role: 'One of those roles no longer exists.',
+  too_many_roles: 'A person can hold at most 32 roles.',
 };
 
 export class InvitationRequestError extends Error {

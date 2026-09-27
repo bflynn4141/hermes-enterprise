@@ -12,8 +12,10 @@ import { ADMIN, MAX_APPROVALS, type ApprovalRoute, type ApprovalRouteKey, type A
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminApprovalsWorkflow } from './AdminApprovalsWorkflow.js';
 import { roleHolders, sortRoles } from './AdminRoles.js';
 import { useWorkspaceLists } from './lists.js';
+import { useStepUp } from './use-step-up.js';
 import {
   ADMIN_APPROVALS_VIEW,
   AMOUNT_PROBLEM,
@@ -26,7 +28,6 @@ import {
   approvalRouteErrorMessage,
   canRequireEachGroup,
   minorToAmount,
-  needsSignIn,
   requesterQuestion,
   roleNameMap,
   ruleSummary,
@@ -41,13 +42,9 @@ import './admin-roles.css';
 import './admin-approvals.css';
 
 function Problem({ error }: { error: unknown }) {
-  const adapter = useAdapter();
-  const stepUp = () => {
-    const url = adapter.auth.stepUpUrl(window.location.href, 'approval_routes');
-    if (url) window.location.assign(url);
-  };
+  const { needsSignIn, signIn } = useStepUp('approval_routes');
   return <p className="admin-roles-problem" role="alert">
-    {approvalRouteErrorMessage(error)} {needsSignIn(error) && <Button link onClick={stepUp}>Sign in again</Button>}
+    {approvalRouteErrorMessage(error)} {needsSignIn(error) && <Button link onClick={signIn}>Sign in again</Button>}
   </p>;
 }
 
@@ -103,6 +100,7 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     </div></header>
     {group('Decisions', 'Closing a request an agent prepared. One person decides unless you ask for more.', decisions)}
     {group('Actions after approval', 'What happens once a request is approved. These can need more than one person.', actions)}
+    <AdminApprovalsWorkflow />
   </>;
 }
 

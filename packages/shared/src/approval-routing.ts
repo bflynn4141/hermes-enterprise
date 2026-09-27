@@ -17,7 +17,8 @@
 // A workspace with no saved rule gets the default, which is exactly what the
 // product enforced before this screen existed. Approval requests raised by
 // workflows (outreach drafts, record changes, Shared Intelligence) keep their
-// own reviewers; they are not on this list yet.
+// own reviewers; `WORKFLOW_APPROVALS` at the end of this file lists them so the
+// screen can show them read-only (decision C97).
 import { z } from 'zod';
 import { roleSlugSchema } from './roles.js';
 
@@ -267,3 +268,48 @@ export function mayApprove(rule: Pick<ApprovalRouteRule, 'admins' | 'roles'>, pe
 export function approvalsFor<T extends Pick<ApprovalRoute, 'key' | 'label' | 'rule'> & { threshold?: ApprovalThreshold | null }>(routes: readonly T[], person: { role: string; reviewer_roles: readonly string[] }): T[] {
   return routes.filter((route) => mayApprove(route.rule, person) || (route.threshold ? mayApprove(route.threshold.rule, person) : false));
 }
+
+/**
+ * Approvals a workflow raises with its own reviewer, which an Admin cannot
+ * route yet (decision C97). The Approvals screen lists them read-only so it
+ * never hides who reviews something. Each reviewer is written in plain words
+ * from the code that sets it:
+ * - outreach: `partner-screening/automation.ts`, the agent owner's member row;
+ * - first search: `domain/member-agent-coordination.ts`, the joining member;
+ * - engagement records: `partner-workflow/service.ts`, the Finance principal;
+ * - Shared Intelligence: `shared-intelligence/service.ts`, an Admin other than
+ *   the proposer first, then a Shared Intelligence reviewer.
+ */
+export interface WorkflowApproval {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string;
+  readonly reviewer: string;
+}
+
+export const WORKFLOW_APPROVALS: readonly WorkflowApproval[] = [
+  {
+    key: 'partner_outreach',
+    label: 'Partner outreach email',
+    description: 'An email an agent wrote to a partner, before it is saved as a draft or sent.',
+    reviewer: 'the person the agent works for',
+  },
+  {
+    key: 'first_search',
+    label: 'A new member’s first search',
+    description: 'The first capped partner search a new member’s agent runs.',
+    reviewer: 'the new member',
+  },
+  {
+    key: 'partner_engagement_record',
+    label: 'Partner engagement record changes',
+    description: 'Changes to an admitted partner’s engagement terms before Finance relies on them.',
+    reviewer: 'the Finance person on the handoff',
+  },
+  {
+    key: 'shared_intelligence',
+    label: 'Shared Intelligence publication',
+    description: 'Sharing what one team’s agent learned with other teams.',
+    reviewer: 'another Admin, or a Shared Intelligence reviewer if there is no other Admin',
+  },
+];

@@ -11,7 +11,7 @@ import {
   partnerWorkflowSetupSchema,
   partnerWorkflowViewV2Schema,
 } from '@hermes/shared';
-import { requireCsrf, requireOrigin } from '../auth.js';
+import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import type { Env } from '../env.js';
 import { configurePartnerWorkflow, PartnerWorkflowError } from '../partner-workflow/service.js';
 import { resolveEnterpriseSkillAssignment } from '../enterprise-skills/service.js';
@@ -64,6 +64,7 @@ export async function getPartnerWorkflow(c: Context<{ Bindings: Env }>): Promise
     try { return await loadPartnerWorkflowViewV2(work.tx, work.workspaceId, work.userId); }
     catch (error) { return routeError(error); }
   });
+  c.header('Cache-Control', 'no-store');
   return c.json(partnerWorkflowViewV2Schema.parse(view));
 }
 
@@ -73,6 +74,19 @@ export async function configurePartnerWorkflowRoute(c: Context<{ Bindings: Env }
   if (!parsed.success) throw new RouteError('The two employee/agent bindings are invalid.', 'bad_partner_workflow_setup', 422);
   const view = await inWorkspace(c, async (work) => {
     work.requireAdmin('applying employee role templates');
+    // Saving the roles grants the Finance role, which decides partner invoices
+    // and confirms payments: the same bar as `PATCH /members/:id` (decision
+    // C97). A recent sign-in, and no Admin handing Finance to themself.
+    requireStepUp(work.session);
+    if (parsed.data.finance.principal_user_id === work.userId) {
+      const held = await work.tx.query(
+        `SELECT 1 FROM members WHERE workspace_id = $1 AND user_id = $2 AND status = 'active' AND 'finance' = ANY (reviewer_roles)`,
+        [work.workspaceId, work.userId],
+      );
+      if (held.rows.length === 0) {
+        throw new RouteError('another Admin gives you the Finance role', 'self_change', 409);
+      }
+    }
     try {
       await configurePartnerWorkflow(work.tx, work.workspaceId, work.userId, parsed.data);
       return await loadPartnerWorkflowViewV2(work.tx, work.workspaceId, work.userId);
@@ -142,6 +156,10 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
 
   const setup = await inWorkspace(c, async (work) => {
     work.requireAdmin('enabling new partner workflow admission');
+    // Turning the handoff on starts routing partner invoices to the Finance
+    // person, so it takes a recent sign-in like saving the roles (C97).
+    // Turning it off stays one click.
+    requireStepUp(work.session);
     const roles = await work.tx.query<{
       role: AdmissionRole; team_id: string; agent_id: string; principal_user_id: string;
       role_template_key: string; role_template_version: string;

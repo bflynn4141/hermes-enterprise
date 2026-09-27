@@ -110,9 +110,9 @@ interface MockOptions {
   providerKeysLocked?: boolean;
   /** Browser-only fixture for the Admin capacity step-up and lifecycle flow. */
   runtimeCapacityStepUp?: boolean;
-  /** Admin → Roles writes answer `reauth_required` until the step-up cookie is set. */
+  /** Admin → Roles writes, and saving the handoff roles or turning it on, answer `reauth_required` until the step-up cookie is set. */
   roleWritesStepUp?: boolean;
-  /** Approval rule and member role writes answer `reauth_required` until the step-up cookie is set. */
+  /** Approval rule writes, member role writes and member removal answer `reauth_required` until the step-up cookie is set. */
   approvalWritesStepUp?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
@@ -149,6 +149,8 @@ interface MockOptions {
   memberInvitations?: 'legacy_delivery' | 'setup_only';
   /** Existing unfinished setup shown while the deployment is flag-off. */
   pausedMemberSetup?: boolean;
+  /** Setup-only invitations that also offer the Finance job, as with verified Finance capacity. */
+  memberSetupFinance?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
@@ -1317,7 +1319,7 @@ export function createMockBackend(input: MockOptions = {}) {
         turn_attachments: Boolean(options.agentSettings),
         automated_triggers: false,
         member_invitations: setupOnly
-          ? { mode: 'setup_only' as const, role_templates: ['partnerships-agent' as const] }
+          ? { mode: 'setup_only' as const, role_templates: options.memberSetupFinance ? ['partnerships-agent' as const, 'finance-agent' as const] : ['partnerships-agent' as const] }
           : { mode: 'legacy_delivery' as const, role_templates: [] },
       },
       heads: { session: head.toString(), workspace: head.toString() },
@@ -1820,6 +1822,11 @@ export function createMockBackend(input: MockOptions = {}) {
         return json(row);
       }
       if (method === 'DELETE') {
+        // Same order as `removeMember`: Admin, a recent sign-in, never yourself.
+        if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+        const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+        if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+        if (row.user_id === viewerUserId) return fail(409, 'self_change', 'nobody removes themselves');
         members.splice(index, 1);
         return new Response(null, { status: 204 });
       }
@@ -1927,7 +1934,7 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!setupOnly && body.role_template_key !== undefined) {
         return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
       }
-      if (setupOnly && body.role_template_key === 'finance-agent') {
+      if (setupOnly && body.role_template_key === 'finance-agent' && !options.memberSetupFinance) {
         return fail(409, 'member_setup_role_unavailable', 'Finance agent setup is not available yet.');
       }
       if (options.memberWrites === 'fail') {
@@ -1938,6 +1945,11 @@ export function createMockBackend(input: MockOptions = {}) {
         }, 409);
       }
       if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      // An invitation that grants roles needs a recent sign-in (C97); a plain one does not.
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+      if ((requestedRoles.length > 0 || body.role_template_key === 'finance-agent') && options.approvalWritesStepUp && !stepUpSatisfied) {
+        return fail(401, 'reauth_required', 'Recent sign-in required.');
+      }
       const unknownRoles = requestedRoles.filter((slug) => !roles.some((role) => role.slug === slug));
       if (unknownRoles.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknownRoles.join(', ')}`);
       const row: InvitationEntity = {
@@ -1946,7 +1958,7 @@ export function createMockBackend(input: MockOptions = {}) {
         role_slugs: requestedRoles,
         delivery_status: setupOnly ? 'not_required' : 'queued',
         ...(setupOnly ? {
-          role_template_key: 'partnerships-agent' as const,
+          role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' as const : 'partnerships-agent' as const,
           provisioning: {
             id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
             preparation: 'queued' as const, delivery: 'not_queued' as const,
@@ -2137,12 +2149,24 @@ export function createMockBackend(input: MockOptions = {}) {
     }
     if (p('/skills')) return page(skills);
     if (p('/partner-workflow/configure') && method === 'POST') {
+      // Same order as apps/worker/src/routes/partner-workflow.ts: Admin, a
+      // recent sign-in, then no Admin handing Finance to themself (C97).
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_roles_stepup=1');
+      if (options.roleWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      const financeUser = (body.finance as { principal_user_id?: unknown } | undefined)?.principal_user_id;
+      const viewer = members.find((member) => member.user_id === viewerUserId);
+      if (financeUser === viewerUserId && !viewer?.reviewer_roles.includes('finance')) {
+        return fail(409, 'self_change', 'another Admin gives you the Finance role');
+      }
       partnerConfigured = true;
       return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
     }
     if (p('/partner-workflow/admission') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      if (body.enabled === true && options.roleWritesStepUp && !(typeof document === 'undefined' || document.cookie.includes('hermes_roles_stepup=1'))) {
+        return fail(401, 'reauth_required', 'Recent sign-in required.');
+      }
       if (body.enabled === true && !partnerConfigured) return fail(409, 'workflow_not_configured', 'Configure both roles before enabling admission.');
       if (body.enabled === true && options.workflowActivation === 'native-mismatch') {
         return fail(409, 'workflow_readiness_incomplete', 'A native profile did not attest the reviewed skill and tool inventory.');

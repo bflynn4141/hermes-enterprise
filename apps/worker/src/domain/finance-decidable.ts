@@ -6,6 +6,8 @@
  * prefixes (an agent's `propose_request` gets `email:`, `name:` or
  * `partner-candidate:`; see engine/tools.ts `subjectKeyFor`), while an agent
  * can put anything, including `workflow_provenance`, in a payload.
+ *
+ * The SQL fragment reads the request as `r`: callers alias `requests r`.
  */
 export const FINANCE_DECIDABLE_SQL = `(
   (r.kind='invoice' AND r.subject_key LIKE 'partner-invoice-handoff:%')

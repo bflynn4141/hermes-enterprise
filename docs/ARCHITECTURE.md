@@ -526,7 +526,7 @@ Five guards, in this order:
 | An allowlisted `Origin`, **required** | The request came from a page we serve. Every other state-changing route tolerates a missing `Origin`; this one does not | 403 `forbidden_origin` |
 | `X-Requested-From: inbox` | Which surface of our own client issued it. Not authentication — a custom header also forces a CORS preflight, and it catches *our* mistakes: a replayed POST, a route that copied this one | 403 `wrong_surface` |
 | Double-submit CSRF | The `hermes_csrf` cookie and the `X-CSRF-Token` header agree | 403 `csrf_failed` |
-| An Admin session | Read from `members` inside the transaction, keyed on the workspace in the path. A Member sees "Admin decision required" | 403 `admin_required` |
+| The approval rule | Read from `members` and the workspace's rule for the request's kind inside the transaction, keyed on the workspace in the path (C93). Admins by default; an Admin can route the decision to roles under Approvals. A handoff request also goes to the Finance person it was handed to | 403 `admin_required`, `approver_required` or `own_request` |
 | Step-up, five minutes | The caller's WorkOS `auth_time` is recent. WorkOS keeps `sid` stable across reauthentication and advances `auth_time`; `/auth/callback` persists that claim in `auth_sessions.authenticated_at`. Token `iat` is not used because ordinary refreshes advance it too | 401 `reauth_required` |
 
 Then one transaction: lock the request; `INSERT decisions` (UNIQUE on
@@ -549,6 +549,9 @@ decision that exists. Not an error: the person wants the outcome, not a report
 about a race they did not know they were in.
 
 ### What a decision implies
+
+Who may carry out each effect below is its default; an Admin can change it
+under Approvals (C93), and the rule is read again at each press.
 
 | Decided | Effects recorded, all `pending` | Document |
 |---|---|---|

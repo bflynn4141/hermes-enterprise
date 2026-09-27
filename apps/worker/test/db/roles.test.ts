@@ -160,4 +160,46 @@ describe('workspace roles', () => {
     );
     expect(deleted.rows[0]?.deleted).toBe(1);
   });
+
+  it('records a change of a member’s roles in History, and nothing when they stay the same', async () => {
+    const fx = await seedWorkspace();
+    const listed = await asUser(env(), fx.adminId, `/w/${fx.workspaceId}/members`);
+    // Emails and roles are never cached.
+    expect(listed.headers.get('cache-control')).toBe('no-store');
+    expect((await asUser(env(), fx.adminId, `/w/${fx.workspaceId}/invitations`)).headers.get('cache-control')).toBe('no-store');
+    const member = ((await listed.json()) as { items: { id: string; user_id: string }[] }).items.find((m) => m.user_id === fx.memberId)!;
+    const changes = () => asTenant(fx, async (c) =>
+      (await c.query<{ actor_user_id: string }>(
+        `SELECT actor_user_id FROM events WHERE workspace_id = $1 AND kind = 'member.role_changed' AND member_id = $2`,
+        [fx.workspaceId, member.id],
+      )).rows);
+
+    expect((await send(fx, fx.adminId, 'PATCH', `/members/${member.id}`, { reviewer_roles: ['legal'] })).status).toBe(200);
+    expect(await changes()).toEqual([{ actor_user_id: fx.adminId }]);
+    // The same roles in another order are not a change.
+    expect((await send(fx, fx.adminId, 'PATCH', `/members/${member.id}`, { reviewer_roles: ['legal'] })).status).toBe(200);
+    expect(await changes()).toHaveLength(1);
+    expect((await send(fx, fx.adminId, 'PATCH', `/members/${member.id}`, { reviewer_roles: ['legal', 'access'] })).status).toBe(200);
+    expect((await send(fx, fx.adminId, 'PATCH', `/members/${member.id}`, { reviewer_roles: ['access', 'legal'] })).status).toBe(200);
+    expect(await changes()).toHaveLength(2);
+  });
+
+  it('refuses a holder who already has 32 roles, and never caches a role write', async () => {
+    const fx = await seedWorkspace();
+    const slugs = Array.from({ length: 32 }, (_, index) => `cap-${index}`);
+    await asTenant(fx, async (c) => {
+      for (const slug of slugs) {
+        await c.query(`INSERT INTO workspace_roles (workspace_id, slug, name, description) VALUES ($1, $2, $2, '')`, [fx.workspaceId, slug]);
+      }
+      await c.query(`UPDATE members SET reviewer_roles = $2 WHERE workspace_id = $1 AND user_id = $3`, [fx.workspaceId, slugs, fx.memberId]);
+    });
+    const legal = (await roles(fx)).find((item) => item.slug === 'legal')!;
+    const full = await send(fx, fx.adminId, 'PUT', `/roles/${legal.id}/members`, { user_ids: [fx.memberId] });
+    expect(full.status).toBe(422);
+    expect(await full.json()).toMatchObject({ reason: 'too_many_roles' });
+
+    const created = await send(fx, fx.adminId, 'POST', '/roles', { name: 'Audit' });
+    expect(created.status).toBe(201);
+    expect(created.headers.get('cache-control')).toBe('no-store');
+  });
 });

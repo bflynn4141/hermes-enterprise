@@ -24,3 +24,6 @@
 .admin-approvals-amount .field { flex: 1 1 200px; min-width: 0; }
 .admin-approvals-amount .admin-approvals-currency { flex: 0 1 160px; }
 .admin-settings-card-body > p.meta { margin: 8px 0 0; font-size: 13px; line-height: 1.6; }
+/* "Set by the workflow" rows look like the rule rows but are not controls. */
+.admin-approvals-static { cursor: default; }
+.admin-approvals-static:hover { background: transparent; }

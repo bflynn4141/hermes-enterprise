@@ -81,6 +81,7 @@ export async function createWorkspaceRole(c: Context<{ Bindings: Env }>): Promis
     await audit(work);
     return requireRole(work, id);
   });
+  c.header('Cache-Control', 'no-store');
   return c.json(workspaceRoleSchema.parse(role), 201);
 }
 
@@ -107,6 +108,7 @@ export async function patchWorkspaceRole(c: Context<{ Bindings: Env }>): Promise
     await audit(work);
     return requireRole(work, roleId);
   });
+  c.header('Cache-Control', 'no-store');
   return c.json(workspaceRoleSchema.parse(role));
 }
 
@@ -142,6 +144,7 @@ export async function putWorkspaceRoleMembers(c: Context<{ Bindings: Env }>): Pr
     }
     return requireRole(work, roleId);
   });
+  c.header('Cache-Control', 'no-store');
   return c.json(workspaceRoleSchema.parse(role));
 }
 
@@ -177,5 +180,6 @@ export async function deleteWorkspaceRole(c: Context<{ Bindings: Env }>): Promis
     await work.tx.query(`DELETE FROM workspace_roles WHERE workspace_id = $1 AND id = $2`, [work.workspaceId, roleId]);
     await audit(work);
   });
+  c.header('Cache-Control', 'no-store');
   return c.body(null, 204);
 }
