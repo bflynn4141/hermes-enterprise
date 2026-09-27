@@ -51,7 +51,15 @@ describe('supported operation consent',()=>{
   });
   it('offers only registered tools and no effects or authorization commands',()=>{
     for(const operation of AGENT_OPERATION_CATALOG) for(const name of operation.tool_names) expect(TOOLS.some(t=>t.name===name)).toBe(true);
-    for(const name of ['pay_invoice','sign_agreement','send_email','grant_access','propose_approval','fetch_url']) expect(agentOperationForTool(name)).toBeUndefined();
+    for(const name of ['pay_invoice','sign_agreement','send_email','grant_access','fetch_url']) expect(agentOperationForTool(name)).toBeUndefined();
+  });
+  it('covers requesting approval and both sides of a handoff, and each tool has one operation (C96)',()=>{
+    expect(agentOperationForTool('propose_approval')?.id).toBe('request_approval');
+    expect(agentOperationForTool('publish_partner_invoice_review')?.id).toBe('publish_handoff');
+    expect(agentOperationForTool('get_partner_handoff_result')?.id).toBe('read_handoff_results');
+    const names=AGENT_OPERATION_CATALOG.flatMap(operation=>[...operation.tool_names]);
+    expect(new Set(names).size).toBe(names.length);
+    for(const operation of AGENT_OPERATION_CATALOG) expect(operationPermissionPatchSchema.safeParse({revision:0,operation_id:operation.id,require_human_approval:true}).success).toBe(true);
   });
   it('rejects invented operations, stale-shaped revisions, and coercion',()=>{
     for(const input of [{revision:0,operation_id:'pay_invoice',require_human_approval:false},{revision:-1,operation_id:'save_review_notes',require_human_approval:false},{revision:0,operation_id:'save_review_notes',require_human_approval:'false'}]) expect(operationPermissionPatchSchema.safeParse(input).success).toBe(false);

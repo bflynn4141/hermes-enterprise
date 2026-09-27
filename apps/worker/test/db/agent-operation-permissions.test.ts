@@ -82,6 +82,38 @@ describe('agent operation permissions',()=>{
       expect(count.rows[0].count).toBe(0);
     }finally{await db.close();}
   });
+  it('request_approval is off by default and, when on, parks a propose_approval call until a person decides (C96)',async()=>{
+    const {fx,runId}=await setup();const {env:e}=makeEnv();
+    await withClient('owner',async c=>{await c.query('BEGIN');await setTenant(c,fx.workspaceId,fx.adminId);
+      await c.query(`INSERT INTO agent_capabilities(workspace_id,agent_id,kind,title,tool_names) VALUES($1,$2,'can','Ask',ARRAY['propose_approval'])`,[fx.workspaceId,fx.agentId]);
+      await c.query('COMMIT');});
+    const listed=await(await asUser(e,fx.adminId,path(fx))).json() as {operations:{id:string;require_human_approval:boolean}[]};
+    expect(listed.operations).toContainEqual(expect.objectContaining({id:'request_approval',require_human_approval:false}));
+    const db=new RuntimeDb(env,fx.workspaceId,'request-approval');
+    const parked=()=>readTenant(fx.workspaceId,fx.adminId,c=>c.query<{id:string;operation_id:string;status:string}>('SELECT id,operation_id,status FROM agent_operation_approvals WHERE run_id=$1',[runId]));
+    const runStatus=async()=>(await readTenant(fx.workspaceId,fx.adminId,c=>c.query<{status:string}>('SELECT status FROM runs WHERE id=$1',[runId]))).rows[0]!.status;
+    try{
+      const remote=crypto.randomUUID();await db.bindRun(runId,1,remote,fx.sessionId,`agent-${fx.agentId}`);
+      // Default: the call runs (and fails validation on its own), nothing is parked.
+      const unparked=await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,{runtime_run_id:remote,tool_call_id:'default-call',name:'propose_approval',arguments:{}});
+      expect(unparked.reply).not.toEqual({status:'pending'});
+      expect((await parked()).rows).toEqual([]);
+
+      expect((await asUser(e,fx.adminId,path(fx),{method:'PATCH',body:{revision:0,operation_id:'request_approval',require_human_approval:true}})).status).toBe(200);
+      const call={runtime_run_id:remote,tool_call_id:'switched-call',name:'propose_approval',arguments:{}};
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual({status:'pending'});
+      const rows=(await parked()).rows;
+      expect(rows).toEqual([expect.objectContaining({operation_id:'request_approval',status:'pending'})]);
+      expect(await runStatus()).toBe('waiting');
+      // A retry before the decision stays parked and writes nothing.
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual({status:'pending'});
+
+      expect((await asUser(e,fx.adminId,`${path(fx)}/approvals/${rows[0]!.id}`,{method:'POST',body:{decision:'approved'}})).status).toBe(200);
+      const resumed=await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call);
+      expect(resumed.reply).not.toEqual({status:'pending'});
+      expect(await runStatus()).toBe('working');
+    }finally{await db.close();}
+  });
   it('agent cannot approve itself or alter policy and foreign tenants cannot read pending args',async()=>{
     const {fx,runId}=await setup();const other=await seedWorkspace();const {env:e}=makeEnv();
     await asUser(e,fx.adminId,path(fx),{method:'PATCH',body:{revision:0,operation_id:'prepare_drafts',require_human_approval:true}});

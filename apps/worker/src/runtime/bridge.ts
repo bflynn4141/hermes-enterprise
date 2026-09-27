@@ -261,6 +261,31 @@ async function dispatchRuntimeApprovalCall(
     if (replay?.result !== null && replay?.result !== undefined) {
       return { run, events: prepared.events, reply: { ok: replay.ok ?? true, content: replay.result } };
     }
+    // Operation approval (C96 made `propose_approval` switchable): park the
+    // call exactly as `dispatchRuntimeCall` does, with no tool result, and let
+    // the runtime retry the same call after a person decides.
+    if (outcome.ok && outcome.waiting?.key.startsWith('operation_approval:')) {
+      const { key, label } = outcome.waiting;
+      const events = [...prepared.events];
+      await db.startRuntimeWait(run.id, run.attempt);
+      if (run.status !== 'waiting') {
+        await db.setRunStatus(run.id, 'waiting', { waitingFor: key, waitingLabel: label });
+        events.push(...await db.emit([{
+          kind: 'run.status', sessionId: run.sessionId,
+          payload: { run_id: run.id, attempt: run.attempt, status: 'waiting', waiting_for: key, waiting_label: label },
+        }]));
+      }
+      return { run, events, reply: { status: 'pending' } };
+    }
+    const resumed: EmittedEvent[] = [];
+    if (run.status === 'waiting' && run.waitingFor?.startsWith('operation_approval:')) {
+      await db.endRuntimeWait(run.id, run.attempt);
+      await db.setRunStatus(run.id, 'working', { waitingFor: null, waitingLabel: null });
+      resumed.push(...await db.emit([{
+        kind: 'run.status', sessionId: run.sessionId,
+        payload: { run_id: run.id, attempt: run.attempt, status: 'working' },
+      }]));
+    }
     const content = outcome.ok
       ? toolResultEnvelope(call.name, TOOL_SOURCE[call.name] ?? 'engine', outcome.data, now())
       : toolResultEnvelope(call.name, 'engine', { error: outcome.error }, now());
@@ -272,7 +297,7 @@ async function dispatchRuntimeApprovalCall(
       runId: run.id, turn: prepared.turn, stepId: prepared.stepId, label: call.name,
       state: outcome.ok ? 'done' : 'failed', toolCallId: prepared.callId,
     });
-    const events = [...prepared.events, ...await db.emit([{
+    const events = [...prepared.events, ...resumed, ...await db.emit([{
       kind: 'run.step', sessionId: run.sessionId,
       payload: {
         run_id: run.id, attempt: run.attempt, turn: prepared.turn, step_id: prepared.stepId,
