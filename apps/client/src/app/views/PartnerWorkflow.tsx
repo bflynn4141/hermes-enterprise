@@ -16,6 +16,7 @@ import { RestError } from '../../model/rest.js';
 import { useAdapter, useAppState, useEntity, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
+import { useStepUp } from './use-step-up.js';
 
 function workflowError(error: unknown): string {
   if (!(error instanceof RestError)) return 'Could not complete that action.';
@@ -23,6 +24,20 @@ function workflowError(error: unknown): string {
     return 'The native profiles did not match. The handoff remains disabled.';
   }
   return error.message || 'Could not complete that action.';
+}
+
+/** Saving the roles grants Finance, so the server asks for what a role change asks for (C97). */
+export function setupError(error: unknown): string {
+  const reason = (error as { reason?: string } | null)?.reason;
+  if (reason === 'reauth_required') return 'Saving the roles needs a recent sign-in.';
+  if (reason === 'self_change') return 'Choose someone other than yourself for Finance.';
+  return workflowError(error);
+}
+
+/** Turning the handoff on starts routing invoices to Finance; off needs nothing extra. */
+export function admissionError(error: unknown): string {
+  if ((error as { reason?: string } | null)?.reason === 'reauth_required') return 'Turning the handoff on needs a recent sign-in.';
+  return workflowError(error);
 }
 
 interface PickerOption { value: string; label: string }
@@ -69,6 +84,8 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
   const [financeAgent, setFinanceAgent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveProblem, setSaveProblem] = useState<unknown>(null);
+  const { needsSignIn, signIn } = useStepUp('partner_workflow');
   useEffect(() => {
     let live = true;
     void Promise.all([adapter.rest.listMembers(state.workspace.id), adapter.rest.adminAgents(state.workspace.id)])
@@ -97,9 +114,10 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
     };
     setBusy(true);
     setError(null);
+    setSaveProblem(null);
     void adapter.rest.configurePartnerWorkflow(state.workspace.id, body)
       .then(onSaved)
-      .catch((caught: unknown) => setError(workflowError(caught)))
+      .catch(setSaveProblem)
       .finally(() => setBusy(false));
   };
   return (
@@ -119,6 +137,9 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
       </div>
       {problem && <p className="partner-error" role="alert">{problem}</p>}
       {error && <p className="partner-error" role="alert">{error}</p>}
+      {saveProblem !== null && <p className="partner-error" role="alert">
+        {setupError(saveProblem)} {needsSignIn(saveProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+      </p>}
       <footer>
         <span className="meta" />
         <Button primary type="submit" disabled={!valid || busy}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -295,7 +316,8 @@ export function PartnerWorkflow() {
   const [form, setForm] = useState<'setup' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [admissionBusy, setAdmissionBusy] = useState(false);
-  const [admissionError, setAdmissionError] = useState<string | null>(null);
+  const [admissionProblem, setAdmissionProblem] = useState<unknown>(null);
+  const { needsSignIn, signIn } = useStepUp('partner_workflow');
   const lastStreamMessage = state.connection.workspace.lastMessageAt;
 
   const load = (): void => {
@@ -364,13 +386,13 @@ export function PartnerWorkflow() {
   const ready = detail.lanes.length > 0 && detail.lanes.every(laneReady);
   const setAdmission = (next: boolean): void => {
     setAdmissionBusy(true);
-    setAdmissionError(null);
+    setAdmissionProblem(null);
     void adapter.rest.setPartnerWorkflowAdmission(state.workspace.id, { enabled: next })
       .then(() => {
         setNotice(next ? 'Handoff enabled.' : 'Handoff disabled.');
         load();
       })
-      .catch((caught: unknown) => setAdmissionError(workflowError(caught)))
+      .catch(setAdmissionProblem)
       .finally(() => setAdmissionBusy(false));
   };
   const status = enabled
@@ -401,7 +423,9 @@ export function PartnerWorkflow() {
         )}
       </div>
 
-      {admissionError && <p className="partner-error" role="alert">{admissionError}</p>}
+      {admissionProblem !== null && <p className="partner-error" role="alert">
+        {admissionError(admissionProblem)} {needsSignIn(admissionProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+      </p>}
       <AnimatePresence initial={false}>{setupForm}</AnimatePresence>
       {noticeRow}
 

@@ -1685,3 +1685,62 @@ agent's rebuild refusal, Member and stale sign-in, and the directory following.
 by default and, when on, parks a native `propose_approval` call, keeps it parked
 on retry and resumes it after approval. The full database suite (754 tests)
 passes.
+
+## C97. Everything that grants a role asks what a role change asks
+
+**Decided September 26, 2026** (roles-and-agents cleanup after C90–C93).
+
+- **Handoff roles.** `POST /w/:ws/partner-workflow/configure` grants the
+  Finance and Partnerships roles, so it now needs a recent sign-in, like
+  `PATCH /members/:id`. An Admin who does not already hold Finance cannot name
+  themself as the Finance person (`self_change`, 409, the status every other
+  `self_change` uses). Naming yourself for Partnerships stays allowed: it
+  carries no decision authority by default and the form suggests the Admin
+  there. Turning the handoff on also needs a recent sign-in; turning it off
+  does not.
+- **Invitations.** An invitation that carries `role_slugs`, or the Finance
+  job (which grants Finance on joining), needs a recent sign-in, and so does
+  resending one whose stored invitation carries either. A plain invitation
+  works on an older sign-in as before. A duplicate request now echoes the
+  roles the live invitation keeps. Roles for someone who is already a member
+  are refused with `already_member` (409): storing them would drop them
+  silently, and granting them would let an Admin change their own roles by
+  inviting themself. A plain invitation to a member is still recorded as
+  accepted.
+- **Manage member.** The Admin/Member switch and Remove show "… needs a
+  recent sign-in." with Sign in again, like saving roles already did. The
+  role options are radios in a radio group.
+- **History.** Changing a member's roles through `PATCH /members/:id` writes
+  `member.role_changed` and publishes the member update, but only when the
+  roles actually change, as `PUT /roles/:id/members` does.
+- **Workflow-raised approvals.** Outreach emails, a new member's first
+  search, partner engagement record changes and Shared Intelligence
+  publications keep reviewers set by their workflow. Admin → Approvals now
+  lists them read-only under "Set by the workflow", from
+  `WORKFLOW_APPROVALS` in `packages/shared/src/approval-routing.ts`.
+- **Invite pre-tick.** The Invite dialog shows the job's own role ticked and
+  fixed, with "Comes with the Finance job" (or Partnerships), and the Admin's
+  other ticks survive a job change. It is fixed rather than editable because
+  the server grants it regardless: every accepted invitation grants its job's
+  role (C92), and a Finance job also binds the person to the Finance lane,
+  which grants Finance again. A legacy invitation has no job picker and is a
+  Partnerships job. The job's role is not sent in `role_slugs`, so a
+  Partnerships invitation with no other ticks stays a plain invitation.
+
+**Why.** C92 and C93 made roles carry authority, but three ways to grant one
+skipped the checks the member route applies: the handoff form, invitations
+and resends. An unticked box for a role the person will get anyway would have
+been a false statement on the screen. Workflow approvals were hidden from the
+screen that says who approves what.
+
+**Evidence.** `test/db/partner-workflow.test.ts` drives the configure and
+admission routes over HTTP: a stale session is refused and changes nothing, a
+Finance self-grant is refused, an existing Finance holder keeps it, and
+turning the handoff off needs no step-up. It also caught that every HTTP
+enable or disable of the handoff failed on an untyped `enabled_by`
+parameter, fixed with a cast. `test/db/members.test.ts` covers stale sessions
+with and without roles, the Finance job, resend, the duplicate echo,
+`already_member` and the 32-role cap. `test/db/roles.test.ts` covers the
+History event and `Cache-Control: no-store`. The browser suite covers the
+sign-in link on the handoff form, Manage and Invite, the pre-tick swap, and
+the read-only workflow group at desktop and 430px.

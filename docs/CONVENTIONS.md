@@ -13,9 +13,10 @@ the test is the thing to keep passing.
    `decisions`. Typed approvals move a request out of `pending` through
    `POST /w/:ws/requests/:id/approval/decisions`, which applies the same
    step-up, surface, Origin and CSRF guards plus the approval policy's
-   reviewer rules. Legacy requests require an Admin session; a governed
-   Finance invoice additionally allows only its named active audience member
-   with the Finance reviewer role. Both paths require step-up freshness, an
+   reviewer rules. On legacy requests the workspace's approval rule for the
+   kind decides who may record the decision (C93): Admins by default. A
+   governed Finance invoice or agreement additionally allows its named active
+   audience member with the Finance role. Both paths require step-up freshness, an
    `X-Requested-From: inbox` header, an allowlisted `Origin` and a CSRF token,
    and it does everything in one transaction. No other route, job, queue
    consumer, cron handler or tool may write `decisions` or move a request out of

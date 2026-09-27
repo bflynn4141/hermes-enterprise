@@ -12,6 +12,7 @@ import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { useWorkspaceLists } from './lists.js';
 import { approvalsForRole } from './approval-routes.js';
+import { useStepUp } from './use-step-up.js';
 import './admin-roles.css';
 
 export const ADMIN_ROLES_VIEW = 'Roles';
@@ -63,25 +64,17 @@ export function roleErrorMessage(error: unknown): string {
     case 'role_in_use': return 'Remove everyone from this role before deleting it.';
     case 'role_routed': return 'Approvals still go to this role. Change them in Approvals first.';
     case 'unknown_member': return 'Someone on the list is no longer an active member. Reload and try again.';
+    case 'unknown_role': return 'This role no longer exists. Reload and try again.';
+    case 'too_many_roles': return 'A person can hold at most 32 roles.';
     default: return 'Could not save. Nothing was changed. Try again.';
   }
 }
 
-const needsSignIn = (error: unknown) => (error as { reason?: string } | null)?.reason === 'reauth_required';
-
-function useStepUp() {
-  const adapter = useAdapter();
-  return () => {
-    const url = adapter.auth.stepUpUrl(window.location.href, 'workspace_roles');
-    if (url) window.location.assign(url);
-  };
-}
-
 /** A refusal with, when a fresh sign-in would fix it, the way to get one. */
 function Problem({ error }: { error: unknown }) {
-  const stepUp = useStepUp();
+  const { needsSignIn, signIn } = useStepUp('workspace_roles');
   return <p className="admin-roles-problem" role="alert">
-    {roleErrorMessage(error)} {needsSignIn(error) && <Button link onClick={stepUp}>Sign in again</Button>}
+    {roleErrorMessage(error)} {needsSignIn(error) && <Button link onClick={signIn}>Sign in again</Button>}
   </p>;
 }
 

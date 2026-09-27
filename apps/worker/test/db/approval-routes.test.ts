@@ -191,3 +191,17 @@ describe('roles on an invitation', () => {
     expect(joined.sort()).toEqual(['finance', 'legal']);
   });
 });
+
+describe('resetting a rule', () => {
+  it('needs a recent sign-in, like changing it', async () => {
+    const fx = await seedWorkspace();
+    expect((await setRule(fx, 'payment', { admins: false, roles: ['finance'], approvals_required: 3, allow_requester: true })).status).toBe(200);
+    await ageSession(fx.adminId, 10);
+    const stale = await send(fx, fx.adminId, 'DELETE', '/approval-routes/payment');
+    expect(stale.status).toBe(401);
+    expect(await stale.json()).toMatchObject({ reason: 'reauth_required' });
+    const listed = await send(fx, fx.adminId, 'GET', '/approval-routes');
+    const payment = ((await listed.json()) as { items: ApprovalRoute[] }).items.find((route) => route.key === 'payment')!;
+    expect(payment).toMatchObject({ is_default: false, rule: { approvals_required: 3 } });
+  });
+});

@@ -14,6 +14,7 @@ import { Button, EmptyState, MenuItem, Skeleton } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { ApprovalSwitches } from './AgentPermissions.js';
 import { SkillAssignmentEditor } from './Workspace.js';
+import { needsSignIn, useStepUp } from './use-step-up.js';
 import './admin-agents.css';
 import './admin-roles.css';
 
@@ -80,17 +81,11 @@ export function assignableSkills(
     && !assignments.some((assignment) => assignment.skill_key === entry.key));
 }
 
-const needsSignIn = (error: unknown) => (error as { reason?: string } | null)?.reason === 'reauth_required';
-
 /** A refusal, with a way to sign in again when that would fix it. */
 function Problem({ error, subject }: { error: unknown; subject: string }) {
-  const adapter = useAdapter();
-  const stepUp = () => {
-    const url = adapter.auth.stepUpUrl(window.location.href, 'agent_governance');
-    if (url) window.location.assign(url);
-  };
+  const { signIn } = useStepUp('agent_governance');
   return <p className="admin-roles-problem" role="alert">
-    {agentWriteMessage(error, subject)} {needsSignIn(error) && <Button link onClick={stepUp}>Sign in again</Button>}
+    {agentWriteMessage(error, subject)} {needsSignIn(error) && <Button link onClick={signIn}>Sign in again</Button>}
   </p>;
 }
 
@@ -242,8 +237,8 @@ function ModelCard({ agent, onUpdated }: { agent: AgentDirectoryEntry; onUpdated
     </>}
   >
     <div className="col" role="radiogroup" aria-label={`Model for ${agent.name}`} style={{ gap: 4 }}>
-      <MenuItem checked={choice === null} onClick={() => pick(null)}>{`Workspace default (${defaultLabel})`}</MenuItem>
-      {options.map((row) => <MenuItem key={row.model_id} checked={choice === row.model_id} sub={row.provider ? `via ${row.provider}` : undefined} onClick={() => pick(row.model_id)}>{row.label}</MenuItem>)}
+      <MenuItem role="radio" checked={choice === null} onClick={() => pick(null)}>{`Workspace default (${defaultLabel})`}</MenuItem>
+      {options.map((row) => <MenuItem role="radio" key={row.model_id} checked={choice === row.model_id} sub={row.provider ? `via ${row.provider}` : undefined} onClick={() => pick(row.model_id)}>{row.label}</MenuItem>)}
     </div>
     <p className="meta">New conversations start with this model. People can still change it in a conversation.</p>
   </AdminSettingsCard>;

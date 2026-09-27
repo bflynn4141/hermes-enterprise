@@ -75,14 +75,14 @@ test('an Admin renames an agent and chooses the model its new conversations star
 
   const model = pane.getByRole('region', { name: 'Model' });
   const group = model.getByRole('radiogroup', { name: 'Model for Ledger Finance' });
-  await expect(group.getByRole('menuitemradio', { name: /^Workspace default \(Anthropic: Claude Sonnet 5\)/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(group.getByRole('radio', { name: /^Workspace default \(Anthropic: Claude Sonnet 5\)/ })).toHaveAttribute('aria-checked', 'true');
   await expect(model.getByText('New conversations start with this model. People can still change it in a conversation.')).toBeVisible();
   const saveModel = model.getByRole('button', { name: 'Save' });
   await expect(saveModel).toBeDisabled();
-  await group.getByRole('menuitemradio', { name: /^Google: Gemini 3 Flash/ }).click();
+  await group.getByRole('radio', { name: /^Google: Gemini 3 Flash/ }).click();
   await saveModel.click();
   await expect(model.getByRole('status')).toHaveText('Saved.');
-  await expect(group.getByRole('menuitemradio', { name: /^Google: Gemini 3 Flash/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(group.getByRole('radio', { name: /^Google: Gemini 3 Flash/ })).toHaveAttribute('aria-checked', 'true');
   await expect(saveModel).toBeDisabled();
   if (shots) await page.screenshot({ path: `${shots}/admin-agents-name-model.png`, fullPage: true });
 

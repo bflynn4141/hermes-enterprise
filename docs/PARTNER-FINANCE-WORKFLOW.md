@@ -88,8 +88,9 @@ duplicate number/payee/amount, currency, authorized total and evidence before
 creating any Finance request. The Finance model receives one Bot Mode-compatible
 turn and may explain the stored result. It cannot write the request.
 
-Only the named active Finance audience member with the Finance reviewer role can
-use the guarded human decision route. The click binds the exact request version
+The named active Finance audience member with the Finance role can use the
+guarded human decision route, and so can anyone the workspace's invoice approval
+rule names (Admins by default; decision C93). The click binds the exact request version
 and payload hash and rechecks the captured Finance assignment/grant and all
 authority/evidence again under row locks. Approval saves an invoice **draft**.
 It does not authorize or execute payment, delivery, email or signature. The

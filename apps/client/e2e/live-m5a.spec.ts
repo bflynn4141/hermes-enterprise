@@ -486,7 +486,7 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   // is the honest shape: "no models" would be wrong, and a silent list of
   // disabled rows would be worse. Only Nous Portal rows are listed, because the
   // others are not offered by this deployment at all (decision R12).
-  await expect(app.getByRole('menuitemradio', { name: /Catalog sync required/ })).toBeDisabled();
+  await expect(app.getByRole('radio', { name: /Catalog sync required/ })).toBeDisabled();
   await expect(app.getByText('Daily token cap')).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Data & privacy');

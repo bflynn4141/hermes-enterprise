@@ -33,8 +33,8 @@ import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
-import { CanApprove, RoleChecklist, knownRoleSlugs } from './MemberRoles.js';
-import { memberRolesErrorMessage, needsSignIn } from './approval-routes.js';
+import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
+import { useStepUp } from './use-step-up.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -154,9 +154,6 @@ const invitationStatusLabel = (status: InvitationEntity['status']): string =>
 /** The pill's tone, and the only thing about a person this screen colours. */
 const statusTone = (label: string): string => (label === 'Joined' ? 'ok' : label === 'Expired' || label === 'Bounced' ? 'warn' : 'muted');
 
-/** Manage dialog notices that report success rather than a problem. */
-const MANAGE_OK = new Set(['Role updated.', 'Roles updated.']);
-
 function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: string }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
 }
@@ -175,13 +172,17 @@ export function Members() {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  // The refusal behind `notice`, so a stale sign-in can offer a fresh one.
+  const [noticeProblem, setNoticeProblem] = useState<unknown>(null);
+  const [inviteProblem, setInviteProblem] = useState<unknown>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   // Roles chosen in the Invite dialog, and the draft of a managed member's roles.
   const [inviteRoles, setInviteRoles] = useState<string[]>([]);
   const [manageRoles, setManageRoles] = useState<string[]>([]);
-  const [rolesProblem, setRolesProblem] = useState<unknown>(null);
+  // The one refusal the Manage dialog shows, whichever write it came from.
+  const [manageProblem, setManageProblem] = useState<{ action: ManageAction; error: unknown } | null>(null);
+  const { needsSignIn, signIn } = useStepUp('workspace_roles');
   useEffect(() => { if (!admin && tab !== 'all') setTab('all'); }, [admin, tab]);
   // Role names for each person's role slugs. Admin only, like the slugs
   // themselves; if the list cannot load, the cards simply show no roles.
@@ -208,6 +209,11 @@ export function Members() {
   const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
   const setupRoles = state.capabilities.memberRoleTemplates;
   const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
+  // The job's role is granted when the person joins, whatever is ticked, so
+  // the checklist shows it ticked and fixed (C97). It follows the job picker;
+  // the Admin's own ticks stay in `inviteRoles` and survive a job change.
+  const jobRoleLock = jobLockedRole(roles, setupOnly ? selectedJobRole : 'partnerships-agent');
+  const inviteRoleSlugs = knownRoleSlugs(inviteRoles, roles).filter((slug) => slug !== jobRoleLock?.slug);
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -218,15 +224,11 @@ export function Members() {
   const heldRoles = person ? knownRoleSlugs(person.reviewer_roles, roles) : [];
   const draftRoles = knownRoleSlugs(manageRoles, roles);
   const rolesChanged = draftRoles.length !== heldRoles.length || draftRoles.some((slug) => !heldRoles.includes(slug));
-  const stepUp = () => {
-    const url = adapter.auth.stepUpUrl(window.location.href, 'workspace_roles');
-    if (url) window.location.assign(url);
-  };
   const saveRoles = () => {
     if (!person) return;
     setPending(`member:roles:${person.id}`);
     setManageNotice(null);
-    setRolesProblem(null);
+    setManageProblem(null);
     void adapter.rest
       .setMemberRoles(state.workspace.id, person.id, draftRoles)
       .then((next) => {
@@ -234,7 +236,7 @@ export function Members() {
         setManageRoles(next.reviewer_roles);
         setManageNotice('Roles updated.');
       })
-      .catch(setRolesProblem)
+      .catch((error: unknown) => setManageProblem({ action: 'roles', error }))
       .finally(() => setPending(null));
   };
   const invitationsChanged = () => {
@@ -259,9 +261,12 @@ export function Members() {
           ? invitationSuccessMessage(result as InvitationEntity)
           : 'Invitation withdrawn');
       })
-      .catch((error: unknown) => setNotice(action === 'resend'
-        ? invitationFailureMessage(error)
-        : 'Could not withdraw that invitation. Try again.'))
+      .catch((error: unknown) => {
+        setNoticeProblem(error);
+        setNotice(action === 'resend'
+          ? invitationFailureMessage(error)
+          : 'Could not withdraw that invitation. Try again.');
+      })
       .finally(() => setPending(null));
   };
 
@@ -276,7 +281,7 @@ export function Members() {
           </span>
           {admin && <Button onClick={() => {
             setNotice(null);
-            setInviteError(null);
+            setInviteProblem(null);
             setInviteRoles([]);
             setInvite(true);
           }}>Invite member</Button>}
@@ -324,7 +329,7 @@ export function Members() {
                     {admin && <div className="member-card-actions"><Button onClick={() => {
                       setNotice(null);
                       setManageNotice(null);
-                      setRolesProblem(null);
+                      setManageProblem(null);
                       setManageRoles(member.reviewer_roles);
                       setManage(member.id);
                     }}>Manage</Button></div>}
@@ -399,7 +404,9 @@ export function Members() {
           </div>
         )}
         {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
-        {notice && <p className="meta action-error" role="alert">{notice}</p>}
+        {notice && <p className="meta action-error" role="alert">
+          {notice}{' '}{needsSignIn(noticeProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+        </p>}
         <Ack show={!!ack} style={{ right: 0, top: -12, position: 'relative' }}>
           {ack}
         </Ack>
@@ -409,21 +416,23 @@ export function Members() {
           onClose={() => {
             if (pending === 'invite') return;
             setInvite(false);
-            setInviteError(null);
+            setInviteProblem(null);
           }}
           actions={
             <>
               <Button disabled={pending === 'invite'} onClick={() => {
                 setInvite(false);
-                setInviteError(null);
+                setInviteProblem(null);
               }}>Cancel</Button>
               <Button
                 primary
                 disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email) || (setupOnly && !selectedJobRole)}
                 onClick={() => {
                   setPending('invite');
-                  setInviteError(null);
-                  const roleSlugs = knownRoleSlugs(inviteRoles, roles);
+                  setInviteProblem(null);
+                  // The job's own role is not sent: the job grants it, and sending
+                  // it would make every invitation look like one that grants roles.
+                  const roleSlugs = inviteRoleSlugs;
                   const request = {
                     email,
                     role: 'member' as const,
@@ -440,7 +449,7 @@ export function Members() {
                       setTab('invites');
                       showAck(invitationSuccessMessage(created));
                     })
-                    .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
+                    .catch(setInviteProblem)
                     .finally(() => setPending(null));
                 }}
               >
@@ -466,10 +475,12 @@ export function Members() {
             Finance appears here once a verified Finance instance is added under Admin → Agent capacity.
           </p>}
           {roles.length > 0 && <div className="member-approvals">
-            <RoleChecklist roles={roles} selected={inviteRoles} disabled={pending === 'invite'} onChange={setInviteRoles} />
-            <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: inviteRoles }} />
+            <RoleChecklist roles={roles} selected={inviteRoles} locked={jobRoleLock} disabled={pending === 'invite'} onChange={setInviteRoles} />
+            <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: jobRoleLock ? [...inviteRoleSlugs, jobRoleLock.slug] : inviteRoleSlugs }} />
           </div>}
-          {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
+          {inviteProblem !== null && <p className="meta action-error" role="alert">
+            {invitationFailureMessage(inviteProblem)}{' '}{needsSignIn(inviteProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+          </p>}
         </Dialog>
         <Dialog
           open={!!person}
@@ -479,7 +490,7 @@ export function Members() {
             setManage(null);
             setConfirmRemove(false);
             setManageNotice(null);
-            setRolesProblem(null);
+            setManageProblem(null);
           }}
           actions={
             confirmRemove ? (
@@ -487,6 +498,7 @@ export function Members() {
                 <Button disabled={pending === `member:remove:${person?.id ?? ''}`} onClick={() => {
                   setConfirmRemove(false);
                   setManageNotice(null);
+                  setManageProblem(null);
                 }}>Keep</Button>
                 <Button
                   primary
@@ -495,6 +507,7 @@ export function Members() {
                     if (!person) return;
                     setPending(`member:remove:${person.id}`);
                     setManageNotice(null);
+                    setManageProblem(null);
                     void adapter.rest
                       .removeMember(state.workspace.id, person.id)
                       .then(() => {
@@ -503,7 +516,7 @@ export function Members() {
                         setConfirmRemove(false);
                         showAck('Member removed');
                       })
-                      .catch(() => setManageNotice('Could not remove this member. Their access has not changed. Try again.'))
+                      .catch((error: unknown) => setManageProblem({ action: 'remove', error }))
                       .finally(() => setPending(null));
                   }}
                 >
@@ -514,6 +527,7 @@ export function Members() {
               <Button disabled={pending?.startsWith('member:')} onClick={() => {
                 setManage(null);
                 setManageNotice(null);
+                setManageProblem(null);
               }}>Done</Button>
             )
           }
@@ -537,6 +551,7 @@ export function Members() {
                 {(['admin', 'member'] as const).map((role) => (
                   <MenuItem
                     key={role}
+                    role="radio"
                     checked={person?.role === role}
                     disabled={pending?.startsWith('member:')}
                     sub={role === 'admin' ? 'Manages members, keys and settings' : 'Works with agents; approves only what their roles allow'}
@@ -544,13 +559,14 @@ export function Members() {
                       if (!person) return;
                       setPending(`member:role:${person.id}`);
                       setManageNotice(null);
+                      setManageProblem(null);
                       void adapter.rest
                         .setMemberRole(state.workspace.id, person.id, role)
                         .then(() => {
                           adapter.invalidateList('members');
                           setManageNotice('Role updated.');
                         })
-                        .catch(() => setManageNotice('Could not change this role. Nothing was changed. Try again.'))
+                        .catch((error: unknown) => setManageProblem({ action: 'role', error }))
                         .finally(() => setPending(null));
                     }}
                   >
@@ -566,16 +582,12 @@ export function Members() {
                   onChange={(next) => {
                     setManageRoles(next);
                     setManageNotice(null);
-                    setRolesProblem(null);
+                    setManageProblem(null);
                   }}
                 />
                 <CanApprove routes={routes} person={{ role: person.role, reviewer_roles: draftRoles }} />
                 <div className="member-approvals-actions">
-                  {rolesProblem !== null
-                    ? <p className="meta action-error" role="alert">
-                      {memberRolesErrorMessage(rolesProblem)} {needsSignIn(rolesProblem) && <Button link onClick={stepUp}>Sign in again</Button>}
-                    </p>
-                    : <span />}
+                  <span />
                   <Button disabled={!rolesChanged || pending?.startsWith('member:')} onClick={saveRoles}>
                     {pending === `member:roles:${person.id}` ? 'Saving…' : 'Save roles'}
                   </Button>
@@ -586,13 +598,18 @@ export function Members() {
                 <Button link disabled={pending?.startsWith('member:')} onClick={() => {
                   setConfirmRemove(true);
                   setManageNotice(null);
+                  setManageProblem(null);
                 }}>
                   Remove…
                 </Button>
               </div>
             </>
           )}
-          {manageNotice && <p className={`meta${MANAGE_OK.has(manageNotice) ? '' : ' action-error'}`} role={MANAGE_OK.has(manageNotice) ? 'status' : 'alert'}>{manageNotice}</p>}
+          {manageNotice && <p className="meta" role="status">{manageNotice}</p>}
+          {manageProblem && <p className="meta action-error" role="alert">
+            {manageErrorMessage(manageProblem.action, manageProblem.error)}{' '}
+            {needsSignIn(manageProblem.error) && <Button link onClick={signIn}>Sign in again</Button>}
+          </p>}
         </Dialog>
       </div>
     </div>
@@ -1947,6 +1964,7 @@ function AgentsTab() {
           {catalog.map((row) => (
             <MenuItem
               key={row.model_id}
+              role="radio"
               checked={(view?.defaults.model_id ?? settings.default_model_id) === row.model_id}
               disabled={!row.enabled || !admin}
               sub={row.enabled ? `via ${row.provider}` : row.disabled_reason ?? `No verified ${row.provider} key`}

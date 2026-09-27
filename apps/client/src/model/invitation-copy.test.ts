@@ -131,3 +131,12 @@ describe('invitation diagnostics copy', () => {
     expect(copy).not.toContain('finance@example.test');
   });
 });
+
+describe('invitations that carry roles (C97)', () => {
+  it('ask for a recent sign-in, and send an existing member to Manage', () => {
+    expect(invitationFailureMessage(new RestError(401, 'reauth_required', 'x')))
+      .toBe('Inviting someone with roles needs a recent sign-in.');
+    expect(invitationFailureMessage(new RestError(409, 'already_member', 'x')))
+      .toBe('This person is already a member. Change their roles in Manage.');
+  });
+});

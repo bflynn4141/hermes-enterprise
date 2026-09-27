@@ -94,7 +94,7 @@ export async function updateHandoffAdmission(
   const updated = await tx.query<{ id: string }>(
     `UPDATE handoffs
         SET admission_state=$3,
-            enabled_by=CASE WHEN $3='enabled' THEN $4 ELSE NULL END,
+            enabled_by=CASE WHEN $3='enabled' THEN $4::uuid ELSE NULL END,
             enabled_at=CASE WHEN $3='enabled' THEN now() ELSE NULL END,
             readiness=COALESCE($5::jsonb, readiness),
             readiness_checked_at=CASE WHEN $3='enabled' THEN COALESCE($6, now()) ELSE readiness_checked_at END
