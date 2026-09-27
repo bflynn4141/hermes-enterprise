@@ -34,6 +34,12 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   const payment = actions.getByRole('button', { name: /^Pay an approved invoice/ });
   await expect(payment).toContainText('Finance · 2 different people · Default');
   await expect(actions.getByRole('button', { name: /^Grant access/ })).toContainText('Access reviewer · Default');
+  // Workflow-raised approvals are listed so nothing is hidden, and have no controls.
+  const workflow = pane.getByRole('list', { name: 'Set by the workflow' });
+  await expect(workflow.getByRole('listitem')).toHaveCount(4);
+  await expect(workflow.getByRole('button')).toHaveCount(0);
+  await expect(workflow.getByRole('listitem').filter({ hasText: 'Partner engagement record changes' })).toContainText('Reviewed by the Finance person on the handoff');
+  await expect(pane.getByText('These reviewers come from the workflow that raises them and cannot be changed here yet.')).toBeVisible();
   await shoot(page, 'approvals-list');
 
   await payment.click();
@@ -165,9 +171,92 @@ test('a rule change without a recent sign-in offers one and keeps the draft', as
   await expect(who.getByRole('checkbox', { name: /^Legal/ })).toBeChecked();
 });
 
+test('Manage without a recent sign-in offers one for the role switch and Remove, and changes nothing', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?approvals=stepup');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+  const alex = pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
+  await alex.getByRole('button', { name: 'Manage' }).click();
+  const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
+  const roleGroup = manage.getByRole('radiogroup', { name: 'Role' });
+  // Alex is an Admin in the fixture; the switch tries to make them a Member.
+  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
+
+  await roleGroup.getByRole('radio', { name: /^Member/ }).click();
+  await expect(manage.getByRole('alert')).toContainText('Changing someone’s role needs a recent sign-in.');
+  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(manage.getByRole('status')).toHaveCount(0);
+
+  await manage.getByRole('button', { name: 'Remove…' }).click();
+  await manage.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(manage.getByRole('alert')).toContainText('Removing a member needs a recent sign-in.');
+  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await manage.getByRole('button', { name: 'Keep' }).click();
+  await expect(manage.getByRole('alert')).toHaveCount(0);
+  await manage.getByRole('button', { name: 'Done' }).click();
+  await expect(alex).toContainText('Admin');
+});
+
 test('a Member has no Approvals page', async ({ page }) => {
   await page.goto('/?seat=member#admin/Approvals');
   const pane = app(page);
   await expect(pane.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(pane.getByRole('list', { name: 'Decisions' })).toHaveCount(0);
+});
+
+test('an invitation with roles needs a recent sign-in; a plain one does not', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?approvals=stepup');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+  await pane.getByRole('button', { name: 'Invite member' }).click();
+  const invite = page.getByRole('dialog', { name: 'Invite member' });
+  await invite.getByRole('textbox', { name: 'Work email' }).fill('sam@example.com');
+  await invite.getByRole('checkbox', { name: 'Finance' }).check();
+  await invite.getByRole('button', { name: 'Send invitation' }).click();
+  await expect(invite.getByRole('alert')).toContainText('Inviting someone with roles needs a recent sign-in.');
+  await expect(invite.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await invite.getByRole('checkbox', { name: 'Finance' }).uncheck();
+  await invite.getByRole('button', { name: 'Send invitation' }).click();
+  await expect(invite).toHaveCount(0);
+});
+
+test('the Invite dialog ticks the job’s own role and keeps the Admin’s ticks when the job changes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?memberSetup=finance');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  await app(page).getByRole('button', { name: 'Invite member' }).click();
+  const invite = page.getByRole('dialog', { name: 'Invite member' });
+  const job = invite.getByRole('combobox', { name: 'Job role' });
+  const partnerships = invite.getByRole('checkbox', { name: 'Partnerships', exact: true });
+  const finance = invite.getByRole('checkbox', { name: 'Finance', exact: true });
+  const legal = invite.getByRole('checkbox', { name: 'Legal', exact: true });
+
+  // Partnerships is the first job, and its role comes with it.
+  await expect(partnerships).toBeChecked();
+  await expect(partnerships).toBeDisabled();
+  await expect(partnerships).toHaveAccessibleDescription('Comes with the Partnerships job');
+  await legal.check();
+
+  await job.selectOption({ label: 'Finance' });
+  await expect(finance).toBeChecked();
+  await expect(finance).toBeDisabled();
+  await expect(finance).toHaveAccessibleDescription('Comes with the Finance job');
+  await expect(partnerships).not.toBeChecked();
+  await expect(partnerships).toBeEnabled();
+  await expect(legal).toBeChecked();
+  await expect(invite.getByText(/^Can approve:/)).toContainText('Pay an approved invoice');
+
+  await job.selectOption({ label: 'Partnerships' });
+  await expect(partnerships).toBeChecked();
+  await expect(finance).not.toBeChecked();
+  await expect(finance).toBeEnabled();
+  await expect(legal).toBeChecked();
+  if (shots) await page.screenshot({ path: `${shots}/invite-job-role.png` });
+
+  await page.setViewportSize({ width: 430, height: 900 });
+  const overflow = await invite.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
 });

@@ -18,3 +18,6 @@
 .member-approvals-role input { accent-color: #6E64FF; width: 16px; height: 16px; flex: 0 0 auto; }
 .member-approvals-line { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .member-approvals-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* "Set by the workflow" rows look like the rule rows but are not controls. */
+.admin-approvals-static { cursor: default; }
+.admin-approvals-static:hover { background: transparent; }

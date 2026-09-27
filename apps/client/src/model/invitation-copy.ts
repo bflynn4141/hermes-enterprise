@@ -42,6 +42,10 @@ export function invitationFailureMessage(error: unknown): string {
                         ? 'One of those roles no longer exists. Reload and try again.'
                         : error.reason === 'too_many_roles'
                           ? 'A person can hold at most 32 roles.'
+                          : error.reason === 'reauth_required'
+                            ? 'Inviting someone with roles needs a recent sign-in.'
+                            : error.reason === 'already_member'
+                              ? 'This person is already a member. Change their roles in Manage.'
                 : 'Could not record the invitation. Try again.';
   return withReference(message, error);
 }

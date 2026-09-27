@@ -363,11 +363,16 @@ export interface MenuItemProps {
   small?: boolean;
   right?: ReactNode;
   title?: string;
+  /**
+   * The ARIA role. Defaults to a menu item (`menuitemradio` when `checked` is
+   * set). Pass `radio` when the items sit in a `radiogroup` rather than a menu.
+   */
+  role?: 'menuitem' | 'menuitemradio' | 'radio';
 }
 
-export function MenuItem({ children, sub, checked, icon, onClick, disabled, small, right, title }: MenuItemProps) {
+export function MenuItem({ children, sub, checked, icon, onClick, disabled, small, right, title, role }: MenuItemProps) {
   return (
-    <button type="button" className={`menu-item ${small ? 'small' : ''}`} role={checked !== undefined ? 'menuitemradio' : 'menuitem'} aria-checked={checked} onClick={onClick} disabled={disabled} title={title}>
+    <button type="button" className={`menu-item ${small ? 'small' : ''}`} role={role ?? (checked !== undefined ? 'menuitemradio' : 'menuitem')} aria-checked={checked} onClick={onClick} disabled={disabled} title={title}>
       {icon && <Icon name={icon} />}
       <span className="mi-body">
         <span>{children}</span>

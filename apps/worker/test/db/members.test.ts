@@ -537,6 +537,97 @@ describe('invitations', () => {
   });
 });
 
+// Roles on an invitation are granted when the person joins, so the invitation
+// has the bar changing a member's roles has (decision C97).
+describe('roles on an invitation', () => {
+  const invitations = (fixture: Fixture, body: unknown, env = makeEnv().env) =>
+    asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, { method: 'POST', body });
+  async function staleAdmin(fixture: Fixture): Promise<void> {
+    await asUser(makeEnv().env, fixture.adminId, `/w/${fixture.workspaceId}/bootstrap`);
+    await withClient('owner', (c) =>
+      c.query(`UPDATE auth_sessions SET authenticated_at = now() - interval '10 minutes' WHERE sid = $1`, [`dev-${fixture.adminId}`]),
+    );
+  }
+  const stored = (fixture: Fixture, email: string) => readTenant(fixture.workspaceId, fixture.adminId, async (c) =>
+    (await c.query<{ status: string; role_slugs: string[] }>(
+      `SELECT status, role_slugs FROM invitations WHERE workspace_id = $1 AND email = $2 ORDER BY created_at`, [fixture.workspaceId, email],
+    )).rows);
+
+  it('need a recent sign-in, while a plain invitation still works on an older one', async () => {
+    const fixture = await seedWorkspace();
+    await staleAdmin(fixture);
+    const withRoles = `roles-${randomUUID().slice(0, 8)}@example.test`;
+    const refused = await invitations(fixture, { email: withRoles, role: 'member', role_slugs: ['finance'] });
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toMatchObject({ reason: 'reauth_required' });
+    expect(await stored(fixture, withRoles)).toEqual([]);
+
+    // A Finance job grants the Finance role on joining, so it asks the same.
+    const financeJob = await invitations(fixture, {
+      email: `job-${randomUUID().slice(0, 8)}@example.test`, role: 'member', role_template_key: 'finance-agent',
+    }, makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' }).env);
+    expect(financeJob.status).toBe(401);
+    expect(await financeJob.json()).toMatchObject({ reason: 'reauth_required' });
+
+    const plain = await invitations(fixture, { email: `plain-${randomUUID().slice(0, 8)}@example.test`, role: 'member' });
+    expect(plain.status, await plain.clone().text()).toBe(201);
+  });
+
+  it('need a recent sign-in to resend when the stored invitation carries roles', async () => {
+    const fixture = await seedWorkspace();
+    const withRoles = (await (await invitations(fixture, {
+      email: `resend-roles-${randomUUID().slice(0, 8)}@example.test`, role: 'member', role_slugs: ['legal'],
+    })).json()) as { id: string };
+    const plain = (await (await invitations(fixture, {
+      email: `resend-plain-${randomUUID().slice(0, 8)}@example.test`, role: 'member',
+    })).json()) as { id: string };
+    await staleAdmin(fixture);
+    const resend = (id: string) => asUser(makeEnv().env, fixture.adminId, `/w/${fixture.workspaceId}/invitations/${id}/resend`, { method: 'POST' });
+    const refused = await resend(withRoles.id);
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toMatchObject({ reason: 'reauth_required' });
+    expect((await resend(plain.id)).status).toBe(201);
+  });
+
+  it('echo the roles the live invitation keeps when the request is a duplicate', async () => {
+    const fixture = await seedWorkspace();
+    const email = `dup-roles-${randomUUID().slice(0, 8)}@example.test`;
+    const first = await invitations(fixture, { email, role: 'member', role_slugs: ['legal'] });
+    expect(first.status).toBe(201);
+    const second = await invitations(fixture, { email, role: 'member', role_slugs: ['finance'] });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ role_slugs: ['legal'] });
+    expect(await stored(fixture, email)).toEqual([{ status: 'pending', role_slugs: ['legal'] }]);
+  });
+
+  it('are refused for someone already here, whose roles are changed in Manage', async () => {
+    const fixture = await seedWorkspace();
+    const email = await withClient('owner', async (c) =>
+      (await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [fixture.memberId])).rows[0]!.email);
+    const refused = await invitations(fixture, { email, role: 'member', role_slugs: ['finance'] });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ reason: 'already_member' });
+    const roles = await readTenant(fixture.workspaceId, fixture.adminId, async (c) =>
+      (await c.query<{ reviewer_roles: string[] }>(`SELECT reviewer_roles FROM members WHERE workspace_id = $1 AND user_id = $2`,
+        [fixture.workspaceId, fixture.memberId])).rows[0]!.reviewer_roles);
+    expect(roles).not.toContain('finance');
+  });
+
+  it('are capped at 32 per person on an invitation and on a member', async () => {
+    const fixture = await seedWorkspace();
+    const tooMany = Array.from({ length: 33 }, (_, index) => `role-${index}`);
+    const invite = await invitations(fixture, { email: `cap-${randomUUID().slice(0, 8)}@example.test`, role: 'member', role_slugs: tooMany });
+    expect(invite.status).toBe(422);
+    expect(await invite.json()).toMatchObject({ reason: 'too_many_roles' });
+    const memberId = await memberIdOf(fixture, fixture.memberId);
+    const patch = await asUser(makeEnv().env, fixture.adminId, `/w/${fixture.workspaceId}/members/${memberId}`, {
+      method: 'PATCH', body: { reviewer_roles: tooMany },
+    });
+    expect(patch.status).toBe(422);
+    expect(await patch.json()).toMatchObject({ reason: 'too_many_roles' });
+  });
+});
+
 describe('a membership change made in the WorkOS dashboard', () => {
   it('leaves the same rows our own removal route leaves', async () => {
     // Two workspaces, same shape. One is removed through the route, the other

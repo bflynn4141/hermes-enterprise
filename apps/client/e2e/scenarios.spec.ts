@@ -215,7 +215,7 @@ test.describe('members write feedback', () => {
     const alex = app.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
     await alex.getByRole('button', { name: 'Manage' }).click();
     const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
-    await manage.getByRole('menuitemradio', { name: /Member/ }).click();
+    await manage.getByRole('radio', { name: /Member/ }).click();
     await expect(manage.getByRole('alert')).toHaveText('Could not change this role. Nothing was changed. Try again.');
     await manage.getByRole('button', { name: 'Remove…' }).click();
     await manage.getByRole('button', { name: 'Remove', exact: true }).click();

@@ -15,7 +15,7 @@ import type { Env } from '../../src/env.js';
 import type { Job } from '../../src/jobs.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
-import { INBOX_HEADERS } from './m4-fixtures.js';
+import { INBOX_HEADERS, ageSession } from './m4-fixtures.js';
 import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
 import { materializeLegacyPartnerAssignment } from '../../src/enterprise-skills/service.js';
@@ -443,5 +443,89 @@ describe('Partnerships + Finance partner workflow', () => {
         .rejects.toMatchObject({ reason: 'run_grant_unavailable' } satisfies Partial<PartnerWorkflowError>);
       await client.query('ROLLBACK');
     });
+  });
+});
+
+// The HTTP route, not the service: saving the roles grants Finance, so it has
+// the bar changing a member's roles has (decision C97).
+describe('POST /partner-workflow/configure', () => {
+  async function unconfigured() {
+    const fx = await seedWorkspace();
+    const financeAgentId = randomUUID();
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(`INSERT INTO agents (id,workspace_id,name,status) VALUES ($1,$2,'Ledger','started')`, [financeAgentId, fx.workspaceId]);
+      await client.query('COMMIT');
+    });
+    return { ...fx, financeAgentId };
+  }
+  const configure = (fx: Awaited<ReturnType<typeof unconfigured>>, finance: string, partnerships: string) =>
+    asUser(makeEnv().env, fx.adminId, `/w/${fx.workspaceId}/partner-workflow/configure`, { method: 'POST', body: {
+      partnerships: { agent_id: fx.agentId, principal_user_id: partnerships },
+      finance: { agent_id: fx.financeAgentId, principal_user_id: finance },
+    } });
+  const financeHolders = (fx: Awaited<ReturnType<typeof unconfigured>>) => readTenant(fx.workspaceId, fx.adminId, async (c) =>
+    (await c.query<{ user_id: string }>(
+      `SELECT user_id FROM members WHERE workspace_id=$1 AND 'finance' = ANY (reviewer_roles) ORDER BY user_id`, [fx.workspaceId],
+    )).rows.map((row) => row.user_id));
+
+  it('needs a recent sign-in, and changes nothing without one', async () => {
+    const fx = await unconfigured();
+    expect((await asUser(makeEnv().env, fx.adminId, `/w/${fx.workspaceId}/partner-workflow`)).status).toBe(200);
+    await ageSession(fx.adminId, 10);
+    const stale = await configure(fx, fx.memberId, fx.adminId);
+    expect(stale.status).toBe(401);
+    expect(await stale.json()).toMatchObject({ reason: 'reauth_required' });
+    expect(await financeHolders(fx)).toEqual([fx.adminId]);
+  });
+
+  it('refuses an Admin naming themself for Finance unless they already hold it', async () => {
+    const fx = await unconfigured();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `UPDATE members SET reviewer_roles = array_remove(reviewer_roles, 'finance') WHERE workspace_id=$1 AND user_id=$2`,
+        [fx.workspaceId, fx.adminId],
+      );
+      await c.query('COMMIT');
+    });
+    const self = await configure(fx, fx.adminId, fx.memberId);
+    expect(self.status).toBe(409);
+    expect(await self.json()).toMatchObject({ reason: 'self_change' });
+    expect(await financeHolders(fx)).toEqual([]);
+
+    // Partnerships grants no decision authority, and the form names the Admin
+    // there by default, so naming yourself for Partnerships stays allowed.
+    const other = await configure(fx, fx.memberId, fx.adminId);
+    expect(other.status, await other.clone().text()).toBe(201);
+    expect(await financeHolders(fx)).toEqual([fx.memberId]);
+  });
+
+  it('lets an Admin who already holds Finance keep it', async () => {
+    const fx = await unconfigured();
+    const kept = await configure(fx, fx.adminId, fx.memberId);
+    expect(kept.status, await kept.clone().text()).toBe(201);
+    expect(await financeHolders(fx)).toEqual([fx.adminId]);
+  });
+
+  it('asks for a recent sign-in to turn the handoff on, but not off', async () => {
+    const fx = await fixture();
+    expect((await asUser(makeEnv().env, fx.adminId, `/w/${fx.workspaceId}/partner-workflow`)).status).toBe(200);
+    await ageSession(fx.adminId, 10);
+    const path = `/w/${fx.workspaceId}/partner-workflow/admission`;
+    const on = await asUser(makeEnv().env, fx.adminId, path, { method: 'POST', body: { enabled: true } });
+    expect(on.status).toBe(401);
+    expect(await on.json()).toMatchObject({ reason: 'reauth_required' });
+    const off = await asUser(makeEnv().env, fx.adminId, path, { method: 'POST', body: { enabled: false } });
+    expect(off.status, await off.clone().text()).toBe(200);
+  });
+
+  it('is never cached', async () => {
+    const fx = await unconfigured();
+    const read = await asUser(makeEnv().env, fx.adminId, `/w/${fx.workspaceId}/partner-workflow`);
+    expect(read.status).toBe(200);
+    expect(read.headers.get('cache-control')).toBe('no-store');
   });
 });

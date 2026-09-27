@@ -130,8 +130,9 @@ intake event id and expected hash; it cannot supply invoice fields, recipient,
 provenance or authority. Qualification, outreach approval and an unsigned
 agreement draft do not satisfy this contract. The job is idempotent and
 prepares one audience-scoped invoice request for the Finance principal. The
-existing guarded decision route requires the named Finance reviewer, current
-document binding and recent authentication. Approval saves a Library invoice
+existing guarded decision route requires the named Finance reviewer or someone
+the workspace's invoice approval rule names (C93), the current document binding
+and recent authentication. Approval saves a Library invoice
 draft. Payment and email effects remain pending and have no executor. See
 `docs/PARTNER-FINANCE-WORKFLOW.md` for the route and rollout runbook.
 
