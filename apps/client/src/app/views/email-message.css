@@ -60,7 +60,8 @@
 .email-inbox-messages li:last-child { border-bottom: 0; }
 .email-inbox-messages .from { color: var(--muted); }
 .email-inbox-messages .state { color: var(--muted); text-align: right; }
-.email-inbox-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+/* One field per row: side by side, the agent picker cut off the role that tells two same-named agents apart. */
+.email-inbox-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .email-inbox-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
 .email-inbox-form select, .email-inbox-form input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); font: inherit; font-size: 14px; }
 .email-inbox-help { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 72ch; }
@@ -69,7 +70,6 @@
 .email-inbox-help p { margin: 0; }
 
 @container app-pane (max-width: 560px) {
-  .email-inbox-form { grid-template-columns: minmax(0, 1fr); }
   .email-inboxes-list > li { padding: 14px 16px; }
   .email-plain { padding: 16px; }
 }
