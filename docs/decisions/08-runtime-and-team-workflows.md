@@ -1855,8 +1855,7 @@ the read-only workflow group at desktop and 430px.
   Forwarding needs no mailbox OAuth scope, so there is no Google restricted-
   scope review; Hermes sees only what reaches the address.
 - **The server decides what is true.** Before any model reads a message, the
-  Worker parses the MIME (`postal-mime`, pinned to 3.0.0 because 4.0.0 was
-  inside the release-age window), rebuilds the HTML from an allowlist
+  Worker parses the MIME (`postal-mime`, pinned exactly), rebuilds the HTML from an allowlist
   (`inbound-email/sanitize.ts`: no scripts, styles, forms, remote images or
   link targets; hidden text removed and counted), and records sender facts
   (`sender-facts.ts`): our receiver's DMARC, SPF and DKIM result, whether the
@@ -1908,11 +1907,25 @@ recipient choice, rendering and sender trust on the server, and giving the
 reading run no outbound tool, removes those channels structurally rather than
 relying on the model to notice an injection.
 
-**Not in this pass.** The Hermes Cloud runtime needs the two tool names added
-to the bridge's per-skill allowlist and a re-pin before hosted agents can use
-them; the local and legacy engine uses them today. Attachments are listed,
-not read. Operators still have to route a domain through Email Routing and
-confirm the authserv-id on real mail.
+**Hosted agents and attachments (same PR, follow-up).** A hosted bridge
+refuses to start when discovery differs from its pinned role binding, so the
+Worker shows the intake tools only to a bridge that asks for them
+(`/tools?features=email-intake`); the new bridge accepts its role plus at most
+the three intake tools, and so does the Worker's readiness check. On intake
+runs the model proxy strips every other tool from the request and the
+AgentCash authorize routes refuse, so no native outbound tool is reachable
+while an email is in context. Attachments (PDF, text, Markdown, CSV, HTML;
+three files, 5 MB each, 20,000 characters each) are read at intake, given to
+the agent inside the untrusted markers, and shown to the reviewer exactly as
+read; HTML attachments go through the body sanitizer. `postal-mime` is 3.0.1,
+which carries linear-time fixes for crafted input (postal-mime issue 97); 4.0.0
+(a TypeScript rewrite with the same fixes) follows once it clears the
+release-age window.
+
+**Not in this pass.** Pools must be re-pinned to the new bridge revision,
+which needs a person's Portal consent per instance. Operators still have to
+route a domain through Email Routing and confirm the authserv-id on real mail.
+Scanned PDFs are not read.
 
 **Evidence.** `test/unit/email-sanitize.test.ts` (hidden text, remote images,
 script URLs, hostile markup, entity escaping, inline cid images),

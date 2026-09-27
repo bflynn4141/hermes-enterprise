@@ -27,6 +27,12 @@
 .email-message-extras li[data-mismatch] code { color: #ffd9a8; }
 .email-message-extras em { font-style: normal; color: #ffd9a8; font-size: 12px; }
 .email-message-extras small { color: var(--muted); }
+.email-message-extras li.email-attachment { flex-direction: column; align-items: flex-start; gap: 2px; }
+.email-attachment-name { display: inline-flex; align-items: center; gap: 6px; }
+.email-attachment-state { font-size: 12.5px; }
+.email-attachment-text { margin-top: 4px; width: 100%; }
+.email-attachment-text summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.email-attachment-text pre { margin: 6px 0 0; max-height: 260px; overflow: auto; padding: 12px 14px; border-radius: 8px; background: #fff; color: #1d1b2e; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* The agent's side of the card: its reply, separated from the sender's words. */
 .email-reply-context { display: flex; flex-direction: column; gap: 14px; }

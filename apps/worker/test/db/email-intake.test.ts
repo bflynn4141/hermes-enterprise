@@ -166,6 +166,55 @@ describe('email intake', () => {
     expect(jobs).toBe(1);
   });
 
+  it('reads a text attachment and gives it to the agent between the untrusted markers', async () => {
+    const fx = await seedInbox();
+    const boundary = 'b1';
+    const raw = new TextEncoder().encode([
+      'Authentication-Results: mx.cloudflare.net; dkim=pass; spf=pass; dmarc=pass header.from=northwind.example',
+      `Message-ID: <${randomUUID()}@northwind.example>`,
+      'From: Priya Raman <priya@northwind.example>',
+      `To: ${fx.address}`,
+      'Subject: Invoice attached',
+      'MIME-Version: 1.0',
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Invoice attached.',
+      `--${boundary}`,
+      'Content-Type: text/plain; name="invoice.txt"',
+      'Content-Disposition: attachment; filename="invoice.txt"',
+      '',
+      'Invoice NW-9 total 4,800 USD',
+      `--${boundary}`,
+      'Content-Type: image/png; name="logo.png"',
+      'Content-Disposition: attachment; filename="logo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      'iVBORw0KGgo=',
+      `--${boundary}--`,
+      '',
+    ].join('\r\n'));
+    const stored = await receiveInboundEmail(env, { to: fx.address, raw });
+    if (stored.status !== 'stored') throw new Error('not stored');
+    const email = inboundEmailViewSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/messages/${stored.messageId}`)).json());
+    expect(email.attachments).toEqual([
+      { filename: 'invoice.txt', content_type: 'text/plain', size: 29, text: 'Invoice NW-9 total 4,800 USD', unread_reason: null },
+      { filename: 'logo.png', content_type: 'image/png', size: 8, text: null, unread_reason: 'type_not_supported' },
+    ]);
+    expect(email.sender.warnings.map((warning) => warning.code)).toEqual(['attachments_read', 'attachments_not_opened']);
+    const runId = await triage(fx, stored.messageId);
+    const prompt = (await scoped<{ text: string }>(fx.workspaceId, `SELECT text FROM messages WHERE run_id=$1 AND role='user'`, [runId]))[0]?.text ?? '';
+    const opening = prompt.indexOf('<<<EMAIL-');
+    const closing = prompt.lastIndexOf('>>>');
+    const attachment = prompt.indexOf('Invoice NW-9 total 4,800 USD');
+    expect(opening).toBeGreaterThan(0);
+    expect(attachment).toBeGreaterThan(opening);
+    expect(attachment).toBeLessThan(closing);
+    expect(prompt).toContain('Attachments not read (type or size): logo.png.');
+  });
+
   it('rejects mail for an unknown or paused address, and reads nothing for it', async () => {
     const fx = await seedInbox();
     const raw = rawEmail({ to: fx.address, from: 'a@b.example', subject: 's', html: '<p>x</p>' });

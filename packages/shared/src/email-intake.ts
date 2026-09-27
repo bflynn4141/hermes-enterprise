@@ -51,6 +51,7 @@ export const EMAIL_WARNING_CODES = [
   'link_text_mismatch',
   'remote_images_blocked',
   'attachments_not_opened',
+  'attachments_read',
 ] as const;
 export const emailWarningCodeSchema = z.enum(EMAIL_WARNING_CODES);
 export type EmailWarningCode = z.infer<typeof emailWarningCodeSchema>;
@@ -104,10 +105,19 @@ export const emailBodySchema = z.object({
 }).strict();
 export type EmailBody = z.infer<typeof emailBodySchema>;
 
+/** Why an attachment's text was not read. */
+export const ATTACHMENT_UNREAD_REASONS = ['type_not_supported', 'too_large', 'no_text', 'unreadable', 'limit_reached'] as const;
+
 export const emailAttachmentSchema = z.object({
   filename: z.string().max(255),
   content_type: z.string().max(200),
   size: z.number().int().nonnegative(),
+  /**
+   * The text the agent read, capped, or null. The reviewer can open exactly
+   * this; the agent receives it as untrusted, like the email body.
+   */
+  text: z.string().max(20_000).nullable().default(null),
+  unread_reason: z.enum(ATTACHMENT_UNREAD_REASONS).nullable().default(null),
 }).strict();
 
 export const INBOUND_EMAIL_STATUSES = ['received', 'triaging', 'suggested', 'no_action', 'failed'] as const;
@@ -196,3 +206,13 @@ export type SuggestEmailHandoffInput = z.infer<typeof suggestEmailHandoffInputSc
 export const emailInboxResourceKey = (inboxId: string): string => `email-inbox:${inboxId}`;
 export const emailCautionResourceKey = (inboxId: string): string => `email-inbox:${inboxId}:caution`;
 export const emailMessageResourceKey = (messageId: string): string => `email-message:${messageId}`;
+
+/**
+ * The only tools a run reading a received email may call (C98), and the only
+ * tools a hosted bridge may accept beyond its pinned role binding. The bridge
+ * mirrors this list in runtime/hermes/enterprise_bridge/cloud_managed.py.
+ */
+export const EMAIL_INTAKE_TOOL_NAMES = ['suggest_reply', 'suggest_handoff', 'get_workspace_context'] as const;
+
+/** Sent by a bridge revision that accepts the intake tools: `GET /tools?features=email-intake`. */
+export const EMAIL_INTAKE_RUNTIME_FEATURE = 'email-intake';

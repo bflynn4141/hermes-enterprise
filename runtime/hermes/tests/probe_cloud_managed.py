@@ -306,7 +306,7 @@ def main():
                     "capability_grants": list(capabilities),
                     "config": skill_config,
                 }]})
-            elif self.path.endswith("/tools"):
+            elif self.path.split("?", 1)[0].endswith("/tools"):
                 names = list(PARTNER_TOOLS if mode["role"] == "partner" else FINANCE_TOOLS)
                 if mode["tools"] == "drifted":
                     names.append("publish_partner_invoice_review")

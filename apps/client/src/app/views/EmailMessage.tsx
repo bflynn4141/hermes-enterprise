@@ -90,6 +90,15 @@ const received = (value: string): string => {
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 };
 
+/** Why the agent did not read an attachment, in the reviewer's words. */
+const UNREAD: Record<NonNullable<InboundEmailView['attachments'][number]['unread_reason']>, string> = {
+  type_not_supported: 'Not read: this file type is not read',
+  too_large: 'Not read: larger than 5 MB',
+  no_text: 'Not read: no text in the file (a scan?)',
+  unreadable: 'Not read: the file could not be parsed',
+  limit_reached: 'Not read: only the first three files are read',
+};
+
 const size = (bytes: number): string => bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1000))} KB`;
 
 export function EmailMessageView({ email }: { email: InboundEmailView }) {
@@ -128,8 +137,15 @@ export function EmailMessageView({ email }: { email: InboundEmailView }) {
         </li>)}</ul>
       </section>}
       {email.attachments.length > 0 && <section>
-        <h4>Attachments, not opened</h4>
-        <ul>{email.attachments.map((file, index) => <li key={`${file.filename}:${index}`}><Icon name="doc" size={14} /> <span>{file.filename}</span> <small>{size(file.size)}</small></li>)}</ul>
+        <h4>Attachments</h4>
+        <ul>{email.attachments.map((file, index) => <li key={`${file.filename}:${index}`} className="email-attachment">
+          <span className="email-attachment-name"><Icon name="doc" size={14} /> <span>{file.filename}</span> <small>{size(file.size)}</small></span>
+          <small className="email-attachment-state">{file.text !== null ? 'Read by the agent as text' : UNREAD[file.unread_reason ?? 'type_not_supported']}</small>
+          {file.text !== null && <details className="email-attachment-text">
+            <summary>Show the text the agent read</summary>
+            <pre>{file.text}</pre>
+          </details>}
+        </li>)}</ul>
       </section>}
     </div>}
   </article>;

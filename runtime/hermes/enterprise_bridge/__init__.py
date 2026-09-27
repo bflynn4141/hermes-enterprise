@@ -260,7 +260,10 @@ class Bridge:
                 raise BridgeError("Enterprise bridge returned invalid JSON.") from error
 
     def tools(self):
-        status, body = self.request("GET", self.base_url + "/tools", self.token)
+        # The feature flag tells the Worker this revision accepts the email
+        # intake tools beyond its pinned role (decision C98); an older bridge
+        # is never shown them, so it keeps starting.
+        status, body = self.request("GET", self.base_url + "/tools?features=email-intake", self.token)
         if status != 200 or not isinstance(body, dict) or not isinstance(body.get("tools"), list):
             raise BridgeError("Enterprise tool discovery failed.")
         result, names = [], set()

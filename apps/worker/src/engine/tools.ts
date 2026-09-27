@@ -37,6 +37,7 @@ import {
   getPartnerHandoffResultInputSchema,
   publishPartnerInvoiceReviewInputSchema,
   setFocusInputSchema,
+  EMAIL_INTAKE_TOOL_NAMES,
   suggestEmailHandoffInputSchema,
   suggestEmailReplyInputSchema,
   viewFocusRef,
@@ -1066,11 +1067,7 @@ export const MODE_TOOL_KINDS: Readonly<Record<string, readonly ToolDefinitionEnt
  * every published email-agent exfiltration used. The suggestions themselves
  * wait for a human.
  */
-export const INTAKE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'suggest_reply',
-  'suggest_handoff',
-  'get_workspace_context',
-]);
+export const INTAKE_TOOL_NAMES: ReadonlySet<string> = new Set(EMAIL_INTAKE_TOOL_NAMES);
 
 export const MODES = ['ask', 'plan', 'work'] as const;
 export type Mode = (typeof MODES)[number];

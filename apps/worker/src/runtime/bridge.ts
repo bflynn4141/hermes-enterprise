@@ -1,7 +1,7 @@
 // Authenticated official Hermes callbacks. The runtime receives only scoped
 // bridge credentials; enterprise tools retain the existing agent-role boundary.
 import type { Context } from 'hono';
-import { nousModelId, openRouterModelId } from '@hermes/shared';
+import { EMAIL_INTAKE_RUNTIME_FEATURE, EMAIL_INTAKE_TOOL_NAMES, nousModelId, openRouterModelId } from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { parseProviderRetryAfter, type ProviderRetryAfter } from './retry-after.js';
@@ -160,6 +160,24 @@ async function resolveCallSlot(db: BridgeDb, runId: string, call: RuntimeCall): 
 function requireActive(run: EngineRunRow | null, workspaceId: string, agentId: string): asserts run is EngineRunRow {
   if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || !['working', 'waiting'].includes(run.status)) {
     throw new RouteError('This runtime run is no longer active.', 'runtime_run_inactive', 409);
+  }
+}
+
+/** The tools a bridge discovers: the email intake tools only for a revision that accepts them. */
+export function discoverableTools(names: readonly string[], features: string | undefined): ReturnType<typeof allowedTools> {
+  const intakeSupported = (features ?? '').split(',').map((value) => value.trim()).includes(EMAIL_INTAKE_RUNTIME_FEATURE);
+  const intake = new Set<string>(EMAIL_INTAKE_TOOL_NAMES);
+  return allowedTools('work', names).filter((tool) => intakeSupported || !intake.has(tool.name));
+}
+
+/**
+ * No paid or outbound call while a run is reading a received email (C98). The
+ * model is not offered AgentCash in intake runs; this is the server-side
+ * refusal for a call the model invents anyway.
+ */
+export function refuseIntakeRun(run: Pick<EngineRunRow, 'mode'>): void {
+  if (run.mode === 'intake') {
+    throw new RouteError('Outbound and paid calls are not allowed while reading an email.', 'intake_run_outbound_refused', 403);
   }
 }
 
@@ -459,7 +477,10 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
     const names = configured.length === 0 && binding.assignment === 'invitee_pool'
       ? [...PARTNER_PROGRAM_TOOLS]
       : configured;
-    const tools = allowedTools('work', names);
+    // A bridge refuses to start when discovery differs from its pinned role
+    // binding. Only a revision that says it accepts the email intake tools
+    // (C98) is shown them; an older pool keeps discovering exactly its role.
+    const tools = discoverableTools(names, c.req.query('features'));
     return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
   } finally { await db.close(); }
 }
@@ -545,6 +566,7 @@ export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env 
   try {
     run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
+    refuseIntakeRun(run);
   } finally {
     await runtime.close();
   }
@@ -758,6 +780,7 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
   try {
     run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
+    refuseIntakeRun(run);
   } finally { await runtime.close(); }
 
   let screeningRunId = '';
@@ -953,6 +976,7 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
   try {
     run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
+    refuseIntakeRun(run);
   } finally { await runtime.close(); }
   const kind = contactKind(input.arguments);
   if (!kind) throw new RouteError('This AgentCash endpoint is not part of contact enrichment.', 'partner_contact_policy_mismatch', 422);
@@ -1243,6 +1267,32 @@ function budgetError(error: unknown): Response | null {
   const status = /(?:cost|token|call|parallel)_limit|exhausted/.test(error.reason) ? 429 : 409;
   return modelError(error.reason, status);
 }
+/** Drop every tool but the intake tools from a forwarded completion request. */
+export function restrictToIntakeTools(forwarded: Record<string, unknown>): void {
+  const intake = new Set<string>(EMAIL_INTAKE_TOOL_NAMES);
+  const nameOf = (tool: unknown): string | null => {
+    if (!object(tool)) return null;
+    const fn = object(tool.function) ? tool.function : tool;
+    return typeof fn.name === 'string' ? fn.name : null;
+  };
+  if (Array.isArray(forwarded.tools)) {
+    forwarded.tools = forwarded.tools.filter((tool) => {
+      const name = nameOf(tool);
+      return name !== null && intake.has(name);
+    });
+    if ((forwarded.tools as unknown[]).length === 0) {
+      delete forwarded.tools;
+      delete forwarded.tool_choice;
+      delete forwarded.parallel_tool_calls;
+    }
+  }
+  // A forced choice of a tool that is no longer offered would be a provider error.
+  if (object(forwarded.tool_choice)) {
+    const chosen = nameOf(forwarded.tool_choice);
+    if (!chosen || !intake.has(chosen)) forwarded.tool_choice = 'auto';
+  }
+}
+
 export async function proxyRuntimeModel(
   env: Env,
   db: ModelBridgeDb,
@@ -1270,6 +1320,11 @@ export async function proxyRuntimeModel(
     for (const key of fields) {
       if (key in value) forwarded[key] = value[key];
     }
+    // A run reading an untrusted email (C98) offers the model only the intake
+    // tools. Hermes's native MCP tools, AgentCash fetch among them, never
+    // reach the model while the email is in context; the AgentCash authorize
+    // routes refuse intake runs too, in case a call is invented anyway.
+    if (run.mode === 'intake') restrictToIntakeTools(forwarded);
     if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
     // Every streamed native call needs its own authoritative usage; otherwise a
     // multi-call run can only expose one terminal aggregate and key rotation can

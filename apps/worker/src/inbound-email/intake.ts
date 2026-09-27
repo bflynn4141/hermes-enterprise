@@ -24,6 +24,7 @@ import type { EmailBody, SenderFacts } from '@hermes/shared';
 import { connect } from '../db/client.js';
 import type { Env } from '../env.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
+import { attachmentBytes, readAttachmentText, type ReadAttachment } from './attachments.js';
 import { plainTextEmail, sanitizeEmailHtml, type InlineImage } from './sanitize.js';
 import { DEFAULT_AUTHSERV_ID, parseAuthenticationResults, senderFacts } from './sender-facts.js';
 
@@ -109,24 +110,25 @@ export async function receiveInboundEmail(env: Env, email: IncomingEmail): Promi
   if (!fromAddress) return { status: 'rejected', reason: 'no_sender' };
 
   const inlineImages: InlineImage[] = [];
-  const attachments: { filename: string; content_type: string; size: number }[] = [];
+  const attachments: ReadAttachment[] = [];
+  let read = 0;
   for (const attachment of parsed.attachments) {
     const contentId = attachment.contentId?.replace(/^<|>$/gu, '');
     if (contentId && attachment.disposition !== 'attachment' && /^image\//iu.test(attachment.mimeType)) {
       inlineImages.push({ contentId, mimeType: attachment.mimeType, base64: base64Of(attachment.content) });
       continue;
     }
-    const base64 = typeof attachment.content === 'string' ? attachment.content : null;
-    const size = base64 !== null
-      ? Math.floor(base64.length * 3 / 4)
-      : attachment.content instanceof ArrayBuffer ? attachment.content.byteLength : attachment.content.length;
-    if (attachments.length < 50) {
-      attachments.push({
-        filename: (attachment.filename ?? 'attachment').slice(0, 255),
-        content_type: attachment.mimeType.slice(0, 200),
-        size,
-      });
-    }
+    if (attachments.length >= 50) continue;
+    const bytes = attachmentBytes(attachment.content);
+    const { text, unread_reason } = await readAttachmentText(attachment.mimeType, bytes, read);
+    if (text !== null) read += 1;
+    attachments.push({
+      filename: (attachment.filename ?? 'attachment').slice(0, 255),
+      content_type: attachment.mimeType.slice(0, 200),
+      size: bytes.byteLength,
+      text,
+      unread_reason,
+    });
   }
 
   const sanitized = parsed.html
@@ -183,7 +185,8 @@ export async function receiveInboundEmail(env: Env, email: IncomingEmail): Promi
       hiddenTextRemovedChars: body.hidden_text_removed_chars,
       remoteImagesBlocked: body.remote_images_blocked,
       mismatchedLinks: body.links.filter((link) => link.mismatch).length,
-      attachmentCount: attachments.length,
+      attachmentsRead: attachments.filter((item) => item.text !== null).length,
+      attachmentsUnread: attachments.filter((item) => item.text === null).length,
     });
 
     const inserted = await tx.query<{ id: string }>(

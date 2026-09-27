@@ -144,7 +144,8 @@ export interface SenderFactsInput {
   readonly hiddenTextRemovedChars: number;
   readonly remoteImagesBlocked: number;
   readonly mismatchedLinks: number;
-  readonly attachmentCount: number;
+  readonly attachmentsRead: number;
+  readonly attachmentsUnread: number;
 }
 
 const warning = (code: EmailWarningCode, detail: string): EmailWarning => ({
@@ -201,8 +202,11 @@ export function senderFacts(input: SenderFactsInput): SenderFacts {
   if (input.remoteImagesBlocked > 0) {
     warnings.push(warning('remote_images_blocked', `${input.remoteImagesBlocked} remote ${input.remoteImagesBlocked === 1 ? 'image was' : 'images were'} not loaded, so the sender cannot tell this was opened.`));
   }
-  if (input.attachmentCount > 0) {
-    warnings.push(warning('attachments_not_opened', `${input.attachmentCount} ${input.attachmentCount === 1 ? 'attachment is' : 'attachments are'} listed but not opened or read by the agent.`));
+  if (input.attachmentsRead > 0) {
+    warnings.push(warning('attachments_read', `The agent read the text of ${input.attachmentsRead === 1 ? '1 attachment' : `${input.attachmentsRead} attachments`} as untrusted data, like the email. Text hidden inside a PDF cannot be detected.`));
+  }
+  if (input.attachmentsUnread > 0) {
+    warnings.push(warning('attachments_not_opened', `${input.attachmentsUnread} ${input.attachmentsUnread === 1 ? 'attachment is' : 'attachments are'} listed but not read, because of their type or size.`));
   }
   return {
     address,

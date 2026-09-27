@@ -76,8 +76,8 @@ importers:
         specifier: 8.23.0
         version: 8.23.0
       postal-mime:
-        specifier: 3.0.0
-        version: 3.0.0
+        specifier: 3.0.1
+        version: 3.0.1
       unpdf:
         specifier: 1.8.1
         version: 1.8.1
@@ -1665,8 +1665,8 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  postal-mime@3.0.0:
-    resolution: {integrity: sha512-Z4a9ar2Bv3YpK3IXag+Yda30k7bMZfpRuUGyqtHnZ2pjHG8Bl62EhZIk4n1dzv00gfzP9g+94e9kd8+XmjVWLA==}
+  postal-mime@3.0.1:
+    resolution: {integrity: sha512-N86EnYOxZjW1uHQIgSXnnRdnJz+wxmtDsnk3C4R/9rQ1utj8A2znauXZ3Q3+stCHxG5ckY4/NrO09WiPU6rcdQ==}
 
   postcss-prefix-selector@2.2.1:
     resolution: {integrity: sha512-oMvY0GLVjg6b/N09B4h/xWYczc+LsX1O+laIpXDBbP6tZll+Cj5kXxdI0IZ23NOQ+XIko8VDsCFj+bhgYsmP8g==}
@@ -2967,7 +2967,7 @@ snapshots:
     dependencies:
       playwright-core: 1.63.0
 
-  postal-mime@3.0.0: {}
+  postal-mime@3.0.1: {}
 
   postcss-prefix-selector@2.2.1(postcss@8.5.28):
     dependencies:

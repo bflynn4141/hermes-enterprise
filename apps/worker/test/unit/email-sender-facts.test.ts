@@ -28,7 +28,8 @@ const input = (overrides: Partial<SenderFactsInput> = {}): SenderFactsInput => (
   hiddenTextRemovedChars: 0,
   remoteImagesBlocked: 0,
   mismatchedLinks: 0,
-  attachmentCount: 0,
+  attachmentsRead: 0,
+  attachmentsUnread: 0,
   ...overrides,
 });
 
@@ -81,13 +82,15 @@ describe('senderFacts', () => {
       visibleText: 'Please note our bank details have changed. New account number below.',
       hiddenTextRemovedChars: 120,
       remoteImagesBlocked: 2,
-      attachmentCount: 1,
+      attachmentsRead: 1,
+      attachmentsUnread: 1,
     }));
     const byCode = Object.fromEntries(facts.warnings.map((warning) => [warning.code, warning.severity]));
     expect(byCode).toEqual({
       payment_details_change: 'caution',
       hidden_text_removed: 'caution',
       remote_images_blocked: 'info',
+      attachments_read: 'info',
       attachments_not_opened: 'info',
     });
   });

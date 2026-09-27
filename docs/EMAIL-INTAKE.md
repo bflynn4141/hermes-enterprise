@@ -37,7 +37,7 @@ records the reasoning. This page is the operator and developer reference.
 | Cautions | Server string checks: failed DMARC, Reply-To on another domain, lookalike domain, a member's name from outside, bank-detail language, hidden text removed, link words naming another site |
 | The email body | Rebuilt from an allowlist; rendered in a sandboxed iframe whose CSP allows no network request |
 | "Links in this email" | Every link's real destination as plain text |
-| Attachments | Listed with size; never opened, never given to the agent |
+| Attachments | PDF, text, Markdown, CSV and HTML (first three, 5 MB each) are read as text; the reviewer can open exactly the text the agent read. Other files are listed with the reason they were not read. Text hidden inside a PDF cannot be detected. |
 
 A caution never unlocks anything. It adds a second approver (another Admin or
 holder of the role); if the workspace has nobody who could be second, the reply
@@ -61,9 +61,28 @@ To turn it on for a deployed environment:
 4. For replies that actually send, connect a Gmail sender (Admin → Email) and
    set `EMAIL_REPLY_MODE=send_after_approval`.
 
-For hosted Hermes agents, the enterprise bridge must also allow the
-`suggest_reply` and `suggest_handoff` tools for the inbox agent's skill, and
-the pools must be re-pinned; the legacy engine uses them today.
+## Hosted Hermes agents
+
+A hosted agent refuses to start when the tools the Worker advertises differ
+from its pinned role binding, so the intake tools are shown only to a bridge
+revision that asks for them (`GET /tools?features=email-intake`). An older
+pool keeps discovering exactly its role and keeps running; it just cannot
+answer email until it is re-pinned. The new revision accepts its role's tools
+plus, at most, `suggest_reply`, `suggest_handoff` and `get_workspace_context`,
+and the Worker's readiness check accepts the same.
+
+While a hosted run reads an email, the Worker's model proxy offers the model
+only those three tools, so AgentCash and every other native tool are not in
+the request, and the AgentCash authorize routes refuse an intake run outright.
+
+To enable it on staging after merge:
+
+1. Install the plugin at the merge commit on each pool (dashboard install
+   API, which needs a person's Portal consent per instance; see the Cloud
+   bootstrap notes).
+2. Set `HERMES_ENTERPRISE_PLUGIN_REVISION` to that commit and
+   `HERMES_ENTERPRISE_PLUGIN_SHA256` to the plugin tree digest, then deploy.
+   Readiness fails closed for any pool still on the old pin.
 
 ## Trying it locally
 
@@ -97,7 +116,7 @@ records that walkthrough end to end.
 
 ## Known limits of this first pass
 
-- Attachments are listed only; nothing reads a PDF.
+- Scanned PDFs without a text layer are not read (no OCR).
 - The scripted development agent's words are fixed; a real model writes its own.
-- Hosted Hermes agents need the bridge allowlist change and a re-pin (above).
+- Hosted Hermes agents need the pool re-pin above before they answer email.
 - No mailbox sync: Hermes sees only what reaches the address.

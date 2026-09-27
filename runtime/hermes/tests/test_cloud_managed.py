@@ -55,6 +55,17 @@ class CloudManagedPolicyTests(unittest.TestCase):
             }],
         }
 
+    def test_discovery_may_add_only_the_email_intake_tools_to_a_role(self):
+        role = cloud_managed.PARTNER_TOOLS
+        self.assertTrue(cloud_managed.discovery_matches_binding(role, role))
+        self.assertTrue(cloud_managed.discovery_matches_binding(role | cloud_managed.EMAIL_INTAKE_TOOLS, role))
+        self.assertTrue(cloud_managed.discovery_matches_binding(role | {"suggest_reply"}, role))
+        # Anything else beyond the role, or a missing role tool, still stops startup.
+        self.assertFalse(cloud_managed.discovery_matches_binding(role | {"fetch_url"}, role))
+        self.assertFalse(cloud_managed.discovery_matches_binding(role - {"propose_approval"}, role))
+        self.assertFalse(cloud_managed.discovery_matches_binding(
+            cloud_managed.EMAIL_INTAKE_TOOLS, frozenset({"get_partner_handoff_result"})))
+
     def test_binding_accepts_honest_legacy_preflight_and_assigned_finance(self):
         preflight = cloud_managed._validate_binding(self.binding())
         self.assertEqual(preflight["tools"], cloud_managed.PARTNER_TOOLS)

@@ -46,8 +46,33 @@ const VIEWPORT = { width: 1600, height: 900 };
 // for the one Cloudflare's receiver adds in production (mx.cloudflare.net).
 // ---------------------------------------------------------------------------
 
+/** A one-page invoice PDF with a real text layer, so the agent reads it. */
+function invoicePdf() {
+  const lines = [
+    'Northwind Analytics - Invoice NW-2026-09',
+    'Bill to: Nous Research, Partnerships',
+    'Co-hosted workshop series, September 2026: 3 sessions',
+    'Total due: 4,800.00 USD, net 30, per the partner terms',
+  ];
+  const content = lines.map((line, index) => `BT /F1 12 Tf 40 ${150 - index * 24} Td (${line}) Tj ET`).join('\n');
+  const objects = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 480 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+    `<</Length ${content.length}>>stream\n${content}\nendstream`,
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((object, index) => { offsets.push(body.length); body += `${index + 1} 0 obj${object}endobj\n`; });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
+  body += `trailer<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body);
+}
+
 function partnerEmail(to) {
-  const pdf = Buffer.from(`%PDF-1.4\n% Northwind invoice NW-2026-09\n${'0'.repeat(3000)}`).toString('base64').replace(/(.{76})/g, '$1\r\n');
+  const pdf = invoicePdf().toString('base64').replace(/(.{76})/g, '$1\r\n');
   const html = [
     '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">',
     '<img src="https://cdn.northwind.example/brand/logo.png" alt="Northwind Analytics" width="140">',
@@ -288,14 +313,18 @@ async function story(page, base, chapter) {
   await openItem(page, 'Reply to Priya Raman');
   await pause(page, 2_500);
 
-  await say('What Hermes checked', 'The server’s checks come first: the domain verified the sender, the tracking pixel and remote logo never loaded, the invoice PDF is listed but not opened.');
+  await say('What Hermes checked', 'The server’s checks come first: the domain verified the sender, and the tracking pixel and remote logo never loaded.');
   await moveTo(page, app.locator('.email-message-checks').first());
   await pause(page, 5_500);
   await say('The email, rendered safely', 'The email renders in a locked-down frame: no scripts, no remote loads. Every link shows where it really goes.');
   await scrollTo(page, app.locator('.email-frame').first(), { block: 'start' });
   await pause(page, 3_000);
   await scrollTo(page, app.locator('.email-message-extras').first(), { block: 'end' });
-  await pause(page, 3_000);
+  await say('The attachment, read as text', 'Iris read the invoice PDF’s text as untrusted data. Maya can open exactly what Iris read.');
+  await click(page, app.locator('.email-attachment-text summary').first());
+  await pause(page, 1_000);
+  await scrollTo(page, app.locator('.email-attachment-text pre').first(), { block: 'end' });
+  await pause(page, 3_500);
 
   await say('Iris’s suggested reply', 'The reply goes only to the address that sent the email, threaded under it. Iris cannot change who receives it.');
   await scrollTo(page, app.locator('.email-reply-draft').first(), { block: 'start' });

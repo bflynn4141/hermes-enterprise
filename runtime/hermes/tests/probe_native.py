@@ -217,7 +217,7 @@ def main():
             role = role_for_path(self.path)
             if not self.authorized():
                 self.reply(401, {})
-            elif self.path.endswith("/tools"):
+            elif self.path.split("?", 1)[0].endswith("/tools"):
                 self.reply(200, {"tools": [tool_schema(name) for name in role_contracts[role]["tools"]]} if role else {})
             elif self.path.endswith("/skills"):
                 contract = role_contracts.get(role)
