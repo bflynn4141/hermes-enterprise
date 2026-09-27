@@ -34,6 +34,8 @@ export interface ApprovalWork {
   readonly tx: Tx;
   readonly workspaceId: string;
   readonly jobs: string[];
+  /** Trusted deployment policy from the guarded decision route. */
+  readonly simulateEmailReplies?: boolean;
 }
 
 export interface ApprovalProposerContext extends ApprovalWork {
@@ -1232,10 +1234,9 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     authorizationHash: row.authorization_hash,
     payload,
   });
-  // A reply with no connected sender still gets its job: in a simulated
-  // environment the job records a simulated delivery; otherwise it leaves the
-  // row waiting for a mailbox, exactly as before.
-  if (queuedEmail && (queuedEmail.state === 'queued' || queuedEmail.reply)) {
+  // Without a mailbox, only simulation has work to do. Real delivery waits
+  // for OAuth to create its job, so waiting cannot consume the send job key.
+  if (queuedEmail && (queuedEmail.state === 'queued' || (queuedEmail.reply && work.simulateEmailReplies))) {
     for (const outboxId of queuedEmail.ids) {
       const emailJob = await enqueueJob(
         work.tx,

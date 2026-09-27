@@ -14,6 +14,7 @@ import {
 } from '@hermes/shared';
 import { z } from 'zod';
 import type { Tx } from '../db/client.js';
+import { sanitizeEmailHtml, tidyText } from './sanitize.js';
 
 /** SQL for the displayed status; `m` is the message and `r` its triage run (LEFT JOIN). */
 export const DERIVED_EMAIL_STATUS_SQL = `CASE
@@ -89,6 +90,12 @@ export async function loadInboundEmail(tx: Tx, workspaceId: string, messageId: s
   );
   const row = found.rows[0];
   if (!row) return null;
+  const body = emailBodySchema.parse(row.body);
+  // Older immutable evidence may predate the visibility fixes. Rebuild only
+  // its presentation, never its stored content/hash. If HTML cannot account
+  // for the text given to triage, show that text instead of a partial body.
+  const rendered = body.html ? sanitizeEmailHtml(body.html) : null;
+  const html = rendered && rendered.text === tidyText(body.text) ? rendered.html || null : null;
   return {
     rawSha256: row.raw_sha256,
     view: inboundEmailViewSchema.parse({
@@ -100,7 +107,7 @@ export async function loadInboundEmail(tx: Tx, workspaceId: string, messageId: s
       to: row.to_addresses,
       cc: row.cc_addresses,
       sender: senderFactsSchema.parse(row.sender_facts),
-      body: emailBodySchema.parse(row.body),
+      body: { ...body, html },
       attachments: z.array(emailAttachmentSchema).parse(row.attachments),
       status: row.status,
       request_ids: row.request_ids.slice(0, 10),

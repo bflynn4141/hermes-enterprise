@@ -136,13 +136,16 @@ export async function receiveInboundEmail(env: Env, email: IncomingEmail): Promi
     ? sanitizeEmailHtml(parsed.html, inlineImages)
     : plainTextEmail(parsed.text ?? '');
   // Some senders put the real words only in text/plain and a stub in HTML.
-  const visibleText = sanitized.text || (parsed.text ?? '').trim();
+  // If the model needs the text/plain alternative, the reviewer must see that
+  // same alternative, including its links, rather than an empty HTML shell.
+  const fallback = !sanitized.text && parsed.text?.trim() ? plainTextEmail(parsed.text) : null;
+  const content = fallback ?? sanitized;
   const body: EmailBody = {
-    html: parsed.html ? sanitized.html : null,
-    text: visibleText.slice(0, 200_000),
+    html: fallback ? null : content.html || null,
+    text: content.text,
     hidden_text_removed_chars: sanitized.hiddenTextRemovedChars,
     remote_images_blocked: sanitized.remoteImagesBlocked,
-    links: sanitized.links.map((link) => ({ href: link.href, text: link.text, mismatch: link.mismatch })),
+    links: content.links.map((link) => ({ href: link.href, text: link.text, mismatch: link.mismatch })),
   };
 
   const authenticationHeaders = parsed.headers
@@ -182,7 +185,7 @@ export async function receiveInboundEmail(env: Env, email: IncomingEmail): Promi
       authentication,
       members: members.rows,
       knownAddresses: new Set(known.rows.map((row) => row.address)),
-      visibleText,
+      visibleText: content.text,
       hiddenTextRemovedChars: body.hidden_text_removed_chars,
       remoteImagesBlocked: body.remote_images_blocked,
       mismatchedLinks: body.links.filter((link) => link.mismatch).length,
