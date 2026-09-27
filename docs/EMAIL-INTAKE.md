@@ -66,6 +66,14 @@ Role inboxes uses one status vocabulary (Waiting for Iris, Reading, Ready for
 review, No reply needed, Trying again soon, Couldn't read it) and says why a
 read failed.
 
+While Role inboxes is open, its counts and recent messages refresh every five
+seconds after the previous read completes. This picks up new arrivals and
+finished triage attempts without reloading. Refreshing pauses when the tab is
+hidden, resumes immediately on return, and stops when the page closes. A
+temporary connection failure keeps the last readable rows with a retry notice;
+only an explicit access-denied response hides message content. A retry or inbox
+change invalidates older reads so they cannot overwrite the newer result.
+
 ## What the reviewer can trust
 
 | Shown on the card | Where it comes from |

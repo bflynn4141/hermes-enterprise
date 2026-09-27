@@ -18,7 +18,7 @@ describe('email words', () => {
   it('says who sent it in one line, without the names of mail checks', () => {
     expect(trustLine(facts()).text).toBe('Sender not confirmed · First email from this address');
     expect(trustLine(facts({ relationship: 'known_contact', authentication: { spf: 'pass', dkim: 'pass', dmarc: 'pass', authserv_id: null } })).text)
-      .toBe("Verified sender · You've emailed before");
+      .toBe("Sender’s domain confirmed · Seen this address before");
   });
 
   it('writes each caution from its code and the stored facts, once, never from the server text', () => {

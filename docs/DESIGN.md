@@ -78,8 +78,8 @@ Order, top to bottom:
 
 1. **Who and what.** "Reply to Priya Raman" · the email's subject · "Suggested
    by Iris for Partnerships · Not sent".
-2. **Trust line.** One line under the sender: "Verified sender · First email
-   from this address" or "Team member" or "You've emailed before".
+2. **Trust line.** One line under the sender: "Sender’s domain confirmed · First email
+   from this address" or "Team member" or "Seen this address before".
 3. **Cautions**, only when there are any, as one panel headed "Check before
    replying" with plain sentences, each saying what was noticed and what to
    do. A flagged sender adds "A second person approves this reply."

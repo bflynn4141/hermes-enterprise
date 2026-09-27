@@ -20,7 +20,7 @@ import './email-message.css';
 
 const RELATIONSHIP: Record<SenderFacts['relationship'], string> = {
   internal: 'Someone on your team',
-  known_contact: "You've emailed before",
+  known_contact: 'Seen this address before',
   new_sender: 'First email from this address',
 };
 
@@ -29,7 +29,7 @@ export function trustLine(facts: SenderFacts): { verified: boolean; text: string
   const verified = facts.authentication.dmarc === 'pass';
   return {
     verified,
-    text: [verified ? 'Verified sender' : 'Sender not confirmed', RELATIONSHIP[facts.relationship]].join(' · '),
+    text: [verified ? 'Sender’s domain confirmed' : 'Sender not confirmed', RELATIONSHIP[facts.relationship]].join(' · '),
   };
 }
 
