@@ -535,6 +535,26 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('lists a conversation a role inbox opened for this person as soon as its first request arrives', async () => {
+    const emailSession = mockUuid(701);
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${emailSession}`]: () => Response.json({ ...bootstrapBody.sessions[0], runtime: 'cloud', id: emailSession, title: 'Email · Partnerships' }),
+    });
+    await adapter.start();
+    expect(state().sessionOrder).not.toContain(emailSession);
+    const socket = FakeSocket.instances.find((item) => item.url.includes('/hub/workspace'))!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(10);
+    socket.deliver(streamEvent('request.created', {
+      request_id: REQUEST, kind: 'approval', status: 'pending', label: 'Reply to Priya Raman', run_id: RUN, session_id: emailSession,
+    }, 1n, null));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(state().sessionOrder).toContain(emailSession);
+    expect(state().sessions[emailSession]?.title).toBe('Email · Partnerships');
+    expect(calls.filter((call) => call.path === `/w/${WS}/sessions/${emailSession}`)).toHaveLength(1);
+    adapter.dispose();
+  });
+
   it('does not treat the bootstrap-selected agent as an exhaustive session ACL', async () => {
     const secondAgent = mockUuid(5);
     const secondSession = mockUuid(6);

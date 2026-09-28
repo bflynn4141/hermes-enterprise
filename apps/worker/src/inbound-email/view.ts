@@ -112,7 +112,7 @@ export async function loadInboundEmail(tx: Tx, workspaceId: string, messageId: s
   // Older immutable evidence may predate the visibility fixes. Rebuild only
   // its presentation, never its stored content/hash. If HTML cannot account
   // for the text given to triage, show that text instead of a partial body.
-  const rendered = body.html ? sanitizeEmailHtml(body.html) : null;
+  const rendered = body.html ? sanitizeEmailHtml(body.html, [], { storedOutput: true }) : null;
   const html = rendered && rendered.text === tidyText(body.text) ? rendered.html || null : null;
   return {
     rawSha256: row.raw_sha256,

@@ -211,6 +211,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
     // The server renamed a session — after a completed run, or from another
     // device. The row is re-read rather than trusted from the event, and the
     // reducer keeps a manual rename over whatever comes back (decision C34b).
+    // A request can come from a conversation this tab has never listed: the
+    // one a role inbox opens for its agent's owner when an email arrives.
+    // The event reaches only the request's audience, and reading the
+    // conversation is owner-only, so anyone else simply gets nothing back.
+    if (event.kind === 'request.created' && event.payload.session_id && !state().sessions[event.payload.session_id]) {
+      void rest.getSession(workspaceId, event.payload.session_id)
+        .then((row) => dispatch({ type: 'session/upsert', session: row }))
+        .catch(() => undefined);
+    }
     if (event.kind === 'entity.updated' && event.payload.entity_type === 'session') {
       void rest.getSession(workspaceId, event.payload.entity_id)
         .then((row) => dispatch({ type: 'session/upsert', session: row }))

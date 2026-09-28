@@ -253,6 +253,20 @@ describe('email intake', () => {
     expect(jobs).toBe(1);
   });
 
+  it('keeps the rendered view for an email with a blocked logo', async () => {
+    const fx = await seedInbox();
+    const stored = await receiveInboundEmail(env, { to: fx.address, raw: rawEmail({
+      to: fx.address, from: 'Priya Raman <priya@northwind.example>', subject: 'Logo',
+      html: '<img src="https://cdn.northwind.example/logo.png" alt="Northwind" width="140"><p>Hi team, the invoice is attached.</p>',
+    }) });
+    if (stored.status !== 'stored') throw new Error('not stored');
+    const email = inboundEmailViewSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/messages/${stored.messageId}`)).json());
+    expect(email.body.text).toBe('Hi team, the invoice is attached.');
+    // Re-cleaning the stored body for display must not demote it to plain text.
+    expect(email.body.html).toContain('class="hermes-image-blocked"');
+    expect(email.body.html).toContain('Hi team, the invoice is attached.');
+  });
+
   it('reads a text attachment and gives it to the agent between the untrusted markers', async () => {
     const fx = await seedInbox();
     const boundary = 'b1';
