@@ -24,7 +24,8 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   const pane = app(page);
   await expectAdminPage(page, 'Approvals');
   await expect(pane.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
-  await expect(pane.getByText('Who approves each decision, and each action after it. Changes also apply to work already waiting.')).toBeVisible();
+  // No sentence floats under the tabs; the one consequence shows beside Save.
+  await expect(pane.getByText(/already waiting/)).toHaveCount(0);
 
   const decisions = pane.getByRole('list', { name: 'Decisions' });
   const actions = pane.getByRole('list', { name: 'Actions after approval' });
@@ -54,6 +55,7 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(above.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
   await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
   await who.getByRole('combobox', { name: 'How many different people' }).selectOption('3');
+  await expect(above.getByRole('status')).toHaveText('Saving also applies to work already waiting.');
   // One Finance group: "One from each group" has nothing to choose between.
   await expect(who.getByRole('switch', { name: 'One from each group' })).toHaveCount(0);
   await expect(who.getByRole('switch', { name: 'Can the person who approved the request also do this?' })).toHaveAttribute('aria-checked', 'true');

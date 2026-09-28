@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { AdminPageHeader } from './AdminDetailLayout.js';
 import { useAdapter, useAppState, useIsAdmin } from '../store-context.js';
 import { Ack, Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { RestError } from '../../model/rest.js';
@@ -297,12 +298,7 @@ export function RuntimeCapacityTab() {
 
   return (
     <div className="runtime-capacity">
-      <header className="runtime-capacity-heading">
-        <div>
-          <h2 className="sr-only">Capacity</h2>
-          <p>Add a Hermes Cloud agent so a new member can be given one.</p>
-        </div>
-      </header>
+      <AdminPageHeader title="Capacity" />
 
       {error && <p className="runtime-capacity-error" role="alert">{error}</p>}
       {notice && <div className="runtime-capacity-notice" role="status">{notice}</div>}

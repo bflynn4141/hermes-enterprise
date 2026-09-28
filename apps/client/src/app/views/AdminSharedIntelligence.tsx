@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { AdminPageHeader } from './AdminDetailLayout.js';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   REQ,
@@ -187,10 +188,7 @@ export function AdminSharedIntelligence() {
   return (
     <div className="scroll admin-intelligence-scroll">
       <div className="app-body admin-intelligence">
-        <div className="admin-intelligence-title admin-detail-heading">
-          <div><h2 className="sr-only">Shared Intelligence</h2><p>Lessons members shared, ranked against your team’s goals.</p></div>
-          <Button onClick={() => setAddingGoal((value) => !value)}>{addingGoal ? 'Cancel' : 'Add goal'}</Button>
-        </div>
+        <AdminPageHeader title="Shared Intelligence" actions={<Button onClick={() => setAddingGoal((value) => !value)}>{addingGoal ? 'Cancel' : 'Add goal'}</Button>} />
 
         <AnimatePresence initial={false}>
           {addingGoal && <motion.form className="admin-goal-form" onSubmit={(event) => { event.preventDefault(); void addGoal(); }} initial={reduceMotion ? false : { opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}>

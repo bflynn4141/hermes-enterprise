@@ -21,7 +21,7 @@ import {
 } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { createPortal } from 'react-dom';
-import { Glass, Icon } from './icons.js';
+import { Glass, Icon, type GlassName } from './icons.js';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   primary?: boolean;
@@ -502,27 +502,20 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
 }
 
 /**
- * The one empty state (docs/DESIGN.md, Empty states). A list, tab or section
- * with nothing in it says so with an icon and a title, never a bare sentence.
- * `compact` is the same thing in a row, for lists inside a card or a popover.
+ * The one empty state (docs/DESIGN.md, Design system rules). A list, tab or
+ * section with nothing in it says so with an icon and a title, centered, and
+ * its one action sits below them, never above. `compact` is the same thing,
+ * smaller, for a list inside a card, a section or a popover.
  */
-export function EmptyState({ icon = 'context', title, detail, action, compact = false }: { icon?: string; title: string; detail?: ReactNode; action?: ReactNode; compact?: boolean }) {
-  if (compact) return (
-    <div className="empty-state compact">
-      <Glass name={icon} size={28} className="icon" />
+export function EmptyState({ icon = 'context', title, detail, action, compact = false }: { icon?: GlassName; title: string; detail?: ReactNode; action?: ReactNode; compact?: boolean }) {
+  return (
+    <div className={`empty-state${compact ? ' compact' : ''}`}>
+      <Glass name={icon} size={compact ? 32 : 48} className="icon" />
       <div className="empty-state-text">
         <div className="empty-state-title">{title}</div>
         {detail && <div className="meta">{detail}</div>}
       </div>
-      {action}
-    </div>
-  );
-  return (
-    <div className="empty-state">
-      <Glass name={icon} size={48} className="icon" />
-      <div className="empty-state-title">{title}</div>
-      {detail && <div className="meta">{detail}</div>}
-      {action}
+      {action && <div className="empty-state-action">{action}</div>}
     </div>
   );
 }

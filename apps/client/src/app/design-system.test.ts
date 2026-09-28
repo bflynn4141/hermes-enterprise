@@ -3,12 +3,15 @@
 // New features keep rebuilding what the primitives already do: a sentence
 // where an empty state belongs, a hand-made tab row, an uppercase eyebrow.
 // Review misses these, so this test reads the source and fails with the rule
-// and the primitive to use instead. Each rule is a pattern in the source, not a
-// render, so it is fast and runs in `pnpm check:quick`.
+// and the primitive to use instead. Most rules are patterns in the source; one
+// renders EmptyState. All of it is fast and runs in `pnpm check:quick`.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { EmptyState } from './ui/primitives.js';
 
 const srcDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -42,6 +45,21 @@ describe('design system', () => {
     const noYet = />\s*(?:No|Nothing) [^<{]*\byet\b\.?\s*<\//;
     const found = [...find(views, afterEmptyCheck), ...find(views, noYet)];
     expect(found, 'Use <EmptyState icon title /> (add `compact` inside a card or popover) instead of a sentence.').toEqual([]);
+  });
+
+  it('centers an empty state and puts its action below the words', () => {
+    const html = renderToStaticMarkup(createElement(EmptyState, { compact: true, icon: 'inbox', title: 'No inboxes yet', action: createElement('button', null, 'Add inbox') }));
+    expect(html.indexOf('No inboxes yet')).toBeLessThan(html.indexOf('Add inbox'));
+    expect(html).toContain('empty-state compact');
+  });
+
+  it('gives Admin pages no floating description under their tabs', () => {
+    // Pages start with AdminPageHeader, which has no description slot. Only a
+    // drill-down (one agent, one role, one approval) has a visible title, and
+    // with it the record's own description.
+    const drillDowns = ['AdminAgents.tsx', 'AdminApprovals.tsx', 'AdminRoles.tsx'];
+    const found = find(views.filter((file) => !drillDowns.some((name) => file.endsWith(name))), /className="admin-detail-heading"/);
+    expect(found, 'Start an Admin page with <AdminPageHeader title actions />; put explanations in docs, not under the tabs.').toEqual([]);
   });
 
   it('builds tab rows only with the Tabs primitive', () => {

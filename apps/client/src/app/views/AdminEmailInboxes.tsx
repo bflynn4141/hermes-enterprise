@@ -241,8 +241,8 @@ export function NewInbox({ roles, agents, onCreated, onClose }: {
   </Dialog>;
 }
 
-/** Role inboxes. `embedded` renders it as a section of the Email page. */
-export function AdminEmailInboxes({ embedded = false }: { embedded?: boolean }) {
+/** Role inboxes, the first section of Admin → Email. */
+export function AdminEmailInboxes() {
   const adapter = useAdapter();
   const state = useAppState();
   const [inboxes, setInboxes] = useState<EmailInbox[] | null>(null);
@@ -292,19 +292,19 @@ export function AdminEmailInboxes({ embedded = false }: { embedded?: boolean }) 
 
   if (loadError && !inboxes) return <div role="alert" className="admin-roles-error"><p>Could not load role inboxes. Try again.</p><Button onClick={polling.refresh}>Try again</Button></div>;
   if (!inboxes) return <Skeleton rows={4} label="Loading role inboxes" />;
+  const addInbox = <Button disabled={busyId !== null} onClick={() => setAdding(true)}>Add inbox</Button>;
   return <>
-    <header className={embedded ? 'admin-section-heading' : 'admin-detail-heading'}>
-      <div>
-        {embedded ? <h3>Role inboxes</h3> : <h2>Role inboxes</h2>}
-        <p>Each role gets an address. Its agent suggests replies; people approve them.</p>
-      </div>
-      <Button disabled={!domain || busyId !== null} onClick={() => setAdding(true)}>Add inbox</Button>
+    {/* With no inboxes the Add button belongs to the empty state, below it. */}
+    <header className="admin-section-heading">
+      <h3>Role inboxes</h3>
+      {domain && inboxes.length > 0 && addInbox}
     </header>
-    {!domain && <p className="email-inbox-help">Role inboxes aren’t turned on for this Hermes yet.</p>}
     {loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh role inboxes. We’ll try again. <Button small disabled={busyId !== null} onClick={polling.refresh}>Try now</Button></p>}
     {problem !== null && <Problem error={problem} />}
-    {inboxes.length === 0
-      ? <EmptyState compact={embedded} icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships to start." />
+    {!domain
+      ? <EmptyState compact icon="inbox" title="Role inboxes aren’t turned on yet" detail="Ask the person who runs Hermes for your company to turn them on." />
+      : inboxes.length === 0
+      ? <EmptyState compact icon="inbox" title="No role inboxes yet" detail="Each role gets an address. Its agent suggests replies; people approve them." action={addInbox} />
       : <ul className="email-inboxes-list" aria-label="Role inboxes">
         {inboxes.map((inbox) => <li key={inbox.id}>
           <div className="email-inbox-top">
@@ -320,14 +320,14 @@ export function AdminEmailInboxes({ embedded = false }: { embedded?: boolean }) 
           <RecentMail inbox={inbox} />
         </li>)}
       </ul>}
-    <details className="admin-help">
+    {inboxes.length > 0 && <details className="admin-help">
       <summary>How to send email to an inbox</summary>
       <ol>
         <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
         <li>In Google Workspace: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
         <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
       </ol>
-    </details>
+    </details>}
     {adding && <NewInbox roles={roles} agents={agents} onClose={() => setAdding(false)} onCreated={(inbox) => { polling.refresh(); replace(inbox); setAdding(false); }} />}
     {removing && <Dialog open title={`Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
       <Button onClick={() => setRemoving(null)}>Keep it</Button>

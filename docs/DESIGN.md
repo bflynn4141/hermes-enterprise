@@ -138,9 +138,15 @@ Stripe's and GitHub Primer's as checks).
   joins the page it belongs to: the default model lives on Models, run limits
   on Usage, role inboxes on Email. Old links (`Agents`, `Inboxes`,
   `Inbox rules`) land on the page that absorbed them.
-- **A title and at most one sentence.** The page heading carries one short
-  sentence or none. Cards take a title, at most one sentence, the controls,
-  and one footer action (Vercel's fieldset).
+- **Nothing floats under the tabs.** A page starts with `AdminPageHeader`,
+  which has a title for screen readers and an optional row of actions, and no
+  description slot. Cards take a title, at most one sentence, the controls,
+  and one footer action (Vercel's fieldset). A consequence worth knowing goes
+  where the action is: "Saving also applies to work already waiting" appears
+  beside Save once something changed. Only a drill-down (one agent, one role,
+  one approval) shows a visible title with the record's own description.
+- **Status lives in its row.** A connection's state is a pill in the card's
+  Status or Connection row, not a second pill beside the page.
 - **No how-it-works cards.** Settings pages hold settings. Step-by-step help
   that someone needs once goes behind a disclosure ("How to send email to an
   inbox"), closed by default. Explanations of the product belong in docs.
@@ -163,8 +169,12 @@ use when it fails.
   `role="tablist"` outside the primitive.
 - **Anything empty is an `EmptyState`.** A list, tab, section or popover with
   nothing in it shows an icon and a short title, plus at most one line of
-  detail. Use `compact` inside a card or popover; the full size fills a page
-  or tab. Never a bare "No … yet." sentence. A missing value in a field
+  detail, centered. Its action sits below the words, inside the empty state:
+  while a list is empty, its "Add …" button moves out of the header and into
+  the empty state, and returns to the header once there is something to list.
+  Use `compact` inside a card, section or popover; the full size fills a page
+  or tab. Never a bare "No … yet." sentence. `icon` accepts only glass icons
+  that exist. A missing value in a field
   ("No owner", "No limit") is a value, not an empty state, and stays text.
   Checked: an emptiness test followed by a "No…"/"Nothing…" element, or any
   element reading "No … yet".
@@ -173,8 +183,9 @@ use when it fails.
   account switcher.
 - **Text is 12px or larger.** Older styles below 12px are being paid down; the
   check is a ratchet, so the count may fall but not rise.
-- **A title and at most one sentence.** Not checkable by pattern; reviewed
-  against this document.
+- **A title and at most one sentence.** Checked for Admin pages: only the
+  three drill-downs may use a visible heading with a description. Elsewhere
+  reviewed against this document.
 
 ## Motion
 

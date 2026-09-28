@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ADMIN, BUILTIN_ROLE_SLUGS, LIB, type ApprovalRoute, type MemberEntity, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { useWorkspaceLists } from './lists.js';
 import { approvalsForRole } from './approval-routes.js';
 import { useStepUp } from './use-step-up.js';
@@ -117,13 +117,7 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
     />;
   }
   return <>
-    <header className="admin-detail-heading">
-      <div>
-        <h2 className="sr-only">Roles</h2>
-        <p>Who holds each job, and what they approve.</p>
-      </div>
-      <Button onClick={() => setCreating(true)}>New role</Button>
-    </header>
+    <AdminPageHeader title="Roles" actions={<Button onClick={() => setCreating(true)}>New role</Button>} />
     <ul className="admin-roles-list" aria-label="Roles">
       {sortRoles(roles).map((role) => {
         const agents = roleAgents(role);
@@ -265,7 +259,6 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
     <header className="admin-detail-heading"><div>
       <h2>{role.name}</h2>
       {role.description && <p>{role.description}</p>}
-      {role.builtin && <p>Every workspace starts with this role. Its name stays the same; its description can change.</p>}
     </div></header>
 
     <AdminSettingsCard

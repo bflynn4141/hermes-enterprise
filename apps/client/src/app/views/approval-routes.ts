@@ -17,8 +17,8 @@ import {
 
 export const ADMIN_APPROVALS_VIEW = 'Approvals';
 
-export const APPROVALS_SCOPE = 'Who approves each decision, and each action after it.';
-export const APPROVALS_LIVE = 'Changes also apply to work already waiting.';
+/** Shown beside Save once something changed: the one consequence to know. */
+export const APPROVALS_LIVE = 'Saving also applies to work already waiting.';
 export const NO_APPROVER_MESSAGE = 'Choose at least one group who can approve.';
 export const OTHER_CURRENCY_HINT = 'Amounts in another currency use this rule too.';
 export const AMOUNT_PROBLEM = 'Enter an amount above zero, like 5000.';

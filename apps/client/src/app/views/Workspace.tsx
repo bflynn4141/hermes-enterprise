@@ -29,7 +29,7 @@ import { CloudConnection } from './CloudConnection.js';
 import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
 import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
-import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminDetailLayout, AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
@@ -1301,8 +1301,8 @@ function EmailTab() {
 function EmailPage() {
   return (
     <div className="admin-detail-page">
-      <header className="admin-detail-heading"><div><h2 className="sr-only">Email</h2><p>Role inboxes receive email. Approved replies go out from the sending account.</p></div></header>
-      <AdminEmailInboxes embedded />
+      <AdminPageHeader title="Email" />
+      <AdminEmailInboxes />
       <EmailTab />
     </div>
   );
@@ -1400,13 +1400,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
   if (!connection) {
     return (
       <div className="admin-detail-page">
-        <div className="admin-detail-heading">
-          <div>
-            <h2 className="sr-only">Slack</h2>
-            <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
-          </div>
-          <Pill tone="warn">Status unavailable</Pill>
-        </div>
+        <AdminPageHeader title="Slack" />
         <AdminSettingsCard
           title="Slack status is unavailable"
           description="Hermes could not check the connection."
@@ -1459,13 +1453,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
   const statusTone = connected ? 'ok' : connection.status === 'error' ? 'warn' : 'muted';
   return (
     <div className="admin-detail-page">
-      <div className="admin-detail-heading">
-        <div>
-          <h2 className="sr-only">Slack</h2>
-          <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
-        </div>
-        <Pill tone={statusTone}>{statusLabel}</Pill>
-      </div>
+      <AdminPageHeader title="Slack" />
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
         title={connected
@@ -1493,7 +1481,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
           ) : null}
         </>}
       >
-        <div className="kv"><span className="grow">Connection</span><span className="meta">{statusLabel}</span></div>
+        <div className="kv"><span className="grow">Connection</span><Pill tone={statusTone}>{statusLabel}</Pill></div>
         {connected && <div className="kv"><span className="grow">Slack workspace</span><span className="meta">{destination}</span></div>}
         {connected && connection.installation_kind && <div className="kv"><span className="grow">Installation</span><span className="meta">{connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'}</span></div>}
       </AdminSettingsCard>
@@ -1692,7 +1680,7 @@ function OrganizationTab() {
 
   return (
     <>
-      <h2 className="sr-only">General</h2>
+      <AdminPageHeader title="General" />
       <AdminSettingsCard title="Workspace information">
       {[
         ['Workspace', state.workspace.name],
@@ -2220,36 +2208,35 @@ function ProviderKeysTab() {
     );
   }
 
+  const connectButton = (
+    <Button
+      onClick={() => {
+        setDialog('add');
+        setTarget(null);
+        setSecret('');
+        setConnectStatus({ kind: 'idle' });
+        setConnectKeyId(null);
+        setAutoFocusKey(false);
+        setManualProviderFlow(false);
+        setNotice(null);
+      }}
+    >
+      Connect Nous Portal
+    </Button>
+  );
   return (
     <>
-      <div className="admin-detail-heading">
-        <div><h2 className="sr-only">Models</h2><p>Your agents run on models from Nous Portal.</p></div>
-        {!locked && (
-          <Button
-            onClick={() => {
-              setDialog('add');
-              setTarget(null);
-              setSecret('');
-              setConnectStatus({ kind: 'idle' });
-              setConnectKeyId(null);
-              setAutoFocusKey(false);
-              setManualProviderFlow(false);
-              setNotice(null);
-            }}
-          >
-            Connect Nous Portal
-          </Button>
-        )}
-      </div>
+      {/* With nothing connected, the button moves into the empty state. */}
+      <AdminPageHeader title="Models" actions={!locked && keys.length > 0 ? connectButton : undefined} />
       {locked ? (
         <EmptyState
-          icon="key"
+          icon="admission"
           title="Provider connection details are protected"
           detail="Your agents can keep using a saved Nous Portal connection in the background. Sign in again only to view or change connection settings."
           action={<Button onClick={revealConnectionStatus}>Sign in to manage</Button>}
         />
       ) : keys.length === 0 ? (
-        <EmptyState icon="key" title={EMPTY.providerKeys} />
+        <EmptyState icon="settings" title={EMPTY.providerKeys} action={connectButton} />
       ) : (
         <div className="col">
           {keys.map((key) => (
@@ -2442,7 +2429,7 @@ function UsageTab() {
 
   return (
     <>
-      <h2 className="sr-only">Usage</h2>
+      <AdminPageHeader title="Usage" />
       <div className="row" style={{ gap: 16 }}>
         <Tabs
           tabs={[
@@ -2749,7 +2736,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
   return (
     <>
       {adminControls ? (
-        <header className="admin-detail-heading"><div><h2 className="sr-only">Data &amp; privacy</h2><p>What Hermes keeps, for how long, and where.</p></div></header>
+        <AdminPageHeader title="Data & privacy" />
       ) : (
         <div>
           <h2 className="section-title">Data and privacy</h2>

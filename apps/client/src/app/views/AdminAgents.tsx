@@ -11,7 +11,7 @@ import { ADMIN, LIB, type AgentDirectory, type AgentDirectoryEntry, type Enterpr
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { catalogRows } from '../selectors.js';
 import { Button, EmptyState, MenuItem, Skeleton } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { ApprovalSwitches } from './AgentPermissions.js';
 import { SkillAssignmentEditor, providerName } from './Workspace.js';
 import { needsSignIn, useStepUp } from './use-step-up.js';
@@ -118,7 +118,7 @@ export function AdminAgents({ agentId }: { agentId: string | null }) {
     />;
   }
   return <>
-    <header className="admin-detail-heading"><div><h2 className="sr-only">Agents</h2><p>Who each agent works for, and what it may do.</p></div></header>
+    <AdminPageHeader title="Agents" />
     {directory.items.length === 0
       ? <EmptyState icon="iris" title="No agents yet" detail="An agent appears here when someone joins and finishes setup." />
       : <ul className="admin-agents-list" aria-label="Agents">

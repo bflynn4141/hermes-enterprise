@@ -60,6 +60,22 @@ export function AdminDetailLayout({ selected, children }: {
 }
 
 /**
+ * The top of an Admin page. The page's tab already names it, so the title is
+ * for screen readers, and there is no slot for a description: a sentence
+ * floating under the tabs is the text this layout exists to remove
+ * (docs/DESIGN.md, Admin). Actions sit on their own row, right-aligned.
+ */
+export function AdminPageHeader({ title, actions }: { title: string; actions?: ReactNode }) {
+  if (!actions) return <h2 className="sr-only">{title}</h2>;
+  return (
+    <header className="admin-page-header">
+      <h2 className="sr-only">{title}</h2>
+      {actions}
+    </header>
+  );
+}
+
+/**
  * One block of settings: a title, at most one sentence under it, the controls,
  * and a footer for the single action (Vercel's fieldset). Explanations longer
  * than a sentence do not belong here.

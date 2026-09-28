@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ADMIN, MAX_APPROVALS, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { AdminApprovalsWorkflow } from './AdminApprovalsWorkflow.js';
 import { roleHolders, sortRoles } from './AdminRoles.js';
 import { useWorkspaceLists } from './lists.js';
@@ -20,7 +20,6 @@ import {
   ADMIN_APPROVALS_VIEW,
   AMOUNT_PROBLEM,
   APPROVALS_LIVE,
-  APPROVALS_SCOPE,
   CURRENCY_PROBLEM,
   NO_APPROVER_MESSAGE,
   OTHER_CURRENCY_HINT,
@@ -93,10 +92,7 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     </ul>
   </section>;
   return <>
-    <header className="admin-detail-heading"><div>
-      <h2 className="sr-only">Approvals</h2>
-      <p>{APPROVALS_SCOPE} {APPROVALS_LIVE}</p>
-    </div></header>
+    <AdminPageHeader title="Approvals" />
     {group('Decisions', null, decisions)}
     {group('Actions after approval', null, actions)}
     <AdminApprovalsWorkflow />
@@ -193,7 +189,7 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
       ? <Problem error={problem} />
       : alert
         ? <p role="alert">{alert}</p>
-        : <p role="status">{status || (route.is_default && !changed ? 'This is the default.' : '')}</p>}
+        : <p role="status">{status || (changed ? APPROVALS_LIVE : route.is_default ? 'This is the default.' : '')}</p>}
     <div className="admin-roles-actions">
       {!route.is_default && <Button disabled={busy} onClick={reset}>Reset to default</Button>}
       <Button primary disabled={!changed || invalid || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -207,7 +203,6 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
       <h2>{route.label}</h2>
       <p>{route.description}</p>
       {route.workflow_note && <p>{route.workflow_note}</p>}
-      <p>{APPROVALS_LIVE}</p>
     </div></header>
 
     <AdminSettingsCard

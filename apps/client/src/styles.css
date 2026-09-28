@@ -293,9 +293,6 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
    queue/detail flow at narrow pane widths. */
 .admin-intelligence-scroll { container-type: inline-size; }
 .admin-intelligence { display: flex; flex-direction: column; gap: 18px; min-height: 100%; padding-bottom: 40px; }
-.admin-intelligence-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
-.admin-intelligence-title h1 { margin: 0; }
-.admin-intelligence-title p { max-width: 720px; margin: 7px 0 0; color: var(--muted); line-height: 1.55; }
 .admin-goal-form { display: grid; grid-template-columns: 160px 180px minmax(220px, 1fr) auto; align-items: end; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background-color: var(--context); background-image: var(--panel); }
 .admin-goal-form label, .admin-intelligence-toolbar label, .admin-intelligence-decision label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .admin-goal-form label > span, .admin-intelligence-toolbar label > span, .admin-intelligence-decision label > span { color: var(--muted); font-size: 11.2px; }
@@ -362,7 +359,6 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
   .admin-intelligence-detail { border-top: 1px solid var(--line); }
 }
 @container (max-width: 560px) {
-  .admin-intelligence-title { flex-direction: column; }
   .admin-goal-form { grid-template-columns: 1fr; }
   .admin-goal-form .wide { grid-column: auto; }
   .admin-intelligence-workspace { margin-inline: -20px; border-inline: 0; border-radius: 0; }
@@ -607,9 +603,10 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-detail-tabs .tab-indicator, .admin-detail-sections .tab-indicator { display: none; }
 .admin-detail-tabs .tab[aria-selected="true"], .admin-detail-sections .tab[aria-selected="true"] { border-bottom-color: var(--glass); }
 .admin-detail-page { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
-.admin-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.admin-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+/* An Admin page's actions: one row, right-aligned, no text beside them. */
+.admin-page-header { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 12px; }
 .admin-section-heading h3 { margin: 0; font-size: 17px; font-weight: 500; line-height: 24px; }
-.admin-section-heading p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; line-height: 20px; }
 /* Help that only some people need sits behind one line, closed. */
 .admin-help { color: var(--muted); font-size: 13.5px; line-height: 1.6; }
 .admin-help summary { cursor: pointer; width: fit-content; }
@@ -619,8 +616,6 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-detail-heading h2 { margin: 0; font-size: 25px; font-weight: 500; line-height: 1.25; }
 .admin-detail-heading p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 62ch; }
 .admin-detail-heading > div { flex: 1 1 260px; }
-/* The page tab names the page, so its heading is for screen readers only. */
-.admin-settings-content h2.sr-only + p { margin-top: 0; }
 .admin-settings-card { border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.015); min-width: 0; overflow: hidden; }
 .admin-settings-card-header { padding: 22px 24px 16px; }
 .admin-settings-card-header h3 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 500; }
@@ -669,10 +664,6 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 /* Runtime capacity is a two-step Admin flow. Secrets stay in the form only;
    success states use the existing reduced-motion-aware Ack primitive. */
 .runtime-capacity { display: flex; flex-direction: column; gap: 18px; }
-.runtime-capacity-heading { display: flex; align-items: flex-start; gap: 16px; }
-.runtime-capacity-heading > div { flex: 1 1 0; min-width: 0; }
-.runtime-capacity-heading h2 { font: 500 20.8px/24px var(--font-display); }
-.runtime-capacity-heading p { max-width: 760px; margin-top: 6px; color: var(--muted); }
 .runtime-capacity-step { display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--context); }
 .runtime-capacity-step > header { display: flex; align-items: flex-start; gap: 12px; }
 .runtime-capacity-step > header > div { min-width: 0; }
@@ -722,10 +713,11 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .setup-two { display: flex; gap: 12px; padding: 20px 0; }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 260px; text-align: center; color: var(--muted); }
 .empty-state .icon { width: 48px; height: 48px; opacity: .8; }
+.empty-state-text { display: flex; flex-direction: column; align-items: center; gap: 4px; max-width: 46ch; }
 .empty-state-title { color: var(--body); font-size: 14.4px; }
-.empty-state.compact { flex-direction: row; justify-content: flex-start; align-items: center; gap: 12px; min-height: 0; padding: 12px 0; text-align: left; }
-.empty-state.compact .icon { width: 28px; height: 28px; }
-.empty-state.compact .empty-state-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.empty-state-action { margin-top: 4px; }
+.empty-state.compact { min-height: 0; gap: 10px; padding: 28px 16px; }
+.empty-state.compact .icon { width: 32px; height: 32px; }
 .empty-state.compact .empty-state-title { font-size: 14px; line-height: 20px; }
 .empty-state.compact .meta { font-size: 13px; line-height: 18px; }
 .comparison { display: flex; flex-direction: column; }
