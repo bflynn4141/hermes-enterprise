@@ -646,6 +646,13 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = { section: 'settings', view: 'Email' };
       break;
 
+    case 'microsoft_mail.connected':
+      text = `${actor} connected a Microsoft 365 account for sending`;
+      detail = 'Hermes sends only emails a person approved';
+      status = 'Connected';
+      ref = { section: 'admin', view: 'Email' };
+      break;
+
     case 'outbound_email.sent':
       text = `${capitalize(subject)} was sent`;
       detail = 'Sent from Gmail exactly as approved';

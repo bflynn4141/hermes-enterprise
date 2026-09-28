@@ -201,6 +201,7 @@ export const EVENT_KINDS = [
   'slack.disconnected',
   'slack.credential_rewrapped',
   'gmail.connected',
+  'microsoft_mail.connected',
   'outbound_email.sent',
   'partner.invoice_received',
   'partner.invoice_corrected',

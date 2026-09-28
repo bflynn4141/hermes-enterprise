@@ -33,7 +33,7 @@ export async function queueApprovedEmail(
   const sender = input.payload.details.sender.address.trim().toLowerCase();
   const account = await tx.query<{ id: string }>(
     `SELECT id FROM outbound_email_accounts
-      WHERE workspace_id=$1 AND address=$2 AND provider='gmail' AND status='connected'
+      WHERE workspace_id=$1 AND address=$2 AND status='connected'
       LIMIT 1`,
     [input.workspaceId, sender],
   );

@@ -668,6 +668,7 @@ export function createRest(options: RestOptions) {
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
+    startMicrosoftOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/microsoft/oauth/start`, outboundEmailOAuthStartSchema, {}),
     inboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email/evidence`, inboundEmailConnectionSchema),
     startGmailEvidenceOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/evidence/gmail/oauth/start`, inboundEmailOAuthStartSchema, {}),
     importGmailEvidenceThread: (workspaceId: string, body: InboundEmailThreadImportInput) =>

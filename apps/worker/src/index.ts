@@ -22,7 +22,7 @@ import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
-import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
+import { getOutboundEmailConnection, gmailOAuthCallback, microsoftOAuthCallback, startGmailOAuth, startMicrosoftOAuth } from './routes/outbound-email.js';
 import {
   getInboundEmailConnection,
   gmailEvidenceOAuthCallback,
@@ -349,6 +349,7 @@ app.post('/demo/request-access', requestDemoAccess);
 // are verified against the raw request bytes before JSON parsing.
 app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
 app.get('/integrations/gmail/oauth/callback', gmailOAuthCallback);
+app.get('/integrations/microsoft/oauth/callback', microsoftOAuthCallback);
 app.get('/integrations/gmail-evidence/oauth/callback', gmailEvidenceOAuthCallback);
 app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
@@ -384,6 +385,7 @@ app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
 app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
 app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
+app.post('/w/:ws/integrations/email/microsoft/oauth/start', startMicrosoftOAuth);
 app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);

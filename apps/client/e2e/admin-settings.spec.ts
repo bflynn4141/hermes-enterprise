@@ -207,9 +207,9 @@ for (const channel of ['Slack', 'Email']) {
     await page.goto(`/?${channel.toLowerCase()}=unconfigured#admin/${channel}`);
     const app = page.getByRole('region', { name: 'Application' });
     await expect(channel === 'Email'
-      ? app.getByText(/Gmail sending isn’t turned on|Sending from Gmail is not available/).first()
+      ? app.getByText(/Sending email is not available on this deployment/).first()
       : app.getByRole('heading', { name: 'Slack is not available yet' })).toBeVisible();
-    await expect(app.getByRole('button', { name: channel === 'Email' ? 'Connect Gmail' : 'Connect Slack' })).toHaveCount(0);
+    await expect(app.getByRole('button', { name: channel === 'Email' ? /^Connect (Google|Microsoft)$/ : 'Connect Slack' })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`${channel.toLowerCase()}-detail.png`), fullPage: true });
     await page.goto(`/?${channel.toLowerCase()}=unavailable#admin/${channel}`);
     await expect(app.getByRole('alert')).toContainText('could not be loaded');
@@ -217,3 +217,20 @@ for (const channel of ['Slack', 'Email']) {
     await expect(app.getByRole('alert')).toContainText('could not be loaded');
   });
 }
+
+test('the sending account can be Google or Microsoft (C99)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/#admin/Email');
+  const account = page.getByRole('region', { name: 'Sending account' });
+  // Nothing connected: one button per service this deployment can connect, no status badge.
+  await expect(account.getByRole('button', { name: 'Connect Google', exact: true })).toBeVisible();
+  await expect(account.getByRole('button', { name: 'Connect Microsoft', exact: true })).toBeVisible();
+  await expect(account.getByText('Not connected')).toHaveCount(0);
+
+  await page.goto('/?email=microsoft#admin/Email');
+  await expect(account.getByText('Approved replies and outreach go out from this Microsoft 365 account.')).toBeVisible();
+  await expect(account.getByText('partners@contoso.example')).toBeVisible();
+  await expect(account.getByText('Connected', { exact: true })).toBeVisible();
+  await expect(account.getByRole('button', { name: 'Reconnect Microsoft 365' })).toBeVisible();
+  await expect(account.getByRole('button', { name: 'Use Google instead' })).toBeVisible();
+});

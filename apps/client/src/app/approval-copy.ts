@@ -232,7 +232,7 @@ export function approvalEffectSentence(view: ApprovalView): string {
   switch (view.effect.status) {
     case 'simulated': return 'This is a test workspace, so nothing was actually sent.';
     case 'executed': return reply ? 'The reply was sent.' : 'Done.';
-    case 'waiting': return reply ? 'Waiting for a connected Gmail account to send from.' : 'Waiting to run.';
+    case 'waiting': return reply ? 'Waiting for a connected Google or Microsoft account to send from.' : 'Waiting to run.';
     case 'failed': return reply ? 'The reply could not be sent. Nothing went out.' : 'This did not run.';
     case 'unavailable': return 'Nothing runs automatically for this kind of request.';
     case 'not_required': return 'Nothing else needs to happen.';

@@ -265,7 +265,7 @@ async function addReplyAudience(
 async function replySender(tx: Tx, workspaceId: string, owner: InboxOwner): Promise<string> {
   const account = await tx.query<{ address: string }>(
     `SELECT address FROM outbound_email_accounts
-      WHERE workspace_id=$1 AND provider='gmail' AND status='connected'
+      WHERE workspace_id=$1 AND status='connected'
       ORDER BY (address=$2) DESC, created_at LIMIT 1`,
     [workspaceId, owner.email],
   );

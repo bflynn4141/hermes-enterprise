@@ -2,8 +2,12 @@ import { effectExecutorMode, simulationReference } from '../domain/effects.js';
 import type { Env } from '../env.js';
 import { publishEvents, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
 import { GmailApiError, rawGmailMessage, sendGmailMessage } from './gmail-api.js';
-import { resolveGmailAccessToken } from './gmail-store.js';
+import { resolveSendingAccessToken } from './gmail-store.js';
 import { gmailFetcher } from './gmail-config.js';
+import { sendMicrosoftMessage } from './microsoft-api.js';
+import { microsoftFetcher } from './microsoft-config.js';
+
+const PROVIDER_NAME = { gmail: 'Gmail', microsoft: 'Microsoft' } as const;
 
 interface OutboxRow {
   readonly id: string;
@@ -74,7 +78,7 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       return null;
     }
     if (!row.account_id) return null;
-    const resolved = await resolveGmailAccessToken(tx, env, row.account_id);
+    const resolved = await resolveSendingAccessToken(tx, env, row.account_id);
     if (resolved.account.address !== row.sender_address) {
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
       return null;
@@ -85,6 +89,7 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     );
     return {
       row,
+      provider: resolved.account.provider,
       accessToken: resolved.token,
       raw: rawGmailMessage({
         senderAddress: row.sender_address,
@@ -101,7 +106,10 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
   if (!prepared) return;
 
   try {
-    const sent = await sendGmailMessage(prepared.accessToken, prepared.raw, gmailFetcher(env));
+    // The same approved bytes either way (C99); only the transport differs.
+    const sent = prepared.provider === 'microsoft'
+      ? await sendMicrosoftMessage(prepared.accessToken, prepared.raw, microsoftFetcher(env))
+      : await sendGmailMessage(prepared.accessToken, prepared.raw, gmailFetcher(env));
     await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       const changed = await tx.query(
         `UPDATE outbound_email_outbox SET state='sent',provider_message_id=$3,provider_thread_id=$4,
@@ -151,8 +159,8 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
             job.workspace_id,
             prepared.row.request_id,
             ambiguous
-              ? 'Gmail did not confirm whether the approved email was sent. Review the mailbox before retrying.'
-              : 'Gmail rejected the approved email.',
+              ? `${PROVIDER_NAME[prepared.provider]} did not confirm whether the approved email was sent. Review the mailbox before retrying.`
+              : `${PROVIDER_NAME[prepared.provider]} rejected the approved email.`,
           ],
         );
       }

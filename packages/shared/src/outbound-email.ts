@@ -4,6 +4,10 @@ export const outboundEmailConnectionSchema = z.object({
   configured: z.boolean(),
   status: z.enum(['unavailable', 'disconnected', 'connected', 'error']),
   address: z.string().max(320).nullable(),
+  /** Which service the current sending account belongs to (C99); null while none is connected. */
+  provider: z.enum(['gmail', 'microsoft']).nullable(),
+  /** Which services this deployment can connect: each needs its own OAuth app. */
+  providers: z.object({ gmail: z.boolean(), microsoft: z.boolean() }).strict(),
   connected_at: z.iso.datetime().nullable(),
   pending_messages: z.number().int().nonnegative(),
   can_manage: z.boolean(),

@@ -132,6 +132,16 @@ export interface Env {
   GMAIL_REDIRECT_URI?: string;
   /** Test-only HTTP injection; production uses Google endpoints directly. */
   GMAIL_FETCHER?: Fetcher;
+  /** Microsoft 365 / Outlook sending account (C99); off unless '1' and every value below is set. */
+  MICROSOFT_MAIL_ENABLED?: string;
+  MICROSOFT_CLIENT_ID?: string;
+  MICROSOFT_CLIENT_SECRET?: string;
+  MICROSOFT_STATE_SECRET?: string;
+  MICROSOFT_REDIRECT_URI?: string;
+  /** Entra tenant; 'organizations' (any work or school account) when unset. */
+  MICROSOFT_TENANT?: string;
+  /** Test seam for Microsoft identity and Graph calls. */
+  MICROSOFT_FETCHER?: Fetcher;
   /** Dedicated exact-scope OAuth client for explicitly selected Gmail evidence. */
   GMAIL_EVIDENCE_ENABLED?: string;
   GMAIL_EVIDENCE_CLIENT_ID?: string;
