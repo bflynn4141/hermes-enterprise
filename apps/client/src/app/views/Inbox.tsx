@@ -1127,7 +1127,7 @@ export function DocumentView({
   const consequence = isInvoice ? 'Saves the invoice in Library. No payment or email is sent.' : 'Saves an unsigned agreement in Library. Nothing is signed or sent.';
   const decisionLabel = requestActionLabel(request);
   const reviewerSummary = documentReviewerSummary(request, financeScoped, resolved);
-  const legacyWorkflowEvidence = workflowSessions.length === 0 ? <p className="meta">No source messages linked.</p> : (
+  const legacyWorkflowEvidence = workflowSessions.length === 0 ? <EmptyState compact icon="context" title="No source messages linked" /> : (
     <details className="legacy-disclosure">
       <summary>Workflow evidence ({workflowSessions.length} sources)</summary>
       {text(sharedPartner.name) && <p className="meta">
@@ -1367,7 +1367,7 @@ export function LegacyEffectsPanel({
         </p>
       )}
       <div className="col">
-        {effects.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>Nothing else is required.</div>}
+        {effects.length === 0 && <EmptyState compact icon="admission" title="Nothing else is required" />}
         {effects.map((effect) => (
           <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
             <Glass name="context" size={22} className="row-icon" />

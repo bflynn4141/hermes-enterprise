@@ -128,7 +128,7 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   const refreshProblem = loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh recent email. We’ll try again. <Button small disabled={retrying !== null} onClick={polling.refresh}>Try now</Button></p>;
   if (list === null) return refreshProblem || null;
   if (list === 'hidden') return <p className="email-inbox-facts">Only the people in this role and {inbox.agent.name}’s owner can read this inbox’s email.</p>;
-  if (list.messages.length === 0) return <>{refreshProblem}<p className="email-inbox-facts">No email yet. Send one to the address above to try it.</p></>;
+  if (list.messages.length === 0) return <>{refreshProblem}<EmptyState compact icon="inbox" title="No email yet" detail="Send one to the address above to try it." /></>;
   return <>{refreshProblem}<ul className="email-inbox-messages" aria-label={`Recent email at ${inbox.label}`}>
     {list.messages.slice(0, 5).map((message) => {
       const requestId = message.request_ids[0];
@@ -304,7 +304,7 @@ export function AdminEmailInboxes({ embedded = false }: { embedded?: boolean }) 
     {loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh role inboxes. We’ll try again. <Button small disabled={busyId !== null} onClick={polling.refresh}>Try now</Button></p>}
     {problem !== null && <Problem error={problem} />}
     {inboxes.length === 0
-      ? (embedded ? <p className="email-inbox-facts">No role inboxes yet.</p> : <EmptyState icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships to start." />)
+      ? <EmptyState compact={embedded} icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships to start." />
       : <ul className="email-inboxes-list" aria-label="Role inboxes">
         {inboxes.map((inbox) => <li key={inbox.id}>
           <div className="email-inbox-top">

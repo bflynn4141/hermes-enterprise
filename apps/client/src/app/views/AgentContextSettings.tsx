@@ -121,7 +121,7 @@ function ContextContents() {
       </div>)}
     </section>
     <section aria-label="Confirmed notes"><div className="agent-settings-heading"><div><h2 className="section-title">Confirmed notes</h2><p className="meta">Used in future replies. These are facts, not permission changes.</p></div>{admin && <Button link disabled={editor !== null} onClick={() => beginEditor('new')}>+ Add note</Button>}</div>
-      {!loading && notes.length === 0 && <p className="meta">No confirmed notes yet.</p>}
+      {!loading && notes.length === 0 && <EmptyState compact icon="context" title="No confirmed notes yet" />}
       {notes.map((note) => <div className="agent-settings-row" key={note.id}><div><span className="agent-settings-title">{note.title}</span><p className="agent-settings-copy">{note.text}</p><p className="meta">Confirmed by {note.author_name ?? 'a workspace admin'}{note.revision > 1 ? ' · Edited' : ''}</p></div>{admin && <div className="agent-settings-actions"><Button link disabled={editor !== null} onClick={() => beginEditor(note)}>Edit →</Button><Button link disabled={editor !== null} onClick={() => setRemove(note)}>Remove</Button></div>}</div>)}
     </section>
     {!admin && <p className="meta">Read-only. An admin can add or change context.</p>}

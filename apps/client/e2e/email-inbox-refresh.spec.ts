@@ -14,7 +14,7 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
   await page.goto('/#admin/Inboxes');
   await page.getByRole('button', { name: 'Add inbox', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Add inbox', exact: true }).click();
-  await expect(page.getByText('No email yet. Send one to the address above to try it.')).toBeVisible();
+  await expect(page.getByText('No email yet')).toBeVisible();
   const reads = () => page.evaluate(() => {
     const paths = (window as unknown as { __emailReads: string[] }).__emailReads;
     return { inboxes: paths.filter((path) => path.endsWith('/inboxes')).length, messages: paths.filter((path) => path.endsWith('/messages')).length };

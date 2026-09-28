@@ -594,22 +594,18 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .settings-page > .tabs .tab-indicator, .settings-section-tabs .tab-indicator { display: none; }
 .settings-page > .tabs .tab[aria-selected="true"], .settings-section-tabs .tab[aria-selected="true"] { border-bottom-color: var(--glass); }
 .admin-settings-page { min-height: 100%; display: flex; flex-direction: column; gap: 20px; }
-.admin-detail-layout { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 32px; align-items: start; align-content: start; flex: 1; min-height: 0; }
-/* The narrow-pane menu replaces the rail; see the container query below. */
-.admin-detail-switch { display: none; }
-.admin-detail-switch-button { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13.5px; cursor: pointer; }
-.admin-detail-switch-button:hover, .admin-detail-switch-button[aria-expanded="true"] { color: var(--body); border-color: var(--line-strong); }
-.admin-detail-switch-button:focus-visible { outline: 2px solid #9B9AE0; outline-offset: 2px; }
-.admin-detail-menu-group + .admin-detail-menu-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
-.admin-detail-menu .admin-detail-group-label { padding: 6px 12px 2px; }
-.admin-detail-index { display: flex; flex-direction: column; gap: 18px; position: sticky; top: 16px; }
-.admin-detail-group { display: flex; flex-direction: column; gap: 4px; }
-.admin-detail-group-label { margin: 0; padding: 0 12px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 16px; }
-.admin-detail-group-items { display: flex; flex-direction: column; gap: 2px; }
+.admin-detail-layout { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 32px; align-items: start; align-content: start; flex: 1; min-height: 0; }
+/* The rail names the three sections; below 900px they become a row of tabs. */
+.admin-detail-index { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 16px; }
 .admin-detail-index button { padding: 8px 12px; min-height: 36px; color: var(--muted); text-align: left; border: 1px solid transparent; border-radius: 7px; font-size: 14px; line-height: 20px; cursor: pointer; background: transparent; }
 .admin-detail-index button:hover { color: var(--body); background: rgba(255,255,255,.025); }
 .admin-detail-index button[aria-current="page"] { color: var(--body); background: var(--context); border-color: var(--line); }
 .admin-detail-index button:focus-visible { outline: 2px solid #9B9AE0; outline-offset: 2px; }
+.admin-detail-sections { display: none; }
+.admin-detail-tabs > .tabs, .admin-detail-sections > .tabs { flex-wrap: wrap; gap: 0 24px; }
+.admin-detail-tabs .tab, .admin-detail-sections .tab { flex: 0 0 auto; white-space: nowrap; font-size: 14px; }
+.admin-detail-tabs .tab-indicator, .admin-detail-sections .tab-indicator { display: none; }
+.admin-detail-tabs .tab[aria-selected="true"], .admin-detail-sections .tab[aria-selected="true"] { border-bottom-color: var(--glass); }
 .admin-detail-page { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
 .admin-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .admin-section-heading h3 { margin: 0; font-size: 17px; font-weight: 500; line-height: 24px; }
@@ -623,6 +619,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-detail-heading h2 { margin: 0; font-size: 25px; font-weight: 500; line-height: 1.25; }
 .admin-detail-heading p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 62ch; }
 .admin-detail-heading > div { flex: 1 1 260px; }
+/* The page tab names the page, so its heading is for screen readers only. */
+.admin-settings-content h2.sr-only + p { margin-top: 0; }
 .admin-settings-card { border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.015); min-width: 0; overflow: hidden; }
 .admin-settings-card-header { padding: 22px 24px 16px; }
 .admin-settings-card-header h3 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 500; }
@@ -644,7 +642,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 @container (max-width: 900px) {
   .admin-detail-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .admin-detail-index { display: none; }
-  .admin-detail-switch { display: block; }
+  .admin-detail-sections { display: block; }
 }
 @container (max-width: 500px) {
   .admin-settings-card-header { padding: 18px 18px 14px; }
@@ -724,6 +722,12 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .setup-two { display: flex; gap: 12px; padding: 20px 0; }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 260px; text-align: center; color: var(--muted); }
 .empty-state .icon { width: 48px; height: 48px; opacity: .8; }
+.empty-state-title { color: var(--body); font-size: 14.4px; }
+.empty-state.compact { flex-direction: row; justify-content: flex-start; align-items: center; gap: 12px; min-height: 0; padding: 12px 0; text-align: left; }
+.empty-state.compact .icon { width: 28px; height: 28px; }
+.empty-state.compact .empty-state-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.empty-state.compact .empty-state-title { font-size: 14px; line-height: 20px; }
+.empty-state.compact .meta { font-size: 13px; line-height: 18px; }
 .comparison { display: flex; flex-direction: column; }
 .comparison .cmp-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--line); font-size: 12.8px; }
 .comparison .cmp-row.head { min-height: 44px; font-size: 11.2px; color: var(--muted); }

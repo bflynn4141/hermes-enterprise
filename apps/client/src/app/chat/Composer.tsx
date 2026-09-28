@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ADMIN, type AttachmentDetail } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
-import { Button, Chip, IrisMark, MenuItem, Popover } from '../ui/primitives.js';
+import { Button, Chip, IrisMark, MenuItem, Popover, EmptyState } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey, LIST_KEYS } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
@@ -431,7 +431,7 @@ function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; o
       const ready = file.extraction_status === 'ready' && file.status === 'ready' && file.sha256;
       return <button type="button" className="menu-item small" key={file.id} disabled={already || !ready || session.draft.attachments.length >= 5 || uploading} onClick={() => attachSource(file)}><Glass name="context" size={18} /><span className="mi-body"><span>{file.name}</span><span className="mi-sub">{already ? 'Selected' : ready ? 'Available to select' : file.extraction_status === 'failed' ? 'Processing failed' : 'Processing…'}</span></span></button>;
     })}</div>
-    {!loading && !error && files.length === 0 && <p className="meta">No stored sources yet. Upload a PDF, Markdown, or text file.</p>}
+    {!loading && !error && files.length === 0 && <EmptyState compact icon="context" title="No stored sources yet" detail="Upload a PDF, Markdown, or text file." />}
     <Button link onClick={() => { onClose(); nav({ section: 'agents', view: 'context' }); }}>Manage sources →</Button>
   </Popover>;
 }

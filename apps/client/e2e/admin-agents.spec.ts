@@ -107,7 +107,7 @@ test('an Admin removes and assigns a catalog skill on an agent without a runtime
   await skills.getByRole('button', { name: 'Remove' }).click();
   await skills.getByRole('button', { name: 'Remove', exact: true }).click();
   await expect(skills.getByRole('status')).toHaveText('Skill removed.');
-  await expect(skills.getByText('No skills assigned.')).toBeVisible();
+  await expect(skills.getByText('No skills assigned')).toBeVisible();
 
   const picker = skills.getByLabel('Assign a skill');
   await expect(picker.locator('option')).toHaveText(['Partner program screening']);

@@ -94,7 +94,7 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
   </section>;
   return <>
     <header className="admin-detail-heading"><div>
-      <h2>Approvals</h2>
+      <h2 className="sr-only">Approvals</h2>
       <p>{APPROVALS_SCOPE} {APPROVALS_LIVE}</p>
     </div></header>
     {group('Decisions', null, decisions)}

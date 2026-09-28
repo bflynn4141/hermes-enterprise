@@ -17,9 +17,9 @@ export const SETTINGS_TABS = [
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /**
- * Admin pages: three groups, no group of one (docs/DESIGN.md, Admin). Page ids
- * are stable route keys; labels are what people read. Pages that were folded
- * into another one keep working through ADMIN_VIEW_ALIASES.
+ * Admin: three sections, each a row of page tabs (docs/DESIGN.md, Admin). Page
+ * ids are stable route keys; labels are what people read. Pages that were
+ * folded into another one keep working through ADMIN_VIEW_ALIASES.
  */
 export const ADMIN_SETTINGS_GROUPS = [
   {
@@ -62,6 +62,9 @@ export const ADMIN_VIEW_ALIASES: Readonly<Record<string, string>> = {
 /** Every Admin page in rail order, flat. */
 export const ADMIN_PAGES: readonly { readonly id: string; readonly label: string }[] =
   ADMIN_SETTINGS_GROUPS.flatMap((group): { id: string; label: string }[] => group.items.map((item) => ({ id: item.id, label: item.label })));
+/** The section a page belongs to; an unknown page falls in the first. */
+export const adminSectionOf = (id: string): (typeof ADMIN_SETTINGS_GROUPS)[number] =>
+  ADMIN_SETTINGS_GROUPS.find((group) => group.items.some((item) => item.id === id)) ?? ADMIN_SETTINGS_GROUPS[0];
 export const ADMIN_SETTINGS_VIEWS = ADMIN_SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.id));
 export type AdminSettingsView = (typeof ADMIN_SETTINGS_VIEWS)[number];
 export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = Object.fromEntries([

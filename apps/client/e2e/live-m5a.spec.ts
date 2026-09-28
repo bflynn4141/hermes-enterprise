@@ -472,7 +472,7 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Library', exact: true }).first().click();
   await expect(app.getByText('No shared skills yet')).toBeVisible();
   await app.getByRole('tab', { name: 'Documents' }).click();
-  await expect(app.getByText('No documents created yet.')).toBeVisible();
+  await expect(app.getByText('No documents created yet')).toBeVisible();
   // Connections now report the real, unconfigured state of each source.
   await app.getByRole('tab', { name: 'Connections' }).click();
   await expect(app.getByText('Read-only Gmail is not available yet')).toBeVisible();
@@ -491,7 +491,7 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('Daily usage limit')).toBeVisible();
 
   await openAdmin(page, 'Data & privacy');
-  await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
+  await expect(app.getByText('No provider is configured')).toBeVisible({ timeout: 15_000 });
   // The retention facts are the server's and are there with or without a key.
   await expect(app.getByText('Database recovery history').first()).toBeVisible();
   await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
@@ -521,7 +521,7 @@ async function sweepMemberEmptyStates(page: Page): Promise<void> {
 
   await page.getByRole('button', { name: 'Library', exact: true }).first().click();
   await app.getByRole('tab', { name: 'Documents' }).click();
-  await expect(app.getByText('No documents created yet.')).toBeVisible();
+  await expect(app.getByText('No documents created yet')).toBeVisible();
 
   // Personal settings only: nothing here decides anything for the workspace.
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click();

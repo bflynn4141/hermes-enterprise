@@ -299,7 +299,7 @@ export function RuntimeCapacityTab() {
     <div className="runtime-capacity">
       <header className="runtime-capacity-heading">
         <div>
-          <h2>Capacity</h2>
+          <h2 className="sr-only">Capacity</h2>
           <p>Add a Hermes Cloud agent so a new member can be given one.</p>
         </div>
       </header>
@@ -425,7 +425,7 @@ export function RuntimeCapacityTab() {
           <Button small onClick={() => void load()} disabled={busy !== null}>Refresh</Button>
         </div>
         {grants.length === 0 ? (
-          <p className="runtime-grants-empty">No setup codes yet.</p>
+          <EmptyState compact icon="settings" title="No setup codes yet" />
         ) : grants.map((grant) => (
           <article className="runtime-grant-row" key={grant.id}>
             <div className="runtime-grant-main">

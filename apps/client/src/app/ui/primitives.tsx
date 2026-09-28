@@ -501,11 +501,26 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
   );
 }
 
-export function EmptyState({ icon = 'context', title, detail, action }: { icon?: string; title: string; detail?: ReactNode; action?: ReactNode }) {
+/**
+ * The one empty state (docs/DESIGN.md, Empty states). A list, tab or section
+ * with nothing in it says so with an icon and a title, never a bare sentence.
+ * `compact` is the same thing in a row, for lists inside a card or a popover.
+ */
+export function EmptyState({ icon = 'context', title, detail, action, compact = false }: { icon?: string; title: string; detail?: ReactNode; action?: ReactNode; compact?: boolean }) {
+  if (compact) return (
+    <div className="empty-state compact">
+      <Glass name={icon} size={28} className="icon" />
+      <div className="empty-state-text">
+        <div className="empty-state-title">{title}</div>
+        {detail && <div className="meta">{detail}</div>}
+      </div>
+      {action}
+    </div>
+  );
   return (
     <div className="empty-state">
       <Glass name={icon} size={48} className="icon" />
-      <div style={{ color: 'var(--body)', fontSize: 14.4 }}>{title}</div>
+      <div className="empty-state-title">{title}</div>
       {detail && <div className="meta">{detail}</div>}
       {action}
     </div>

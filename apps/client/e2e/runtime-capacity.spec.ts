@@ -81,6 +81,6 @@ test.describe('Hermes runtime capacity setup', () => {
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-narrow.png'), fullPage: true });
     const contentOverflow = await app.locator('.runtime-capacity').evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(contentOverflow).toBeLessThanOrEqual(1);
-    await expect(app.getByRole('button', { name: /^Admin pages/ })).toBeVisible();
+    await expect(app.getByRole('tablist', { name: 'Admin sections' })).toBeVisible();
   });
 });

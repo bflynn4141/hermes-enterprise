@@ -439,7 +439,7 @@ test.describe('legacy document draft decisions', () => {
     const appPane = page.getByRole('region', { name: 'Application' });
     await expect(appPane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
     await expect(appPane.getByText('0 of 1 Admin approval', { exact: true })).toBeVisible();
-    await expect(appPane.getByText('No source messages linked.', { exact: true })).toBeVisible();
+    await expect(appPane.getByText('No source messages linked', { exact: true })).toBeVisible();
     await expect(appPane.getByRole('button', { name: 'Review payment' })).toHaveCount(0);
     await appPane.getByRole('button', { name: 'Approve invoice draft', exact: true }).click();
     await expect(appPane.getByRole('heading', { name: 'Saved in Library', exact: true })).toBeVisible();

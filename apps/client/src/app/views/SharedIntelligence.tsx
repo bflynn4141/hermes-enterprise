@@ -274,7 +274,7 @@ export function SharedIntelligence() {
       <div className="shared-intelligence-section-head">
         <div><h3>Proposals</h3><p>Only the version that was approved is added to the Library, for the teams you chose.</p></div>
       </div>
-      {workspace.proposals.length === 0 ? <p className="meta">No proposals yet.</p> : (
+      {workspace.proposals.length === 0 ? <EmptyState compact icon="loop" title="No proposals yet" /> : (
         <div className="shared-intelligence-proposals">
           {workspace.proposals.map((proposal) => (
             <article className="shared-intelligence-proposal" key={proposal.id}>

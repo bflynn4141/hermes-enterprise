@@ -1064,7 +1064,7 @@ function LibraryDocuments() {
       {sourcesError && <p className="meta action-error" role="alert">{sourcesError}</p>}
       <div className="col">
         {sourcesLoading && <Skeleton rows={1} label="Loading shared sources" />}
-        {!sourcesLoading && !sourcesError && sharedSources.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No shared sources are available to this agent.</div>}
+        {!sourcesLoading && !sourcesError && sharedSources.length === 0 && <EmptyState compact icon="context" title="No shared sources for this agent" />}
         {sharedSources.map((source) => {
           const selected = session?.draft.attachments.some((item) => item.id === source.id) ?? false;
           return <div className="list-row" key={source.id}>
@@ -1080,7 +1080,7 @@ function LibraryDocuments() {
       </div>
       <h2 className="section-title">Drafts awaiting review</h2>
       <div className="col">
-        {drafts.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No drafts are waiting for review.</div>}
+        {drafts.length === 0 && <EmptyState compact icon="agreement" title="No drafts are waiting for review" />}
         {drafts.map((request) => (
           <div className="list-row" key={request.id}>
             <Glass name={KIND_ICON[request.kind] ?? 'context'} size={28} className="row-icon" />
@@ -1094,7 +1094,7 @@ function LibraryDocuments() {
       </div>
       <h2 className="section-title">Saved documents</h2>
       <div className="col">
-        {documents.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No documents created yet.</div>}
+        {documents.length === 0 && <EmptyState compact icon="invoice" title="No documents created yet" />}
         {documents.map((doc) => (
           <div className="list-row" key={doc.id}>
             <Glass name={KIND_ICON[doc.kind] ?? 'context'} size={28} className="row-icon" />
@@ -1301,7 +1301,7 @@ function EmailTab() {
 function EmailPage() {
   return (
     <div className="admin-detail-page">
-      <header className="admin-detail-heading"><div><h2>Email</h2><p>Role inboxes receive email. Approved replies go out from the sending account.</p></div></header>
+      <header className="admin-detail-heading"><div><h2 className="sr-only">Email</h2><p>Role inboxes receive email. Approved replies go out from the sending account.</p></div></header>
       <AdminEmailInboxes embedded />
       <EmailTab />
     </div>
@@ -1402,7 +1402,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
       <div className="admin-detail-page">
         <div className="admin-detail-heading">
           <div>
-            <h2>Slack</h2>
+            <h2 className="sr-only">Slack</h2>
             <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
           </div>
           <Pill tone="warn">Status unavailable</Pill>
@@ -1461,7 +1461,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
     <div className="admin-detail-page">
       <div className="admin-detail-heading">
         <div>
-          <h2>Slack</h2>
+          <h2 className="sr-only">Slack</h2>
           <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
         </div>
         <Pill tone={statusTone}>{statusLabel}</Pill>
@@ -1509,7 +1509,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         >
             {linkCommand
               ? <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>
-              : <p className="meta">No link command yet.</p>}
+              : <EmptyState compact icon="settings" title="No link command yet" />}
         </AdminSettingsCard>
       )}
 
@@ -1692,7 +1692,7 @@ function OrganizationTab() {
 
   return (
     <>
-      <header className="admin-detail-heading"><div><h2>General</h2></div></header>
+      <h2 className="sr-only">General</h2>
       <AdminSettingsCard title="Workspace information">
       {[
         ['Workspace', state.workspace.name],
@@ -2223,7 +2223,7 @@ function ProviderKeysTab() {
   return (
     <>
       <div className="admin-detail-heading">
-        <div><h2>Models</h2><p>Your agents run on models from Nous Portal.</p></div>
+        <div><h2 className="sr-only">Models</h2><p>Your agents run on models from Nous Portal.</p></div>
         {!locked && (
           <Button
             onClick={() => {
@@ -2442,7 +2442,7 @@ function UsageTab() {
 
   return (
     <>
-      <header className="admin-detail-heading"><div><h2>Usage</h2></div></header>
+      <h2 className="sr-only">Usage</h2>
       <div className="row" style={{ gap: 16 }}>
         <Tabs
           tabs={[
@@ -2749,7 +2749,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
   return (
     <>
       {adminControls ? (
-        <header className="admin-detail-heading"><div><h2>Data &amp; privacy</h2><p>What Hermes keeps, for how long, and where.</p></div></header>
+        <header className="admin-detail-heading"><div><h2 className="sr-only">Data &amp; privacy</h2><p>What Hermes keeps, for how long, and where.</p></div></header>
       ) : (
         <div>
           <h2 className="section-title">Data and privacy</h2>
@@ -2772,7 +2772,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           ))}
 
           <h2 className="section-title">Processors</h2>
-          {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
+          {privacy.keys.length === 0 && <EmptyState compact icon="trace" title="No provider is configured" detail="No prompt text leaves this workspace." />}
           {privacy.keys.map((key) => admin ? (
             <div className="col" key={key.key_id} style={{ gap: 8, padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row">

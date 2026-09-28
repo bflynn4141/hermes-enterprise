@@ -119,7 +119,7 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
   return <>
     <header className="admin-detail-heading">
       <div>
-        <h2>Roles</h2>
+        <h2 className="sr-only">Roles</h2>
         <p>Who holds each job, and what they approve.</p>
       </div>
       <Button onClick={() => setCreating(true)}>New role</Button>
@@ -288,7 +288,7 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
       </>}
     >
       {people.length === 0
-        ? <p>No active members yet.</p>
+        ? <EmptyState compact icon="people" title="No active members yet" />
         : <fieldset className="admin-roles-people">
           <legend className="sr-only">People who hold {role.name}</legend>
           {people.map((person) => {
@@ -316,7 +316,7 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
     >
       {role.agents.length
         ? role.agents.map((agent) => <div key={agent.agent_id} className="kv"><span className="grow">{agent.name}</span><span className="meta">Works for {agent.principal.name}</span></div>)
-        : <p>No agents work in this role yet.</p>}
+        : <EmptyState compact icon="iris" title="No agents work in this role yet" />}
     </AdminSettingsCard>
 
     {!role.builtin && <AdminSettingsCard

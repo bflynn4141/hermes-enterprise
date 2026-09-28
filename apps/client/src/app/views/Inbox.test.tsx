@@ -191,7 +191,7 @@ describe('the Inbox renders the focused view', () => {
     expect(invoice).toContain('2026-09-30');
     expect(invoice).toContain('What is this for?');
     expect(invoice).toContain('Partner workshop');
-    expect(invoice).toContain('No source messages linked.');
+    expect(invoice).toContain('No source messages linked');
     expect(invoice).toContain('Full document');
     expect(invoice).toContain('No payment or email is sent.');
     expect(invoice).not.toContain('Review payment');

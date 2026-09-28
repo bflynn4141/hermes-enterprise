@@ -125,12 +125,14 @@ started about 620px down, and most pages opened with paragraphs explaining how
 the feature works. The pattern comes from Vercel's and Linear's settings (with
 Stripe's and GitHub Primer's as checks).
 
-- **Every page has its own address and one navigation.** Where there is room,
-  a left rail lists the pages in groups. In the narrow side pane the rail
-  becomes one "Admin pages" menu button, and the page starts right under it.
-  The Admin/User view switch is gone; the sidebar's Settings and Admin entries
-  already do that job.
-- **Three groups, eleven pages, no group of one.** Workspace: General, Roles,
+- **Every page has its own address; navigation is two levels of tabs.** The
+  left rail names only the three sections. The section's pages are tabs above
+  the content, the same `Tabs` the Agent page uses; the tab names the page, so
+  the page's own heading is for screen readers only. Where the pane is too
+  narrow for a rail, the sections become a row of tabs too. No dropdown menus
+  for navigation. The Admin/User view switch is gone; the sidebar's Settings
+  and Admin entries already do that job.
+- **Three sections, eleven pages, no section of one.** Workspace: General, Roles,
   Approvals, Usage, Data & privacy. Agents: Agents, Models, Capacity, Shared
   Intelligence. Connections: Slack, Email. A page that only held one setting
   joins the page it belongs to: the default model lives on Models, run limits
@@ -147,6 +149,32 @@ Stripe's and GitHub Primer's as checks).
 - **Directions use the rail's names.** Messages that send someone to a page
   say "Admin → Models", "Admin → Capacity", "Admin → Email", matching the
   labels in the rail.
+
+## Design system rules
+
+These hold across the app. `apps/client/src/app/design-system.test.ts` checks
+the ones a pattern can catch, in `pnpm check:quick`, and names the primitive to
+use when it fails.
+
+- **Navigation between views is `Tabs`.** A page with sibling views shows them
+  as a tab row (`Tabs strong` for a page's top level, as on the Agent page). A
+  dropdown is for choosing a value in a form, not for moving between pages.
+  Only the phone layout falls back to a native select. Checked: no
+  `role="tablist"` outside the primitive.
+- **Anything empty is an `EmptyState`.** A list, tab, section or popover with
+  nothing in it shows an icon and a short title, plus at most one line of
+  detail. Use `compact` inside a card or popover; the full size fills a page
+  or tab. Never a bare "No … yet." sentence. A missing value in a field
+  ("No owner", "No limit") is a value, not an empty state, and stays text.
+  Checked: an emptiness test followed by a "No…"/"Nothing…" element, or any
+  element reading "No … yet".
+- **Sentence case, no uppercase eyebrows.** Checked: no `text-transform:
+  uppercase` except an invoice's printed labels and the development-only
+  account switcher.
+- **Text is 12px or larger.** Older styles below 12px are being paid down; the
+  check is a ratchet, so the count may fall but not rise.
+- **A title and at most one sentence.** Not checkable by pattern; reviewed
+  against this document.
 
 ## Motion
 

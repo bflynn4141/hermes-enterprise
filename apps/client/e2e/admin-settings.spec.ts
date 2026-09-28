@@ -25,13 +25,11 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
   await expectAdminPage(page, 'General');
   await expect(page).toHaveURL(/#admin\/Organization$/);
-  // Eleven pages in three groups; no view switch, no group of one.
-  await app.getByRole('button', { name: /^Admin pages/ }).click().catch(() => undefined);
-  const pages = (await app.getByRole('navigation', { name: 'Admin settings' }).isVisible())
-    ? app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button')
-    : page.getByRole('menuitemradio');
-  await expect(pages).toHaveCount(11);
-  await page.keyboard.press('Escape');
+  // Three sections, and the section's pages as tabs; no view switch.
+  const rail = app.getByRole('navigation', { name: 'Admin settings' });
+  const sections = (await rail.isVisible()) ? rail.getByRole('button') : app.getByRole('tablist', { name: 'Admin sections' }).getByRole('tab');
+  await expect(sections).toHaveText(['Workspace', 'Agents', 'Connections']);
+  await expect(app.getByRole('tablist', { name: 'Workspace pages' }).getByRole('tab')).toHaveText(['General', 'Roles', 'Approvals', 'Usage', 'Data & privacy']);
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('admin-settings-desktop.png'), fullPage: true });
 
@@ -122,15 +120,18 @@ test('Admin navigation stays compact at the narrow desktop floor', async ({ page
   await page.goto('/#admin/Organization');
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
-  // The side pane is too narrow for a rail: one menu, and the page starts under it.
+  // The side pane is too narrow for a rail: the sections become tabs, and the
+  // page starts under its own row of tabs.
   await expect(app.getByRole('navigation', { name: 'Admin settings' })).toBeHidden();
-  const menu = app.getByRole('button', { name: /^Admin pages/ });
-  await expect(menu).toBeVisible();
-  const heading = app.locator('.admin-settings-view').getByRole('heading', { name: 'General', exact: true });
-  const [menuBox, headingBox] = [await menu.boundingBox(), await heading.boundingBox()];
-  expect(headingBox!.y - (menuBox!.y + menuBox!.height)).toBeLessThan(60);
+  const sections = app.getByRole('tablist', { name: 'Admin sections' });
+  await expect(sections).toBeVisible();
+  const pages = app.getByRole('tablist', { name: 'Workspace pages' });
+  const [sectionsBox, pagesBox, cardBox] = [await sections.boundingBox(), await pages.boundingBox(), await app.getByRole('region', { name: 'Workspace information' }).boundingBox()];
+  expect(pagesBox!.y - (sectionsBox!.y + sectionsBox!.height)).toBeLessThan(24);
+  expect(cardBox!.y - (pagesBox!.y + pagesBox!.height)).toBeLessThan(40);
   await openAdminPage(page, 'Models');
-  await expect(app.locator('.admin-settings-view').getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
+  await expectAdminPage(page, 'Models');
+  await expect(page).toHaveURL(/#admin\/Provider%20keys$/);
   await page.screenshot({ path: testInfo.outputPath('admin-settings-narrow.png'), fullPage: true });
   const overflow = await app.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
