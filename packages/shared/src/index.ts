@@ -40,3 +40,5 @@ export * from './cloud-connection.js';
 export * from './library-sources.js';
 export * from './shared-intelligence.js';
 export * from './demo-access.js';
+
+export * from './wallets.js';

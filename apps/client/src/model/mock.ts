@@ -134,6 +134,7 @@ interface MockOptions {
    * fastest way to look at the thing by hand: `MOCK=1 pnpm --filter client dev`
    * then `/?reply=markdown`.
    */
+  wallets?: 'enabled' | 'fail' | 'reauth';
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
@@ -1395,6 +1396,7 @@ export function createMockBackend(input: MockOptions = {}) {
   const page = (items: unknown[]) => json({ items, cursor: null, total: items.length });
   const fail = (status: number, reason: string, message = reason) => json({ error: message, reason }, status);
 
+  const walletRecords: import('@hermes/shared').WalletRecord[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://mock.local');
     const path = url.pathname;
@@ -1409,6 +1411,21 @@ export function createMockBackend(input: MockOptions = {}) {
     const match = (pattern: RegExp) => pattern.exec(path);
 
     if (seat !== 'admin' && path.startsWith(`/w/${WS}/admin/`)) return fail(403, 'admin_required');
+
+    if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id) });
+    if (p('/wallets/enrollment') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      if (!options.wallets) return fail(503, 'wallets_unavailable');
+      if (options.wallets === 'reauth') return fail(401, 'reauth_required');
+      if (options.wallets === 'fail') return fail(503, 'provider_unavailable');
+      const kind = body.kind as 'workspace' | 'member' | 'agent';
+      let record = walletRecords.find(row => row.kind === kind && row.member_id === (body.member_id ?? null) && row.agent_id === (body.agent_id ?? null));
+      if (!record) {
+        record = { id: mockUuid(8700 + walletRecords.length), kind, member_id: typeof body.member_id === 'string' ? body.member_id : null, agent_id: typeof body.agent_id === 'string' ? body.agent_id : null, label: kind === 'workspace' ? 'Sample workspace wallet' : members.find(member => member.id === body.member_id)?.name ?? 'Sample agent wallet', status: 'awaiting_owner_enrollment', address: null, created_at: iso(0) };
+        walletRecords.push(record);
+      }
+      return json(record);
+    }
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 

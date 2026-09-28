@@ -6,6 +6,8 @@
 import type { SessionHub, WorkspaceHub } from './hubs.js';
 
 export interface Env {
+  /** Enrollment requests only; does not enable provider provisioning or signing. */
+  TURNKEY_WALLETS_ENABLED?: string;
   // --- Variables (plain text, set per environment in wrangler.jsonc) --------
   /** 'staging' | 'production' | 'development'. */
   ENVIRONMENT: string;

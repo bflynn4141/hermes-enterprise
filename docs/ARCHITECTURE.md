@@ -79,6 +79,10 @@ runtime graph.
 
 ## Run it locally
 
+Workspace wallet enrollment is an additive, default-off capability described in
+[Workspace wallets](WALLETS.md). It records scoped enrollment requests only;
+provider wallets, signing, and mainnet execution are not activated by this build.
+
 The application and test suites work offline after dependencies are installed.
 The pinned gitleaks, actionlint, and official Hermes installers download their
 verified upstream artifacts when invoked.

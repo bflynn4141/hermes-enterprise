@@ -55,6 +55,7 @@ Run from the repository root, on a machine signed in to Wrangler and Neon
 ```sh
 node scripts/preview.mjs init --neon-org <org-id>  # once per machine
 node scripts/preview.mjs up <pr> --comment          # deploy or update, then comment the link on the PR
+node scripts/preview.mjs up <pr> --comment --wallets # also enable wallet enrollment requests only
 node scripts/preview.mjs down <pr>                  # delete every resource for that PR
 node scripts/preview.mjs list
 ```

@@ -210,6 +210,9 @@ function previewConfig({ name, pr, origin, hyperdrive }) {
     ENVIRONMENT: 'development',
     AUTH_MODE: 'fake',
     MODEL_SCRIPTED: '1',
+    // Preview-only enrollment requests. This does not enable a Turnkey signer,
+    // provider provisioning, or payments; those paths do not exist yet.
+    TURNKEY_WALLETS_ENABLED: process.argv.includes('--wallets') ? '1' : '0',
     ALLOWED_ORIGINS: origin ?? 'https://preview-origin-pending.invalid',
     HERMES_ENTERPRISE_PUBLIC_URL: origin ?? 'https://preview-origin-pending.invalid',
     AUTOMATED_TRIGGERS_ENABLED: '0',
@@ -428,7 +431,7 @@ try {
   else if (command === 'down' && pr) await down(pr);
   else if (command === 'list') list();
   else {
-    log('usage: node scripts/preview.mjs init --neon-org <id> | up <pr> [--comment] | down <pr> | list');
+    log('usage: node scripts/preview.mjs init --neon-org <id> | up <pr> [--comment] [--wallets] | down <pr> | list');
     process.exitCode = 2;
   }
 } catch (error) {

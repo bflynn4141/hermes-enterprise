@@ -12,6 +12,7 @@
 //   * an error carries the server's machine-readable `reason`, which is what
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
+  walletOverviewSchema, walletRecordSchema, type WalletEnrollmentInput,
   bootstrapSchema,
   contextNoteSchema,
   agentPermissionsSchema,
@@ -666,6 +667,8 @@ export function createRest(options: RestOptions) {
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
+    wallets: (workspaceId: string) => request('GET', `${ws(workspaceId)}/wallets`, walletOverviewSchema),
+    requestWalletEnrollment: (workspaceId: string, input: WalletEnrollmentInput) => request('POST', `${ws(workspaceId)}/wallets/enrollment`, walletRecordSchema, input),
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
     startMicrosoftOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/microsoft/oauth/start`, outboundEmailOAuthStartSchema, {}),

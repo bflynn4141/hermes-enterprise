@@ -246,3 +246,17 @@ cross-fade (150 ms), panels open without spatial travel under
   reply").
 - No tool we found documents what it says when its AI fails to draft; the
   "Couldn't read it · Try again" wording is ours.
+
+## Wallet enrollment (September 28, 2026)
+
+Wallet setup lives inside Admin → Connections; member status appears in Members.
+Keep the existing Admin navigation and settings cards. A saved request says
+“Needs owner setup,” never “Connected” or “Ready.” Explain that owner enrollment
+and verification are still required before an address exists. Keep signing and
+payment status separate.
+
+Use immediate updates for request/status changes. There is no provisioning
+animation because this increment performs no provider provisioning; ordinary
+loading feedback reflects only an actual API request. This needs no spatial
+animation, including in reduced-motion mode. Preserve the sign-in-again action
+when setup requires recent authentication.

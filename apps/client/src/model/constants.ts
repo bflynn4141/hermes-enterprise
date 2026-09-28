@@ -46,6 +46,7 @@ export const ADMIN_SETTINGS_GROUPS = [
     items: [
       { id: 'Slack', label: 'Slack', brand: 'slack' },
       { id: 'Email', label: 'Email', brand: 'email' },
+      { id: 'Wallets', label: 'Wallets' },
     ],
   },
 ] as const;

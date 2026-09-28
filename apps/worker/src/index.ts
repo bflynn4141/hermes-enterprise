@@ -1,3 +1,4 @@
+import { listWallets, requestWalletEnrollment } from './routes/wallets.js';
 // The Worker.
 //
 // One origin serves both the API and the client bundle, which is what lets the
@@ -543,6 +544,8 @@ app.get('/w/:ws/skills', listSkills);
 app.get('/w/:ws/admin/agents', listAdminAgents);
 app.patch('/w/:ws/admin/agents/:agentId', patchAdminAgent);
 app.get('/w/:ws/skill-catalog', listSkillCatalog);
+app.get('/w/:ws/wallets', listWallets);
+app.post('/w/:ws/wallets/enrollment', requestWalletEnrollment);
 app.get('/w/:ws/roles', listWorkspaceRoles);
 app.post('/w/:ws/roles', createWorkspaceRole);
 app.patch('/w/:ws/roles/:id', patchWorkspaceRole);

@@ -36,6 +36,27 @@ const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
 // Platform
 // ---------------------------------------------------------------------------
 
+// Wallet enrollment records do not confer custody or signing permission.
+export const workspaceWalletConfig = pgTable('workspace_wallet_config', {
+  workspaceId: uuid('workspace_id').primaryKey(), chainId: integer('chain_id').notNull().default(8453),
+  asset: text('asset').notNull().default('USDC'), status: text('status').notNull().default('awaiting_owner_enrollment'),
+  createdAt: now('created_at'),
+});
+export const walletPrincipals = pgTable('wallet_principals', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
+  kind: text('kind').notNull(), memberId: uuid('member_id'), agentId: uuid('agent_id'), createdAt: now('created_at'),
+});
+export const walletEnrollmentOperations = pgTable('wallet_enrollment_operations', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
+  principalId: uuid('principal_id').notNull(), requestedBy: uuid('requested_by').notNull(),
+  state: text('state').notNull().default('awaiting_owner_enrollment'), createdAt: now('created_at'),
+});
+export const walletAccounts = pgTable('wallet_accounts', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
+  principalId: uuid('principal_id').notNull(), chainId: integer('chain_id').notNull(),
+  address: text('address').notNull(), verifiedAt: ts('verified_at').notNull(),
+});
+
 export const schemaMigrations = pgTable('schema_migrations', {
   filename: text('filename').primaryKey(),
   sha256: text('sha256').notNull(),
@@ -2449,6 +2470,10 @@ export const ALL_TABLES = {
   agent_skills: agentSkills,
   enterprise_skill_assignments: enterpriseSkillAssignments,
   enterprise_skill_assignment_revisions: enterpriseSkillAssignmentRevisions,
+  workspace_wallet_config: workspaceWalletConfig,
+  wallet_principals: walletPrincipals,
+  wallet_enrollment_operations: walletEnrollmentOperations,
+  wallet_accounts: walletAccounts,
   workspace_roles: workspaceRoles,
   enterprise_teams: enterpriseTeams,
   enterprise_team_agents: enterpriseTeamAgents,

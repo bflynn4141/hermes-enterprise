@@ -2046,3 +2046,29 @@ a paused address cancelling, the daily limit and Read it now),
 classes), and a walkthrough on the local stack through Wrangler's email
 simulator.
 
+## C101. Wallet enrollment precedes custody and mainnet execution
+
+Brian selected workspace, member, and agent wallets with mainnet approvals on
+September 28, 2026. The target is Base mainnet USDC. Each workspace will map to a
+Turnkey suborganization, with separate principal identities and wallets. Customer
+recovery owners, rather than ordinary Hermes Admin roles or a Hermes service key,
+will control the root quorum.
+
+This increment persists Admin-requested enrollment, scoped to a workspace and an
+active member or owned agent. It is default-off and stops at needs-owner-setup.
+It neither imports browser-supplied provider identities nor claims addresses have
+been provisioned. The agent database role receives no wallet permissions; a
+regular member can read only their own and their owned agents' enrollment.
+
+A pure transfer-intent module validates exact Base USDC transfer data and produces
+a canonical authorization digest. That module is not wired to an approval writer,
+provider signer, or payment executor. Future integration must preserve existing
+guarded decision routes and bind every signature to a verified source wallet,
+current permissions, immutable human authorization, and provider policy version.
+
+The staged approach makes setup reviewable while account access, customer-owner
+enrollment, provider policy enforcement, and first-transfer details remain
+unverified. It does not redefine enrollment as custody or approval as payment.
+See [Workspace wallets](../WALLETS.md) for the shipped boundary and
+[the implementation plan](../plans/2026-09-28-turnkey-workspace-wallets.md) for
+the remaining work.

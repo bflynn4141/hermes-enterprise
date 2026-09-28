@@ -37,6 +37,7 @@ import { AdminApprovals } from './AdminApprovals.js';
 import { AdminEmailInboxes } from './AdminEmailInboxes.js';
 import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
 import { useStepUp } from './use-step-up.js';
+import { AdminWallets, MemberWallet, useWallets } from './Wallets.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -156,6 +157,7 @@ const invitationStatusLabel = (status: InvitationEntity['status']): string =>
 const statusTone = (label: string): string => (label === 'Joined' ? 'ok' : label === 'Expired' || label === 'Bounced' ? 'warn' : 'muted');
 
 export function Members() {
+  const wallets = useWallets();
   const state = useAppState();
   const adapter = useAdapter();
   const nav = useNav();
@@ -320,6 +322,7 @@ export function Members() {
                       <Pill tone={statusTone(status)}>{status}</Pill>
                     </div>
                     <div className="member-card-summary">
+                      <MemberWallet member={member} wallets={wallets} />
                       {roleNames.length > 0 && <span className="member-card-roles">{roleNames.join(', ')}</span>}
                       <span>{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
                     </div>
@@ -1184,6 +1187,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'All agents' && <AdminAgents agentId={id} />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailPage />}
+      {selected === 'Wallets' && <AdminWallets />}
       {selected === 'Provider keys' && <div className="admin-detail-page"><ProviderKeysTab /><ModelDefaults /></div>}
       {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
       {selected === 'Usage' && <div className="admin-detail-page"><UsageTab /><UsageLimits /></div>}
