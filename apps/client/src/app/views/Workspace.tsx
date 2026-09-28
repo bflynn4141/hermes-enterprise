@@ -1203,7 +1203,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
   );
 }
 
-const UNCONFIGURED_EMAIL = 'Sending email is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.';
+const UNCONFIGURED_EMAIL = 'Outreach from a Google or Microsoft account isn’t turned on for this deployment; agents still reply from their own address.';
 
 /** The two services a sending account can be (C99), in the words and logos people know them by. */
 const SENDERS = {
@@ -1279,12 +1279,12 @@ function EmailTab() {
     <>
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
-        title="Sending account"
+        title="Outreach account"
         brand={current && connection?.status !== 'disconnected' ? current.brand : 'email'}
         badge={badge}
         description={current && connected
-          ? `Approved replies and outreach go out from this ${current.product} account.`
-          : connection?.configured || statusError ? 'Approved replies and outreach go out from a Google or Microsoft account you connect.' : UNCONFIGURED_EMAIL}
+          ? `Outreach goes out from this ${current.product} account; agents reply from their own address.`
+          : connection?.configured || statusError ? 'Outreach goes out from a Google or Microsoft account you connect; agents reply from their own address.' : UNCONFIGURED_EMAIL}
         footer={statusError ? (
           <Button disabled={busy !== null} onClick={load}>Try again</Button>
         ) : admin && connection?.configured ? (
@@ -1314,7 +1314,7 @@ function EmailTab() {
   );
 }
 
-/** Admin → Email: the role inboxes that receive mail, then the account approved replies go out from. */
+/** Admin → Email: every agent's own address (C100), then the account outreach goes out from. */
 function EmailPage() {
   return (
     <div className="admin-detail-page">

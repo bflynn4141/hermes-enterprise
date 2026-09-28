@@ -1626,6 +1626,8 @@ export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
   authorizationHash: text('authorization_hash').notNull(),
   candidateId: uuid('candidate_id'),
   accountId: uuid('account_id'),
+  /** Sent as this agent's own address through Cloudflare Email Service (0079). */
+  senderInboxId: uuid('sender_inbox_id'),
   recipientIndex: integer('recipient_index').notNull(),
   senderAddress: text('sender_address').notNull(),
   recipientName: text('recipient_name').notNull(),
@@ -1651,9 +1653,12 @@ export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
 export const emailInboxes = pgTable('email_inboxes', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
-  roleSlug: text('role_slug').notNull(),
+  /** Null for an agent's own address while the agent has no role (0079). */
+  roleSlug: text('role_slug'),
   agentId: uuid('agent_id').notNull(),
   address: text('address').notNull().unique(),
+  /** 'agent': an agent's own address, one per agent; 'role': an Admin-made C98 address (0079). */
+  kind: text('kind').notNull().default('role'),
   label: text('label').notNull(),
   status: text('status').notNull().default('active'),
   createdBy: uuid('created_by'),

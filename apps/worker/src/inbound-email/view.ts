@@ -67,6 +67,7 @@ export const EMAIL_PROBLEM_SQL = `CASE
       WHEN COALESCE(r.error->>'reason', m.triage_error) IN
         ('no_key', 'key_invalid', 'key_unverified', 'provider_not_allowed', 'unknown_model') THEN 'needs_setup'
       WHEN m.triage_error = 'inbox_owner_missing' THEN 'no_owner'
+      WHEN m.triage_error = 'daily_limit' THEN 'daily_limit'
       ELSE 'other'
     END
   END`;
@@ -76,7 +77,7 @@ interface MessageRow {
   inbox_id: string;
   address: string;
   label: string;
-  role_slug: string;
+  role_slug: string | null;
   received_at: Date;
   subject: string;
   message_id: string | null;

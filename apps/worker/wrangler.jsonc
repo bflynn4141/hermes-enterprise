@@ -186,6 +186,10 @@
   // Hyperdrive caches by query text and does not document whether session
   // settings enter the key, and a cache that ignored `SET LOCAL app.workspace_id`
   // would hand one tenant another tenant's rows.
+  // Cloudflare Email Service (C100): approved replies go out from the agent's
+  // own address. Local dev uses Wrangler's simulator; staging gets the binding
+  // once Email Sending is enabled for its receiving domain.
+  "send_email": [{ "name": "EMAIL" }],
   "hyperdrive": [
     // Local development points these at Docker Postgres through
     // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP and

@@ -99,7 +99,7 @@ function mailbox(name: string, address: string): string {
  * copied through: anything that is not `<local@domain>` without whitespace,
  * and so could not carry a CR or LF, is dropped.
  */
-function messageIds(value: string | null | undefined): string[] {
+export function messageIds(value: string | null | undefined): string[] {
   return (value ?? '').match(/<[^<>\s]{3,990}>/gu) ?? [];
 }
 

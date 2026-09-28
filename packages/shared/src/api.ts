@@ -84,7 +84,7 @@ export const bootstrapSchema = z
       .object({
         id: uuidSchema,
         name: z.string().max(80),
-        /** Null until HermesMail ingress is provisioned for this agent. */
+        /** The agent's own email address (C100); null until it has one. */
         email: z.string().max(200).nullable(),
         responsibility: z.string().max(2000).nullable(),
         setup_step: z.string().max(32).nullable(),

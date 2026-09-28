@@ -128,7 +128,8 @@ export const inboundEmailViewSchema = z.object({
     id: uuidSchema,
     address,
     label: z.string().min(1).max(120),
-    role_slug: roleSlugSchema,
+    /** Null for an agent's own address while the agent has no role (C100). */
+    role_slug: roleSlugSchema.nullable(),
   }).strict(),
   received_at: isoDateTime,
   subject: z.string().max(998),
@@ -147,7 +148,14 @@ export const emailInboxSchema = z.object({
   id: uuidSchema,
   address,
   label: z.string().min(1).max(120),
-  role_slug: roleSlugSchema,
+  /**
+   * `agent`: the agent's own address, created with it, which its approved
+   * replies are sent from (C100). `role`: an address an Admin made for a role
+   * under C98, still working as before.
+   */
+  kind: z.enum(['agent', 'role']),
+  /** For an agent's address, the agent's role; null while it has none. */
+  role_slug: roleSlugSchema.nullable(),
   agent: z.object({ id: uuidSchema, name: z.string().max(200) }).strict(),
   status: z.enum(['active', 'paused']),
   created_at: isoDateTime,
@@ -182,7 +190,8 @@ export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
   can_retry: z.boolean(),
   /** Hermes will try again by itself shortly (a provider was busy). */
   retrying: z.boolean().default(false),
-  problem: z.enum(['provider_busy', 'needs_setup', 'no_owner', 'inbox_paused', 'other']).nullable().default(null),
+  /** `daily_limit`: the agent read its daily number of emails; a person can have it read this one now (C100). */
+  problem: z.enum(['provider_busy', 'needs_setup', 'no_owner', 'inbox_paused', 'daily_limit', 'other']).nullable().default(null),
 });
 export type InboundEmailListItem = z.infer<typeof inboundEmailListItemSchema>;
 

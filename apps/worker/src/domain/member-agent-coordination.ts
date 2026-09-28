@@ -1,4 +1,5 @@
 import type { Env } from '../env.js';
+import { ensureAgentInbox, intakeDomain } from '../inbound-email/agent-address.js';
 import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
 import {
@@ -266,6 +267,8 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
       input.tx, input.workspaceId, input.joiningUserId,
       { agentId, principalUserId: input.joiningUserId },
     );
+    // Every agent has its own email address from the start (C100).
+    await ensureAgentInbox(input.tx, intakeDomain(input.env.EMAIL_INTAKE_DOMAIN), input.workspaceId, agentId);
     const financeTools = toolsForSkillVersion(
       PARTNER_INVOICE_REVIEW_DEFINITION.key,
       PARTNER_INVOICE_REVIEW_DEFINITION.version,
@@ -315,6 +318,8 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
      VALUES ($1,$2,'can','Discover and screen partners','Partner Program',$3,0)`,
     [input.workspaceId, agentId, [...PARTNER_PROGRAM_TOOLS]],
   );
+  // Every agent has its own email address from the start (C100).
+  await ensureAgentInbox(input.tx, intakeDomain(input.env.EMAIL_INTAKE_DOMAIN), input.workspaceId, agentId);
   await input.tx.query(
     `INSERT INTO instruction_versions (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
      VALUES ($1,$2,$3,'saved',$4,$5::jsonb,now())`,

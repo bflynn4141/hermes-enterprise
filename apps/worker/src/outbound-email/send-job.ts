@@ -6,8 +6,10 @@ import { resolveSendingAccessToken } from './gmail-store.js';
 import { gmailFetcher } from './gmail-config.js';
 import { sendMicrosoftMessage } from './microsoft-api.js';
 import { microsoftFetcher } from './microsoft-config.js';
+import { AgentSendError, sendAsAgent } from './agent-send.js';
 
-const PROVIDER_NAME = { gmail: 'Gmail', microsoft: 'Microsoft' } as const;
+/** Who a reviewer is told did or didn't confirm a send. */
+const PROVIDER_NAME = { gmail: 'Gmail', microsoft: 'Microsoft', agent: 'The email service' } as const;
 
 interface OutboxRow {
   readonly id: string;
@@ -26,6 +28,11 @@ interface OutboxRow {
   readonly inbound_message_id: string | null;
   readonly in_reply_to: string | null;
   readonly references_header: string | null;
+  /** Sent as this agent's own address (C100), with the inbox's current state. */
+  readonly sender_inbox_id: string | null;
+  readonly sender_inbox_address: string | null;
+  readonly sender_inbox_status: string | null;
+  readonly sender_agent_name: string | null;
 }
 
 const OUTBOX_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,21 +47,31 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     const result = await tx.query<OutboxRow>(
       `SELECT o.id,o.request_id,o.authorization_revision,o.authorization_hash,o.candidate_id,
               o.account_id,o.recipient_index,o.sender_address,o.recipient_name,o.recipient_address,
-              o.subject,o.body,o.state,o.inbound_message_id,o.in_reply_to,o.references_header
+              o.subject,o.body,o.state,o.inbound_message_id,o.in_reply_to,o.references_header,
+              o.sender_inbox_id, i.address AS sender_inbox_address, i.status AS sender_inbox_status,
+              a.name AS sender_agent_name
          FROM outbound_email_outbox o
-        WHERE o.workspace_id=$1 AND o.id=$2 FOR UPDATE`,
+         LEFT JOIN email_inboxes i ON i.workspace_id=o.workspace_id AND i.id=o.sender_inbox_id
+         LEFT JOIN agents a ON a.workspace_id=i.workspace_id AND a.id=i.agent_id
+        WHERE o.workspace_id=$1 AND o.id=$2 FOR UPDATE OF o`,
       [job.workspace_id, payload.outbox_id],
     );
     const row = result.rows[0];
-    if (!row || ['sent', 'simulated', 'ambiguous', 'cancelled'].includes(row.state)) return null;
+    // Final states. A failed send already told the reviewer it failed, so a
+    // repeated or revived job must not quietly send it after all.
+    if (!row || ['sent', 'simulated', 'ambiguous', 'cancelled', 'failed'].includes(row.state)) return null;
     // A reply to a role inbox with no connected sender is recorded as a
     // simulated delivery where the effect executor is simulated (D12, C98).
     // Production pins that mode to `unavailable`, so there it waits for a
     // mailbox like any other approved email.
-    const simulate = row.inbound_message_id !== null && !row.account_id
+    // A reply as the agent's own address sends through Cloudflare when this
+    // deployment has the binding (C100), and is simulated like any other reply
+    // where it does not.
+    const asAgent = !row.account_id && row.sender_inbox_id !== null && env.EMAIL !== undefined;
+    const simulate = !asAgent && row.inbound_message_id !== null && !row.account_id
       && (row.state === 'pending_connection' || row.state === 'queued')
       && effectExecutorMode(env) === 'simulated';
-    if (!simulate && (row.state === 'pending_connection' || !row.account_id)) return null;
+    if (!simulate && !asAgent && (row.state === 'pending_connection' || !row.account_id)) return null;
     const authorization = await tx.query(
       `SELECT 1 FROM approval_requests
         WHERE workspace_id=$1 AND request_id=$2 AND status='approved'
@@ -76,6 +93,18 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     if (simulate) {
       published.push(...await recordSimulatedReply(tx, job.workspace_id, row));
       return null;
+    }
+    if (asAgent) {
+      // The address must still be the agent's, still receiving, and the one approved.
+      if (row.sender_inbox_status !== 'active' || row.sender_inbox_address !== row.sender_address) {
+        await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
+        return null;
+      }
+      await tx.query(
+        `UPDATE outbound_email_outbox SET state='sending',attempt_count=attempt_count+1,last_error=NULL WHERE id=$1`,
+        [row.id],
+      );
+      return { row, provider: 'agent' as const, accessToken: '', raw: '' };
     }
     if (!row.account_id) return null;
     const resolved = await resolveSendingAccessToken(tx, env, row.account_id);
@@ -106,10 +135,21 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
   if (!prepared) return;
 
   try {
-    // The same approved bytes either way (C99); only the transport differs.
-    const sent = prepared.provider === 'microsoft'
-      ? await sendMicrosoftMessage(prepared.accessToken, prepared.raw, microsoftFetcher(env))
-      : await sendGmailMessage(prepared.accessToken, prepared.raw, gmailFetcher(env));
+    // The same approved text either way (C99, C100); only the transport differs.
+    const sent = prepared.provider === 'agent'
+      ? { ...(await sendAsAgent(env.EMAIL!, {
+        fromName: prepared.row.sender_agent_name ?? 'Hermes agent',
+        fromAddress: prepared.row.sender_address,
+        toName: prepared.row.recipient_name,
+        toAddress: prepared.row.recipient_address,
+        subject: prepared.row.subject,
+        body: prepared.row.body,
+        inReplyTo: prepared.row.in_reply_to,
+        references: prepared.row.references_header,
+      })), threadId: null }
+      : prepared.provider === 'microsoft'
+        ? await sendMicrosoftMessage(prepared.accessToken, prepared.raw, microsoftFetcher(env))
+        : await sendGmailMessage(prepared.accessToken, prepared.raw, gmailFetcher(env));
     await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       const changed = await tx.query(
         `UPDATE outbound_email_outbox SET state='sent',provider_message_id=$3,provider_thread_id=$4,
@@ -138,8 +178,11 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       );
     });
   } catch (error) {
-    const retryable = error instanceof GmailApiError && error.status === 429;
-    const ambiguous = !(error instanceof GmailApiError) || error.status >= 500;
+    const retryable = (error instanceof GmailApiError && error.status === 429)
+      || (error instanceof AgentSendError && error.retryable);
+    const ambiguous = error instanceof AgentSendError
+      ? error.ambiguous
+      : !(error instanceof GmailApiError) || error.status >= 500;
     await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       await tx.query(
         `UPDATE outbound_email_outbox SET state=$3,last_error=$4

@@ -4,6 +4,7 @@
 // `app.user_id`, derived from the URL path plus a members lookup. Neither reads
 // a workspace id from a header or a query parameter, and a test forges both to
 // prove it.
+import { ensureAgentInbox, intakeDomain } from '../inbound-email/agent-address.js';
 import type { Context } from 'hono';
 import {
   bootstrapSchema,
@@ -61,6 +62,8 @@ export async function loadBootstrap(
   automatedTriggers = false,
   memberProvisioning = false,
   effectExecutor: EffectExecutorMode = 'unavailable',
+  /** The receiving domain: the viewer's agent gets its own address if it has none (C100). */
+  emailDomain: string | null = null,
 ): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
@@ -129,6 +132,14 @@ export async function loadBootstrap(
     [workspaceId, userId],
   );
   const agent = agents.rows[0] ?? null;
+  // The agent's own address (C100), created the first time its owner opens Hermes if it predates it.
+  if (agent && emailDomain) await ensureAgentInbox(tx, emailDomain, workspaceId, agent.id);
+  const agentAddress = agent
+    ? (await tx.query<{ address: string }>(
+      `SELECT address FROM email_inboxes WHERE workspace_id=$1 AND agent_id=$2 AND kind='agent' AND status='active'`,
+      [workspaceId, agent.id],
+    )).rows[0]?.address ?? null
+    : null;
 
   // Counts are derived from current rows and the document view, never stored.
   // Audience filtering happens before aggregation so a private request does
@@ -263,7 +274,7 @@ export async function loadBootstrap(
     agent: agent ? {
       id: agent.id,
       name: agent.name,
-      email: null,
+      email: agentAddress,
       responsibility: agent.responsibility,
       setup_step: agent.setup_step,
       provisioning_status: agent.provisioning_status,
@@ -309,6 +320,7 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
       tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
       c.env.HERMES_MEMBER_PROVISIONING_ENABLED === '1',
       effectExecutorMode(c.env),
+      intakeDomain(c.env.EMAIL_INTAKE_DOMAIN),
     ),
   );
   return c.json({ ...body, sessions: body.sessions.map((row) => ({ ...row,

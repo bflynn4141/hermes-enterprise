@@ -177,6 +177,10 @@ connectors, Merge Agent Handler, Paragon and Notion AI.
   (Sends from, the Slack workspace) without opening anything.
 - **Say what stops before disconnecting.** The confirmation names what stops
   working; earlier work stays.
+- **Agents have their own email; nobody adds an inbox.** Admin → Email lists
+  each agent's address with Copy, Pause and New address, and says who reviews
+  its mail ("Partnerships reviews", "Its owner reviews"). The Outreach account
+  card is only for outreach from a Google or Microsoft mailbox (C100).
 - **Organization connections and personal links stay distinct.** The Slack
   install and the Gmail sending account belong to the workspace; a person's
   Slack identity link is theirs.

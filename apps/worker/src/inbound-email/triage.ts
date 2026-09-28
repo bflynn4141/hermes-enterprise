@@ -33,6 +33,17 @@ const PERMANENT = new Set(['no_key', 'key_invalid', 'key_unverified', 'provider_
  * have fixed the cause (a key, a model, the agent's owner).
  */
 const TRANSIENT_RUN_REASONS = ['hermes_provider_rate_limited', 'hermes_provider_unavailable'];
+/**
+ * How many emails one agent reads a day before the rest wait for a person
+ * (C100). Every address is on by default, so a leaked one must not become an
+ * open tap on the model provider. A person's Read it now reads one anyway.
+ */
+export const DEFAULT_AGENT_DAILY_READS = 50;
+export function agentDailyReads(env: Pick<Env, 'AGENT_EMAIL_DAILY_READS'>): number {
+  const value = Number(env.AGENT_EMAIL_DAILY_READS);
+  return Number.isInteger(value) && value >= 1 && value <= 10_000 ? value : DEFAULT_AGENT_DAILY_READS;
+}
+
 /** Hermes tries a message at most this many times by itself; a person may always try again. */
 export const MAX_AUTOMATIC_TRIAGE_ATTEMPTS = 3;
 /** The wait after attempt 1 and attempt 2, the same schedule run recovery uses. */
@@ -47,7 +58,8 @@ const RELATIONSHIP_LABEL: Record<SenderFacts['relationship'], string> = {
 export function emailTriagePrompt(input: {
   inboxLabel: string;
   inboxAddress: string;
-  roleName: string;
+  /** Null for an agent's own address while the agent has no role (C100). */
+  roleName: string | null;
   subject: string;
   facts: SenderFacts;
   text: string;
@@ -65,7 +77,9 @@ export function emailTriagePrompt(input: {
   const readFiles = input.attachments.filter((file) => typeof file.text === 'string' && file.text.length > 0);
   const unread = input.attachments.filter((file) => !(typeof file.text === 'string' && file.text.length > 0));
   return [
-    `A new email arrived at the ${input.inboxLabel} inbox (${input.inboxAddress}), which you handle for the ${input.roleName} team.`,
+    input.roleName
+      ? `A new email arrived at ${input.inboxAddress}, which you handle for the ${input.roleName} team.`
+      : `A new email arrived at your own address, ${input.inboxAddress}.`,
     '',
     'What the server verified about the sender (you cannot change these):',
     `- From: ${from}, ${RELATIONSHIP_LABEL[facts.relationship]}.`,
@@ -102,19 +116,22 @@ const nonce = (): string => {
 };
 
 export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
-  const messageId = (job.payload as { message_id?: unknown } | null)?.message_id;
+  const payload = (job.payload ?? {}) as { message_id?: unknown; by_person?: unknown };
+  const messageId = payload.message_id;
   if (typeof messageId !== 'string' || !UUID.test(messageId)) throw new Error('email_triage_job_invalid');
+  const byPerson = payload.by_person === true;
 
   const jobIds: string[] = [];
   let create: RunInstanceParams | null = null;
   await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const found = await tx.query<{
       status: string; triage_run_id: string | null; triage_attempt: number; subject: string; sender_facts: unknown; body: unknown;
-      attachments: unknown; inbox_id: string; address: string; label: string; role_slug: string;
-      agent_id: string; inbox_status: string;
+      attachments: unknown; inbox_id: string; address: string; label: string; role_slug: string | null;
+      agent_id: string; inbox_status: string; inbox_kind: 'agent' | 'role';
     }>(
       `SELECT m.status, m.triage_run_id, m.triage_attempt, m.subject, m.sender_facts, m.body, m.attachments,
-              i.id AS inbox_id, i.address, i.label, i.role_slug, i.agent_id, i.status AS inbox_status
+              i.id AS inbox_id, i.address, i.label, i.role_slug, i.agent_id, i.status AS inbox_status,
+              i.kind AS inbox_kind
          FROM inbound_email_messages m
          JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
         WHERE m.workspace_id=$1 AND m.id=$2
@@ -130,10 +147,22 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
       );
     };
     if (row.inbox_status !== 'active') return fail('inbox_paused');
-    const inbox = { id: row.inbox_id, address: row.address, label: row.label, role_slug: row.role_slug, agent_id: row.agent_id, status: row.inbox_status };
+    const inbox = { id: row.inbox_id, address: row.address, label: row.label, role_slug: row.role_slug, agent_id: row.agent_id, status: row.inbox_status, kind: row.inbox_kind };
     const owner = await inboxOwner(tx, job.workspace_id, row.agent_id);
     if (!owner) return fail('inbox_owner_missing');
     await ensureInboxApprovals(tx, job.workspace_id, inbox, owner);
+    if (!byPerson) {
+      // Reads this agent has started today, across its addresses.
+      const today = await tx.query<{ count: number }>(
+        `SELECT count(*)::int AS count
+           FROM inbound_email_messages m
+           JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
+           JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
+          WHERE m.workspace_id=$1 AND i.agent_id=$2 AND r.created_at > now() - interval '1 day'`,
+        [job.workspace_id, row.agent_id],
+      );
+      if ((today.rows[0]?.count ?? 0) >= agentDailyReads(env)) return fail('daily_limit');
+    }
 
     const facts = senderFactsSchema.parse(row.sender_facts);
     const body = (row.body ?? {}) as { text?: unknown };
@@ -142,7 +171,7 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
       `SELECT slug, name FROM workspace_roles WHERE workspace_id=$1 ORDER BY builtin DESC, slug`,
       [job.workspace_id],
     );
-    const roleName = roles.rows.find((role) => role.slug === row.role_slug)?.name ?? row.role_slug;
+    const roleName = row.role_slug ? roles.rows.find((role) => role.slug === row.role_slug)?.name ?? row.role_slug : null;
     const session = await automationSession(tx, env, job.workspace_id, owner.userId, row.agent_id, `Email · ${row.label}`.slice(0, 120));
     let submitted: Awaited<ReturnType<typeof submitTurn>>;
     try {
@@ -207,6 +236,7 @@ async function restartTriage(
   actor: { userId: string } | 'system',
   notBefore: Date | null = null,
 ): Promise<string | null> {
+  // A person's retry reads the message even past the agent's daily limit.
   const attempt = message.attempt + 1;
   await tx.query(
     `UPDATE inbound_email_messages
@@ -214,7 +244,8 @@ async function restartTriage(
       WHERE workspace_id=$1 AND id=$2`,
     [workspaceId, message.id, attempt],
   );
-  const jobId = await enqueueJob(tx, workspaceId, 'email_triage', emailTriageKey(message.id, attempt), { message_id: message.id });
+  const jobId = await enqueueJob(tx, workspaceId, 'email_triage', emailTriageKey(message.id, attempt),
+    actor === 'system' ? { message_id: message.id } : { message_id: message.id, by_person: true });
   if (jobId && notBefore && notBefore.getTime() > Date.now()) {
     await tx.query('UPDATE jobs SET next_at=$2 WHERE id=$1', [jobId, notBefore]);
     await tx.query('UPDATE job_ready SET next_at=$2 WHERE job_id=$1', [jobId, notBefore]);
