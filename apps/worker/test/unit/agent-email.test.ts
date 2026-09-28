@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { agentLocalPart, intakeDomain } from '../../src/inbound-email/agent-address.js';
 import { AgentSendError, referencesHeader, sendAsAgent } from '../../src/outbound-email/agent-send.js';
+import { recipientAllowed } from '../../src/outbound-email/recipient-allowlist.js';
 
 describe('agent addresses', () => {
   it('names the address after the agent, in letters, digits and hyphens', () => {
@@ -52,5 +53,26 @@ describe('sending as an agent', () => {
     const error = await sendAsAgent(binding, input).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(AgentSendError);
     expect(error).toMatchObject({ retryable, ambiguous });
+  });
+});
+
+describe('recipient allowlist (staging)', () => {
+  it('allows anyone unless the deployment asks for an allowlist', () => {
+    expect(recipientAllowed({}, 'anyone@example.com')).toBe(true);
+    expect(recipientAllowed({ AGENT_EMAIL_ALLOWED_RECIPIENTS: 'a@b.c' }, 'anyone@example.com')).toBe(true);
+  });
+
+  it('matches exact addresses and @domains, case-insensitively', () => {
+    const env = { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: ' Tester@Example.com , @northwind.example ' };
+    expect(recipientAllowed(env, 'tester@example.com')).toBe(true);
+    expect(recipientAllowed(env, 'priya@NORTHWIND.example')).toBe(true);
+    expect(recipientAllowed(env, 'other@example.com')).toBe(false);
+    expect(recipientAllowed(env, 'priya@evil-northwind.example')).toBe(false);
+    expect(recipientAllowed(env, 'x@sub.northwind.example')).toBe(false);
+  });
+
+  it('sends to nobody when the list is missing or empty', () => {
+    expect(recipientAllowed({ AGENT_EMAIL_RECIPIENT_MODE: 'allowlist' }, 'tester@example.com')).toBe(false);
+    expect(recipientAllowed({ AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: ' , ' }, 'tester@example.com')).toBe(false);
   });
 });

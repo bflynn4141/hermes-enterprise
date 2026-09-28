@@ -2017,6 +2017,12 @@ Microsoft callback; refresh under the row lock).
   person's **Read it now**. Considered and dropped: holding mail from senders
   the team never emailed, because a partner's first email always is one.
 
+- **Staging sends only to testers.** Brian's call: staging replies send after
+  approval, but only to the `AGENT_EMAIL_ALLOWED_RECIPIENTS` secret
+  (`AGENT_EMAIL_RECIPIENT_MODE=allowlist`); anyone else's reply is not sent and
+  the approval says why. A missing list sends to nobody. Production stays
+  draft-only. `test/unit/config.test.ts` holds both rules.
+
 **Not in this pass.** Replies from a customer's own subdomain
 (`agents.acme.com`); hosted Cloud agents until the C98 bridge re-pin; outreach
 still uses a connected Google or Microsoft account.

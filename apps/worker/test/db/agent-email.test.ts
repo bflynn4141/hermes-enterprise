@@ -254,6 +254,36 @@ describe('every agent has its own email address (C100)', () => {
       .toEqual([{ state: 'cancelled', last_error: 'sender_account_mismatch' }]);
   });
 
+  it('on an allowlisted deployment, sends nothing to anyone else and says why', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: 'tester@example.com' });
+    try {
+      const { requestId, outbox } = await approvedReply(fx);
+      expect(sent).toHaveLength(0);
+      expect(await scoped(fx.workspaceId, 'SELECT state, last_error FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
+        .toEqual([{ state: 'cancelled', last_error: 'recipient_not_allowed' }]);
+      const [approval] = await scoped<{ effect_status: string; effect_reason: string }>(fx.workspaceId,
+        'SELECT effect_status, effect_reason FROM approval_requests WHERE request_id=$1', [requestId]);
+      expect(approval).toMatchObject({ effect_status: 'failed' });
+      expect(approval!.effect_reason).toContain('only emails approved addresses');
+    } finally {
+      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined, AGENT_EMAIL_ALLOWED_RECIPIENTS: undefined });
+    }
+  });
+
+  it('on an allowlisted deployment, sends to an allowed domain', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: '@northwind.example' });
+    try {
+      await approvedReply(fx);
+      expect(sent.map((message) => message.to.email)).toEqual(['priya@northwind.example']);
+    } finally {
+      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined, AGENT_EMAIL_ALLOWED_RECIPIENTS: undefined });
+    }
+  });
+
   it('stops reading at the daily limit, and a person can have it read one anyway', async () => {
     const fx = await seedAgent();
     // Each read finishes before the next, as it would with a real model.

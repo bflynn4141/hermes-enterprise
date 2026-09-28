@@ -241,7 +241,10 @@
         // this subdomain to this Worker's email() handler (catch-all rule).
         // Replies stay drafts until an operator connects a sender.
         "EMAIL_INTAKE_DOMAIN": "in.staging.hermes.brianflynn.dev",
-        "EMAIL_REPLY_MODE": "draft_only",
+        "EMAIL_REPLY_MODE": "send_after_approval",
+        // Staging sends only to the people testing it (C100). The list is the
+        // AGENT_EMAIL_ALLOWED_RECIPIENTS secret; without it nothing is sent.
+        "AGENT_EMAIL_RECIPIENT_MODE": "allowlist",
         "GMAIL_OUTREACH_ENABLED": "0",
         "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "active",

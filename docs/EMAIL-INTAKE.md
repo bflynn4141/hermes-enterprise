@@ -145,6 +145,8 @@ images, MIME alternatives, and unchanged historical evidence.
 | `EMAIL_REPLY_MODE` | `send_after_approval` | `draft_only` |
 | `EMAIL` binding (`send_email`) | Wrangler's local simulator | added once Email Sending is enabled for the domain |
 | `AGENT_EMAIL_DAILY_READS` | default 50 | default 50 |
+| `AGENT_EMAIL_RECIPIENT_MODE` | unset (anyone) | staging `allowlist`; production unset while replies are drafts |
+| `AGENT_EMAIL_ALLOWED_RECIPIENTS` (secret) | unset | staging: addresses or `@domain`s, comma-separated; missing means nobody |
 
 To turn it on for a deployed environment:
 
