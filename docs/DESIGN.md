@@ -156,6 +156,36 @@ Stripe's and GitHub Primer's as checks).
   say "Admin → Models", "Admin → Capacity", "Admin → Email", matching the
   labels in the rail.
 
+## Connections
+
+Admin → Connections holds one page per connected service (Slack, Email). Set
+on September 27, 2026 from a review of how agent products add and manage
+connections: Composio, Arcade, Pipedream Connect, Claude's and ChatGPT's
+connectors, Merge Agent Handler, Paragon and Notion AI.
+
+- **A list, not a gallery, while there are few.** Galleries belong to large
+  catalogs (Claude's directory, Composio). With two to six services, each is a
+  tab with its logo; add an "Add connection" gallery only past about six.
+- **Every connection shows its service's logo** (`BrandIcon`, from the CC0
+  Iconify logos set) in its tab and on its card, so it is recognisable before
+  it is read.
+- **Status only when it says something.** No badge for "Not connected"; the
+  Connect button says it. A healthy connection is a quiet green "Connected"
+  beside the title. Only a connection that needs someone gets a pill: "Needs
+  attention". Never a status row repeating the title.
+- **Name the account agents act as.** A connected card shows which account
+  (Sends from, the Slack workspace) without opening anything.
+- **Say what stops before disconnecting.** The confirmation names what stops
+  working; earlier work stays.
+- **Organization connections and personal links stay distinct.** The Slack
+  install and the Gmail sending account belong to the workspace; a person's
+  Slack identity link is theirs.
+
+Next, when the data exists (not built yet): a "What agents can do" list per
+connection that links each action to its approval rule rather than repeating
+it; who has linked their Slack identity; last used and a periodic health check
+so an expired token shows here before an approved action fails.
+
 ## Design system rules
 
 These hold across the app. `apps/client/src/app/design-system.test.ts` checks

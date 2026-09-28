@@ -21,6 +21,7 @@ import {
 } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { createPortal } from 'react-dom';
+import { BrandIcon, type BrandName } from './brand-icons.js';
 import { Glass, Icon, type GlassName } from './icons.js';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -84,6 +85,8 @@ export interface Tab {
   id: string;
   label: string;
   icon?: string;
+  /** A connected service's logo, for tabs that name one (Admin → Connections). */
+  brand?: BrandName;
 }
 
 export function Tabs({ tabs, value, onChange, strong, label }: { tabs: readonly Tab[]; value: string; onChange: (id: string) => void; strong?: boolean; label: string }) {
@@ -132,6 +135,7 @@ export function Tabs({ tabs, value, onChange, strong, label }: { tabs: readonly 
           onKeyDown={(event) => onKeyDown(event, index)}
         >
           {tab.icon && <Glass name={tab.icon} size={20} />}
+          {tab.brand && <BrandIcon name={tab.brand} size={16} />}
           {tab.label}
         </button>
       ))}
@@ -499,6 +503,11 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
       ))}
     </div>
   );
+}
+
+/** A short status label. `tone` is ok, warn or muted (the default). */
+export function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: 'ok' | 'warn' | 'muted' | string }) {
+  return <span className={`pill pill-${tone}`}>{children}</span>;
 }
 
 /**

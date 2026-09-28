@@ -619,6 +619,14 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-settings-card { border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.015); min-width: 0; overflow: hidden; }
 .admin-settings-card-header { padding: 22px 24px 16px; }
 .admin-settings-card-header h3 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 500; }
+.admin-settings-card-header.with-brand { display: flex; align-items: flex-start; gap: 14px; }
+.admin-settings-card-heading { min-width: 0; flex: 1; }
+.admin-settings-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.connection-ok { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.connection-ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green, #2c8a5a); }
+.brand-icon { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; }
+.brand-icon svg { width: 100%; height: 100%; }
+.admin-settings-card-header .brand-icon { margin-top: 1px; padding: 5px; box-sizing: content-box; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.04); }
 .admin-settings-card-header p { margin: 7px 0 0; max-width: 65ch; font-size: 14px; line-height: 1.6; color: var(--muted); }
 .admin-settings-card-body { padding: 0 24px 22px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .admin-settings-card-body > p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }

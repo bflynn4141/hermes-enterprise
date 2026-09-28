@@ -14,7 +14,7 @@ import { FilterTable } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
-import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
+import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle, Pill } from '../ui/primitives.js';
 import { ADMIN_SETTINGS_GROUPS, ADMIN_VIEW_ALIASES, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
 import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
@@ -29,7 +29,7 @@ import { CloudConnection } from './CloudConnection.js';
 import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
 import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
-import { AdminDetailLayout, AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
+import { AdminDetailLayout, AdminSettingsCard, AdminPageHeader, type ConnectionBadge } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
@@ -153,10 +153,6 @@ const invitationStatusLabel = (status: InvitationEntity['status']): string =>
 
 /** The pill's tone, and the only thing about a person this screen colours. */
 const statusTone = (label: string): string => (label === 'Joined' ? 'ok' : label === 'Expired' || label === 'Bounced' ? 'warn' : 'muted');
-
-function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: string }) {
-  return <span className={`pill pill-${tone}`}>{children}</span>;
-}
 
 export function Members() {
   const state = useAppState();
@@ -1254,23 +1250,14 @@ function EmailTab() {
   if (!connection && !statusError) return <Skeleton rows={4} label="Loading email connection" />;
   const connected = connection?.status === 'connected';
   const sendingEnabled = connection?.mode === 'send_after_approval';
-  const statusLabel = statusError
-    ? 'Status unavailable'
-    : !connection?.configured
-      ? 'Not available yet'
-      : connection.status === 'connected'
-        ? 'Connected'
-        : connection.status === 'error'
-          ? 'Needs attention'
-          : connection.status === 'unavailable'
-            ? 'Unavailable'
-            : 'Not connected';
-  const statusTone = connected ? 'ok' : connection?.status === 'error' || statusError ? 'warn' : 'muted';
+  const badge: ConnectionBadge | null = statusError ? null : connected ? { label: 'Connected', tone: 'ok' } : connection?.status === 'error' ? { label: 'Needs attention', tone: 'warn' } : null;
   return (
     <>
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
         title="Sending account"
+        brand="gmail"
+        badge={badge}
         description={connected
           ? 'Approved replies and outreach go out from this Gmail account.'
           : connection?.configured || statusError ? 'Approved replies and outreach go out from a Gmail account you connect.' : UNCONFIGURED_GMAIL}
@@ -1286,7 +1273,6 @@ function EmailTab() {
           <p className="meta" role="alert">{statusError}</p>
         ) : connection && (
           <>
-            <div className="kv"><span className="grow">Status</span><Pill tone={statusTone}>{statusLabel}</Pill></div>
             {connection.address && <div className="kv"><span className="grow">Sends from</span><span className="meta">{connection.address}</span></div>}
             {connection.configured && <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'On, only what a person approved' : 'Off, approved emails are kept as drafts'}</span></div>}
             {connection.configured && connection.pending_messages > 0 && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{connection.pending_messages}</span></div>}
@@ -1441,50 +1427,32 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
       </>
     );
   }
-  const statusLabel = !connection.configured
-    ? 'Not available yet'
-    : connection.status === 'connected'
-      ? 'Connected'
-      : connection.status === 'error'
-        ? 'Needs attention'
-        : connection.status === 'unavailable'
-          ? 'Unavailable'
-          : 'Not connected';
-  const statusTone = connected ? 'ok' : connection.status === 'error' ? 'warn' : 'muted';
+  const badge: ConnectionBadge | null = connected ? { label: 'Connected', tone: 'ok' } : connection.status === 'error' ? { label: 'Needs attention', tone: 'warn' } : null;
   return (
     <div className="admin-detail-page">
       <AdminPageHeader title="Slack" />
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
+        brand="slack"
+        badge={badge}
         title={connected
-          ? `Connected to ${destination}`
+          ? 'Slack'
           : connection.status === 'error'
             ? 'Slack needs to be reconnected'
             : connection.configured
               ? 'Connect this workspace to Slack'
               : 'Slack is not available yet'}
         description={connected
-          ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Hermes agent'}`
+          ? `${destination} · ${connection.agent?.name ?? 'Your Hermes agent'} replies in Slack`
           : connection.configured
             ? 'You approve the connection in Slack. You never enter a Slack password in Hermes.'
             : 'Slack is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.'}
-        footer={<>
-          <p className="meta">{connected
-            ? 'Slack is ready for direct messages and mentioned channel threads.'
-            : connection.configured
-              ? 'Slack opens so you can choose the workspace and approve.'
-              : 'Until then, Slack messages do not reach Hermes.'}</p>
-          {admin && connection.configured && !connected ? (
-            <Button primary disabled={busy} onClick={connect}>
-              {busy ? 'Opening Slack…' : connection.status === 'error' ? 'Reconnect Slack' : 'Connect Slack'}
-            </Button>
-          ) : null}
-        </>}
-      >
-        <div className="kv"><span className="grow">Connection</span><Pill tone={statusTone}>{statusLabel}</Pill></div>
-        {connected && <div className="kv"><span className="grow">Slack workspace</span><span className="meta">{destination}</span></div>}
-        {connected && connection.installation_kind && <div className="kv"><span className="grow">Installation</span><span className="meta">{connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'}</span></div>}
-      </AdminSettingsCard>
+        footer={admin && connection.configured && !connected ? (
+          <Button primary disabled={busy} onClick={connect}>
+            {busy ? 'Opening Slack…' : connection.status === 'error' ? 'Reconnect Slack' : 'Connect Slack'}
+          </Button>
+        ) : undefined}
+      />
 
       {connected && (
         <AdminSettingsCard
@@ -1495,9 +1463,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
             <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
           </>}
         >
-            {linkCommand
-              ? <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>
-              : <EmptyState compact icon="settings" title="No link command yet" />}
+            {linkCommand && <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>}
         </AdminSettingsCard>
       )}
 

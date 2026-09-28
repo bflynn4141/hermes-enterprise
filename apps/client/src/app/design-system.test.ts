@@ -62,6 +62,11 @@ describe('design system', () => {
     expect(found, 'Start an Admin page with <AdminPageHeader title actions />; put explanations in docs, not under the tabs.').toEqual([]);
   });
 
+  it('does not badge a connection as "Not connected"', () => {
+    // The Connect button already says it (docs/DESIGN.md, Connections).
+    expect(find(views, /<Pill\b[^>]*>\s*(?:\{\s*)?['"]?Not connected/), 'Show a badge only for "Needs attention"; see AdminSettingsCard `badge`.').toEqual([]);
+  });
+
   it('builds tab rows only with the Tabs primitive', () => {
     expect(find(views, /role="tablist"/), 'Use <Tabs> from ui/primitives for a row of tabs.').toEqual([]);
   });

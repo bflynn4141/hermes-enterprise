@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { ADMIN } from '@hermes/shared';
 import { ADMIN_SETTINGS_GROUPS, adminSectionOf } from '../../model/constants.js';
 import { useNav } from '../store-context.js';
-import { Tabs } from '../ui/primitives.js';
+import { BrandIcon, type BrandName } from '../ui/brand-icons.js';
+import { Pill, Tabs } from '../ui/primitives.js';
 
 /**
  * Every Admin page: its own address, its section in the rail, its siblings as
@@ -47,7 +48,7 @@ export function AdminDetailLayout({ selected, children }: {
       <section className="admin-settings-content" aria-label={section.items.find((item) => item.id === selected)?.label ?? section.label}>
         <div className="admin-detail-tabs">
           <Tabs
-            tabs={section.items.map((item) => ({ id: item.id, label: item.label }))}
+            tabs={section.items.map((item) => ({ id: item.id, label: item.label, ...('brand' in item ? { brand: item.brand } : {}) }))}
             value={selected}
             onChange={(id) => nav(ADMIN(id))}
             label={`${section.label} pages`}
@@ -76,22 +77,38 @@ export function AdminPageHeader({ title, actions }: { title: string; actions?: R
 }
 
 /**
+ * A connection's state, when it is worth reading. "Not connected" is what the
+ * Connect button already says, so it has no badge; a healthy connection is a
+ * quiet line, and only one that needs someone gets a pill (docs/DESIGN.md,
+ * Connections).
+ */
+export type ConnectionBadge = { label: 'Connected' | 'Needs attention'; tone: 'ok' | 'warn' };
+
+/**
  * One block of settings: a title, at most one sentence under it, the controls,
  * and a footer for the single action (Vercel's fieldset). Explanations longer
- * than a sentence do not belong here.
+ * than a sentence do not belong here. A connection's card carries the service's
+ * logo and, once there is something to say, its state beside the title.
  */
-export function AdminSettingsCard({ title, description, children, footer, danger = false }: {
+export function AdminSettingsCard({ title, description, children, footer, danger = false, brand, badge }: {
   title: string;
   description?: string;
   children?: ReactNode;
   footer?: ReactNode;
   danger?: boolean;
+  brand?: BrandName;
+  badge?: ConnectionBadge | null;
 }) {
   return (
     <section className={`admin-settings-card${danger ? ' admin-settings-card-danger' : ''}`} aria-label={title}>
-      <header className="admin-settings-card-header">
-        <h3>{title}</h3>
-        {description && <p>{description}</p>}
+      <header className={`admin-settings-card-header${brand ? ' with-brand' : ''}`}>
+        {brand && <BrandIcon name={brand} size={28} />}
+        <div className="admin-settings-card-heading">
+          <div className="admin-settings-card-title"><h3>{title}</h3>{badge && (badge.tone === 'ok'
+            ? <span className="connection-ok">{badge.label}</span>
+            : <Pill tone={badge.tone}>{badge.label}</Pill>)}</div>
+          {description && <p>{description}</p>}
+        </div>
       </header>
       {children && <div className="admin-settings-card-body">{children}</div>}
       {footer && <footer className="admin-settings-card-footer">{footer}</footer>}
