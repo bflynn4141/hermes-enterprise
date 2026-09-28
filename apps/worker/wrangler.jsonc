@@ -327,6 +327,9 @@
         ]
       },
       "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+      // Email Sending is enabled for in.staging.hermes.brianflynn.dev (C100): replies to an
+      // agent's address go out as the agent once EMAIL_REPLY_MODE allows sending.
+      "send_email": [{ "name": "EMAIL" }],
       "hyperdrive": [
         { "binding": "HYPERDRIVE_APP", "id": "0de9d1d5611a49cc826a529f82d44e4f" },
         { "binding": "HYPERDRIVE_AGENT", "id": "c64a6075522a4c568c4d6db1789aa6e2" }
