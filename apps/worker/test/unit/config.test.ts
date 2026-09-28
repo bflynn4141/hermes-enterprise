@@ -113,14 +113,16 @@ describe('wrangler.jsonc', () => {
     }
   });
 
-  it('keeps email-intake replies draft-only in every deployed environment (C98)', () => {
-    // Local development simulates delivery, which is what makes the walkthrough
-    // readable; staging and production never send a reply unless an operator
-    // changes this after connecting a sender.
+  it('sends email replies from a deployed environment only to its members (C98, C100)', () => {
+    // Local development sends through Wrangler's simulator. A deployed
+    // environment either keeps replies as drafts (production) or sends only to
+    // the workspace's active members (staging, Brian's C100 call).
     expect((config.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('send_after_approval');
     for (const scope of Object.values(envs)) {
-      expect((scope.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('draft_only');
+      const vars = scope.vars as Record<string, string>;
+      if (vars.EMAIL_REPLY_MODE !== 'draft_only') expect(vars.AGENT_EMAIL_RECIPIENT_MODE).toBe('members');
     }
+    expect((envs.production!.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('draft_only');
     // Staging receives mail on its own subdomain; production has none yet.
     expect((envs.staging!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBe('in.staging.hermes.brianflynn.dev');
     expect((envs.production!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();

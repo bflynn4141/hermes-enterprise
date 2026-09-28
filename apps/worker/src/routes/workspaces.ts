@@ -17,6 +17,7 @@
 //   * the creator is the first Admin, because a workspace with no Admin could
 //     never decide anything, and the last-Admin trigger would then have nothing
 //     to protect.
+import { ensureAgentInbox, intakeDomain } from '../inbound-email/agent-address.js';
 import type { Context } from 'hono';
 import { bootstrapSchema, SETUP, workspaceCreateInputSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
@@ -147,6 +148,8 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
         `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1, $2, $3)`,
         [workspaceId, agentId, memberId],
       );
+      // Every agent has its own email address from the start (C100).
+      await ensureAgentInbox(client, intakeDomain(c.env.EMAIL_INTAKE_DOMAIN), workspaceId, agentId);
       await client.query(
         `INSERT INTO instruction_versions
            (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)

@@ -15,7 +15,7 @@ export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, ap
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
-import { EmailCautions, EmailMessageView } from './EmailMessage.js';
+import { EmailCautions, EmailMessageView, EmailBriefView } from './EmailMessage.js';
 import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
 import { RestError } from '../../model/rest.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
@@ -197,6 +197,7 @@ function ReplyPreview({ view }: { view: ApprovalView }) {
   return (
     <div className="approval-preview email-reply">
       {email && <EmailCautions facts={email.sender} second={second} />}
+      {email?.brief && <EmailBriefView brief={email.brief} sender={email.sender} />}
       <section className="email-reply-draft" aria-label="Suggested reply">
         <div className="email-reply-heading">
           <h2>Suggested reply</h2>

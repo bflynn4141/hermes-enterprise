@@ -186,6 +186,10 @@
   // Hyperdrive caches by query text and does not document whether session
   // settings enter the key, and a cache that ignored `SET LOCAL app.workspace_id`
   // would hand one tenant another tenant's rows.
+  // Cloudflare Email Service (C100): approved replies go out from the agent's
+  // own address. Local dev uses Wrangler's simulator; staging gets the binding
+  // once Email Sending is enabled for its receiving domain.
+  "send_email": [{ "name": "EMAIL" }],
   "hyperdrive": [
     // Local development points these at Docker Postgres through
     // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP and
@@ -237,7 +241,10 @@
         // this subdomain to this Worker's email() handler (catch-all rule).
         // Replies stay drafts until an operator connects a sender.
         "EMAIL_INTAKE_DOMAIN": "in.staging.hermes.brianflynn.dev",
-        "EMAIL_REPLY_MODE": "draft_only",
+        "EMAIL_REPLY_MODE": "send_after_approval",
+        // Staging emails only its own members: people who accepted an
+        // invitation and are active, read at send time (C100).
+        "AGENT_EMAIL_RECIPIENT_MODE": "members",
         "GMAIL_OUTREACH_ENABLED": "0",
         "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "active",
@@ -323,6 +330,9 @@
         ]
       },
       "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+      // Email Sending is enabled for in.staging.hermes.brianflynn.dev (C100): replies to an
+      // agent's address go out as the agent once EMAIL_REPLY_MODE allows sending.
+      "send_email": [{ "name": "EMAIL" }],
       "hyperdrive": [
         { "binding": "HYPERDRIVE_APP", "id": "0de9d1d5611a49cc826a529f82d44e4f" },
         { "binding": "HYPERDRIVE_AGENT", "id": "c64a6075522a4c568c4d6db1789aa6e2" }

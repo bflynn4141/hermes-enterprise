@@ -1985,3 +1985,64 @@ send and error classes) and `test/db/microsoft-sending.test.ts` (an approved
 role-inbox reply waiting for a mailbox is sent through Graph after connecting,
 with threading headers; the connection view; a Google state refused by the
 Microsoft callback; refresh under the row lock).
+
+## C100. Every agent has its own email address and sends as itself
+
+**Decided September 28, 2026** by Brian. Extends C98; see
+[EMAIL-INTAKE.md](../EMAIL-INTAKE.md).
+
+- **An address per agent, by default.** An agent gets
+  `<name>-<6 random characters>@<EMAIL_INTAKE_DOMAIN>` when it is created with
+  an owner, or the first time anyone looks for it, which backfills agents made
+  earlier (`inbound-email/agent-address.ts`). No Admin provisions it. The oldest
+  existing C98 address per agent became that agent's own (0079), so nothing
+  anyone forwards to stopped working.
+- **Roles decide reviewers.** Admins configure roles, not inboxes. The address's
+  role follows the agent's team through a trigger on `enterprise_team_agents`:
+  its owner and the holders of its role read and review its mail. With no role,
+  only the owner does. An agent with no owner gets no address.
+- **Replies come from the agent.** An approved reply to an agent's address is
+  sent as the agent through Cloudflare Email Service (`send_email` binding
+  `EMAIL`), chosen over AgentMail because receiving already runs on Cloudflare
+  Email Routing in the same Worker: no new vendor holding partners' mail, no
+  API keys, automatic SPF/DKIM/DMARC, bounces and suppression. It is in public
+  beta (April 2026) on the Workers paid plan.
+- **Same checks, new transport.** The outbox records `sender_inbox_id`; the send
+  job re-checks the approval, suppression, and that the address is still the
+  agent's and receiving. The approved text and threading go as API fields, so
+  nothing in the body can add a header. `failed` is final: a refused send is
+  never sent later by a revived job.
+- **A spending guard.** Every address is on, so each agent reads at most
+  `AGENT_EMAIL_DAILY_READS` (default 50) a day by itself; the rest wait for a
+  person's **Read it now**. Considered and dropped: holding mail from senders
+  the team never emailed, because a partner's first email always is one.
+
+- **Staging emails only its members.** Brian's call: staging replies send after
+  approval, but only to the workspace's members, the people who accepted an
+  invitation and are active (`AGENT_EMAIL_RECIPIENT_MODE=members`). Someone
+  only invited is not a member. The check reads the member list at send time,
+  so there is no list to keep in sync; anyone else's reply is not sent and the
+  approval says why, and an unknown mode sends to nobody. Production stays
+  draft-only. `test/unit/config.test.ts` holds both rules.
+
+- **A brief with every suggestion.** With a reply or hand-off the agent adds a
+  brief: a short summary of what the email says and asks, and its action items,
+  each marked `us` (this team) or `them` (the sender), with a due date only when
+  the email gives one (0080, `inbound_email_messages.brief`). It is optional
+  fields on the existing tools, not a new tool, so hosted bridges need no new
+  revision. The brief is the agent's reading of untrusted text: it is shown
+  above the suggested reply and on hand-offs, counted in Admin → Email, and
+  never acts by itself.
+
+**Not in this pass.** Replies from a customer's own subdomain
+(`agents.acme.com`); hosted Cloud agents until the C98 bridge re-pin; outreach
+still uses a connected Google or Microsoft account.
+
+**Evidence.** `test/db/agent-email.test.ts` (addresses on first look, none
+without an owner, the role following the agent's team, a threaded send as the
+agent with Cloudflare's message id, refused and uncertain sends, throttling,
+a paused address cancelling, the daily limit and Read it now),
+`test/unit/agent-email.test.ts` (address naming, References trimming, error
+classes), and a walkthrough on the local stack through Wrangler's email
+simulator.
+

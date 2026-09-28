@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
-test('role inboxes keep checking for email until the page is hidden or closed', async ({ page }) => {
+test('agent email keeps checking for new mail until the page is hidden or closed', async ({ page }) => {
   await page.addInitScript(() => {
     const requests: string[] = [];
     Object.defineProperty(window, '__emailReads', { value: requests });
@@ -12,9 +12,9 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
   });
   await page.clock.install();
   await page.goto('/#admin/Inboxes');
-  await page.getByRole('button', { name: 'Add inbox', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Add inbox', exact: true }).click();
-  await expect(page.getByText('No email yet')).toBeVisible();
+  // Iris has its own address without anyone adding one (C100).
+  await expect(page.getByRole('list', { name: 'Agent email' }).getByText(/^iris-[a-z0-9]+@/u)).toBeVisible();
+  await expect(page.getByText('No email yet').first()).toBeVisible();
   const reads = () => page.evaluate(() => {
     const paths = (window as unknown as { __emailReads: string[] }).__emailReads;
     return { inboxes: paths.filter((path) => path.endsWith('/inboxes')).length, messages: paths.filter((path) => path.endsWith('/messages')).length };
@@ -38,7 +38,8 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  await expect.poll(async () => (await reads()).messages).toBe(after.messages + 1);
+  // Becoming visible reads again at once, for each address on the page.
+  await expect.poll(async () => (await reads()).messages).toBeGreaterThan(after.messages);
   await openAdminPage(page, 'General');
   const closed = await reads();
   await page.clock.runFor(15_000);

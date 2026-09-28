@@ -1,12 +1,15 @@
-// Admin → Role inboxes (decision C98): forwarding addresses for a role, each
-// read by one agent that suggests replies and hand-offs for people to approve.
+// Admin → Email, agent email (decisions C98, C100). Every agent has its own
+// address, created with it; approved replies go out from that address. Nobody
+// provisions an address: an Admin configures roles, and an agent's role
+// decides who reviews its mail. Addresses Admins made for roles before C100
+// keep working and are listed with the agent that reads them.
 //
-// Admins configure the addresses; the mail itself belongs to the role. So this
-// page lists recent messages only to someone who could read them anyway (the
-// inbox agent's owner or a holder of its role). Every write needs a recent
-// sign-in, like every other Admin change to who can act.
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { REQ, type AgentDirectoryEntry, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
+// The mail belongs to the people who review it, so this page lists recent
+// messages only to someone who could read them anyway (the agent's owner or a
+// holder of its role). Pausing and replacing need a recent sign-in, like every
+// other Admin change to who can act.
+import { useCallback, useEffect, useState } from 'react';
+import { REQ, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { sortRoles } from './AdminRoles.js';
@@ -37,8 +40,10 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
         needs_setup: `${agent}’s model needs attention in Admin → Models. Nothing was sent.`,
         no_owner: `${agent} has no owner to reply as. Give it an owner in Admin → Agents, then try again.`,
         inbox_paused: 'The inbox is paused. Resume it, then try again.',
+        daily_limit: `${agent} has read today’s number of emails. Read it now, or it waits here.`,
         other: `Something went wrong while ${agent} was reading it. Nothing was sent.`,
       };
+      if (message.problem === 'daily_limit') return { text: 'Waiting for you', tone: 'quiet', note: why.daily_limit };
       return { text: 'Couldn’t read it', tone: 'problem', note: why[message.problem ?? 'other'] };
     }
     default: return { text: 'Updated', tone: 'quiet', note: null };
@@ -81,7 +86,22 @@ function Problem({ error }: { error: unknown }) {
   </p>;
 }
 
-function CopyAddress({ address }: { address: string }) {
+/** An agent's own address (C100), or null while it has none; undefined while loading. */
+export function useAgentAddress(agentId: string): string | null | undefined {
+  const adapter = useAdapter();
+  const state = useAppState();
+  const [address, setAddress] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    void adapter.rest.listEmailInboxes(state.workspace.id)
+      .then((list) => { if (live) setAddress(list.inboxes.find((inbox) => inbox.kind === 'agent' && inbox.agent.id === agentId)?.address ?? null); })
+      .catch(() => { if (live) setAddress(null); });
+    return () => { live = false; };
+  }, [adapter, state.workspace.id, agentId]);
+  return address;
+}
+
+export function CopyAddress({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
   return <span className="email-inbox-address">
     <code>{address}</code>
@@ -142,6 +162,7 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
             : <span className="email-inbox-subject">{subject}</span>}
           <span className="email-inbox-sub">
             {message.sender.name ?? message.sender.address}
+            {message.brief && message.brief.action_items.some((item) => item.owner === 'us') && ` · ${message.brief.action_items.filter((item) => item.owner === 'us').length} to do`}
             {flagged && <span className="email-inbox-flag"> · Check the sender</span>}
           </span>
         </span>
@@ -151,8 +172,8 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
         </span>
         {(stateWords.note || message.can_retry) && <span className="email-inbox-note">
           {stateWords.note && <span>{stateWords.note}</span>}
-          {message.can_retry && <Button small disabled={retrying !== null} aria-label={`Try again: ${subject}`} onClick={() => void retry(message)}>
-            {retrying === message.id ? 'Asking…' : 'Try again'}
+          {message.can_retry && <Button small disabled={retrying !== null} aria-label={`${message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}: ${subject}`} onClick={() => void retry(message)}>
+            {retrying === message.id ? 'Asking…' : message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}
           </Button>}
         </span>}
         {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
@@ -161,96 +182,14 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   </ul></>;
 }
 
-const RUNTIME_WORDS: Record<AgentDirectoryEntry['runtime']['source'], string> = {
-  cloud_capacity: 'Hermes Cloud',
-  cloud_provisioned: 'Hermes Cloud',
-  deployment: 'Built in',
-  none: 'Not set up',
-};
-
-/**
- * How the inbox picker names an agent. Two agents can share a name and an
- * owner (staging has two "Iris · Brian Flynn"), so the role goes in whenever
- * the agent holds one, and where it runs is added only when the name, owner
- * and role still leave two agents looking the same.
- */
-export function inboxAgentLabel(agent: AgentDirectoryEntry, peers: readonly AgentDirectoryEntry[]): string {
-  const base = (entry: AgentDirectoryEntry): string =>
-    [entry.name, entry.owner?.name, entry.role?.team.name].filter(Boolean).join(' · ');
-  const label = base(agent);
-  const twin = peers.some((peer) => peer.id !== agent.id && base(peer) === label);
-  return twin ? `${label} · ${agent.runtime.label ?? RUNTIME_WORDS[agent.runtime.source]}` : label;
-}
-
-/** The agent a new inbox for `roleSlug` starts with: the one holding that role, if any. */
-export function preferredInboxAgent(agents: readonly AgentDirectoryEntry[], roleSlug: string): AgentDirectoryEntry | undefined {
-  return agents.find((agent) => agent.role?.team.slug === roleSlug) ?? agents[0];
-}
-
-export function NewInbox({ roles, agents, onCreated, onClose }: {
-  roles: readonly WorkspaceRole[];
-  agents: readonly AgentDirectoryEntry[];
-  onCreated: (inbox: EmailInbox) => void;
-  onClose: () => void;
-}) {
-  const adapter = useAdapter();
-  const state = useAppState();
-  const owned = useMemo(() => agents.filter((agent) => agent.owner && agent.status === 'started'), [agents]);
-  const [roleSlug, setRoleSlug] = useState(roles.find((role) => role.slug === 'partnerships')?.slug ?? roles[0]?.slug ?? '');
-  const [agentId, setAgentId] = useState(preferredInboxAgent(owned, roleSlug)?.id ?? '');
-  const [label, setLabel] = useState(roles.find((role) => role.slug === roleSlug)?.name ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const create = async (): Promise<void> => {
-    setBusy(true);
-    setError(null);
-    try {
-      onCreated(await adapter.rest.createEmailInbox(state.workspace.id, { role_slug: roleSlug, agent_id: agentId, label: label.trim() }));
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <Dialog open title="Add a role inbox" onClose={onClose} actions={<>
-    <Button onClick={onClose}>Cancel</Button>
-    <Button primary disabled={busy || !roleSlug || !agentId || label.trim().length === 0} onClick={() => void create()}>{busy ? 'Adding…' : 'Add inbox'}</Button>
-  </>}>
-    <p className="email-inbox-help">Hermes gives the role a private forwarding address. The agent reads what arrives and suggests replies or hand-offs; a person approves each one.</p>
-    <div className="email-inbox-form">
-      <label>Role
-        <select value={roleSlug} onChange={(event) => {
-          setRoleSlug(event.target.value);
-          // Follow the role to its own agent; with none, keep the Admin's pick.
-          const match = owned.find((agent) => agent.role?.team.slug === event.target.value);
-          if (match) setAgentId(match.id);
-          setLabel(roles.find((role) => role.slug === event.target.value)?.name ?? label);
-        }}>{roles.map((role) => <option key={role.slug} value={role.slug}>{role.name}</option>)}</select>
-      </label>
-      <label>Agent that reads it
-        <select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
-          {owned.length === 0 && <option value="">No agent with an owner</option>}
-          {owned.map((agent) => <option key={agent.id} value={agent.id}>{inboxAgentLabel(agent, owned)}</option>)}
-        </select>
-      </label>
-      <label>Name
-        <input value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} />
-      </label>
-    </div>
-    {error !== null && <Problem error={error} />}
-  </Dialog>;
-}
-
-/** Role inboxes, the first section of Admin → Email. */
+/** Agent email, the first section of Admin → Email (C100). */
 export function AdminEmailInboxes() {
   const adapter = useAdapter();
   const state = useAppState();
   const [inboxes, setInboxes] = useState<EmailInbox[] | null>(null);
   const [domain, setDomain] = useState<string | null>(null);
   const [roles, setRoles] = useState<WorkspaceRole[]>([]);
-  const [agents, setAgents] = useState<AgentDirectoryEntry[]>([]);
   const [loadError, setLoadError] = useState(false);
-  const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<EmailInbox | null>(null);
   const [problem, setProblem] = useState<unknown>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -262,13 +201,10 @@ export function AdminEmailInboxes() {
   useEffect(() => {
     let live = true;
     void adapter.rest.listRoles(state.workspace.id).then((list) => { if (live) setRoles(sortRoles(list.items)); }).catch(() => { if (live) setRoles([]); });
-    void adapter.rest.adminAgents(state.workspace.id).then((list) => { if (live) setAgents(list.items); }).catch(() => { if (live) setAgents([]); });
     return () => { live = false; };
   }, [adapter, state.workspace.id]);
 
-  const replace = (next: EmailInbox): void => setInboxes((rows) => rows?.some((row) => row.id === next.id)
-    ? rows.map((row) => row.id === next.id ? next : row)
-    : [...(rows ?? []), next]);
+  const replace = (next: EmailInbox): void => setInboxes((rows) => rows?.map((row) => row.id === next.id ? next : row) ?? rows);
   const setStatus = async (inbox: EmailInbox, status: 'active' | 'paused'): Promise<void> => {
     setBusyId(inbox.id);
     setProblem(null);
@@ -277,6 +213,7 @@ export function AdminEmailInboxes() {
     catch (caught) { setProblem(caught); }
     finally { setBusyId(null); polling.refresh(); }
   };
+  // Removing an agent's address gives it a new one on the next load.
   const remove = async (inbox: EmailInbox): Promise<void> => {
     setBusyId(inbox.id);
     setProblem(null);
@@ -288,53 +225,53 @@ export function AdminEmailInboxes() {
     } catch (caught) { setProblem(caught); }
     finally { setBusyId(null); polling.refresh(); }
   };
-  const roleName = (slug: string): string => roles.find((role) => role.slug === slug)?.name ?? inboxes?.find((inbox) => inbox.role_slug === slug)?.label ?? 'This';
+  const roleName = (slug: string): string => roles.find((role) => role.slug === slug)?.name ?? slug;
+  const reviewers = (inbox: EmailInbox): string => inbox.role_slug
+    ? `${roleName(inbox.role_slug)} reviews`
+    : 'Its owner reviews';
 
-  if (loadError && !inboxes) return <div role="alert" className="admin-roles-error"><p>Could not load role inboxes. Try again.</p><Button onClick={polling.refresh}>Try again</Button></div>;
-  if (!inboxes) return <Skeleton rows={4} label="Loading role inboxes" />;
-  const addInbox = <Button disabled={busyId !== null} onClick={() => setAdding(true)}>Add inbox</Button>;
+  if (loadError && !inboxes) return <div role="alert" className="admin-roles-error"><p>Could not load agent email. Try again.</p><Button onClick={polling.refresh}>Try again</Button></div>;
+  if (!inboxes) return <Skeleton rows={4} label="Loading agent email" />;
   return <>
-    {/* With no inboxes the Add button belongs to the empty state, below it. */}
-    <header className="admin-section-heading">
-      <h3>Role inboxes</h3>
-      {domain && inboxes.length > 0 && addInbox}
-    </header>
-    {loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh role inboxes. We’ll try again. <Button small disabled={busyId !== null} onClick={polling.refresh}>Try now</Button></p>}
+    <header className="admin-section-heading"><h3>Agent email</h3></header>
+    {loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh agent email. We’ll try again. <Button small disabled={busyId !== null} onClick={polling.refresh}>Try now</Button></p>}
     {problem !== null && <Problem error={problem} />}
     {!domain
-      ? <EmptyState compact icon="inbox" title="Role inboxes aren’t turned on yet" detail="Ask the person who runs Hermes for your company to turn them on." />
+      ? <EmptyState compact icon="inbox" title="Agent email isn’t turned on yet" detail="Ask the person who runs Hermes for your company to turn it on." />
       : inboxes.length === 0
-      ? <EmptyState compact icon="inbox" title="No role inboxes yet" detail="Each role gets an address. Its agent suggests replies; people approve them." action={addInbox} />
-      : <ul className="email-inboxes-list" aria-label="Role inboxes">
+      ? <EmptyState compact icon="iris" title="No agent has an address yet" detail="An agent gets its own address once someone owns it." />
+      : <ul className="email-inboxes-list" aria-label="Agent email">
         {inboxes.map((inbox) => <li key={inbox.id}>
           <div className="email-inbox-top">
-            <strong>{inbox.label}</strong>
+            <strong>{inbox.kind === 'agent' ? inbox.agent.name : inbox.label}</strong>
             <span className="email-inbox-status" data-state={inbox.status}>{inbox.status === 'active' ? 'Receiving' : 'Paused · new email is turned away'}</span>
             <span className="email-inbox-actions">
               <Button small disabled={busyId !== null} onClick={() => void setStatus(inbox, inbox.status === 'active' ? 'paused' : 'active')}>{inbox.status === 'active' ? 'Pause' : 'Resume'}</Button>
-              <Button small disabled={busyId !== null} onClick={() => setRemoving(inbox)}>Remove</Button>
+              <Button small disabled={busyId !== null} onClick={() => setRemoving(inbox)}>{inbox.kind === 'agent' ? 'New address' : 'Remove'}</Button>
             </span>
           </div>
           <CopyAddress address={inbox.address} />
-          <p className="email-inbox-facts">{roleName(inbox.role_slug)} team · Read by {inbox.agent.name} · {inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</p>
+          <p className="email-inbox-facts">{inbox.kind === 'agent'
+            ? `${reviewers(inbox)} · ${inbox.message_count} ${inbox.message_count === 1 ? 'email' : 'emails'}`
+            : `${inbox.role_slug ? roleName(inbox.role_slug) : 'Role'} address · Read by ${inbox.agent.name} · ${inbox.message_count} ${inbox.message_count === 1 ? 'email' : 'emails'}`}</p>
           <RecentMail inbox={inbox} />
         </li>)}
       </ul>}
     {inboxes.length > 0 && <details className="admin-help">
-      <summary>How to send email to an inbox</summary>
+      <summary>How to send email to an agent</summary>
       <ol>
-        <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
-        <li>In Google Workspace: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
+        <li>Email the agent’s address directly, or copy it on a thread.</li>
+        <li>To route a shared address such as partners@ to an agent, in Google Workspace: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
         <li>In Microsoft 365: Exchange admin center → Mail flow → Rules → Add a rule that sends a copy to the address.</li>
-        <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
       </ol>
     </details>}
-    {adding && <NewInbox roles={roles} agents={agents} onClose={() => setAdding(false)} onCreated={(inbox) => { polling.refresh(); replace(inbox); setAdding(false); }} />}
-    {removing && <Dialog open title={`Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
+    {removing && <Dialog open title={removing.kind === 'agent' ? `Give ${removing.agent.name} a new address?` : `Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
       <Button onClick={() => setRemoving(null)}>Keep it</Button>
-      <Button primary disabled={busyId === removing.id} onClick={() => void remove(removing)}>Remove inbox</Button>
+      <Button primary disabled={busyId === removing.id} onClick={() => void remove(removing)}>{removing.kind === 'agent' ? 'New address' : 'Remove address'}</Button>
     </>}>
-      <p>New email to {removing.address} will be turned away, every email it received will be deleted, and {removing.agent.name} will stop suggesting replies for it. Decisions already made stay in History.</p>
+      <p>{removing.kind === 'agent'
+        ? `${removing.address} will stop receiving email and the email it received will be deleted. ${removing.agent.name} gets a new address right away, so update anything that forwards to the old one. Decisions already made stay in History.`
+        : `New email to ${removing.address} will be turned away, every email it received will be deleted, and ${removing.agent.name} will stop suggesting replies for it. Decisions already made stay in History.`}</p>
     </Dialog>}
   </>;
 }

@@ -46,6 +46,19 @@
 .email-reply-body .approval-message-body { margin: 0; }
 .email-reply-rule { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
 
+/* What the agent took from the email (C100). */
+.email-brief { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .03); }
+.email-brief > h2 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--body); }
+.email-brief-summary { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--body); max-width: 68ch; }
+.email-brief-group { display: flex; flex-direction: column; gap: 6px; }
+.email-brief-group h3 { margin: 4px 0 0; font-size: 13.5px; line-height: 20px; font-weight: 500; color: var(--muted); }
+.email-brief-group ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.email-brief-group li { font-size: 14px; line-height: 21px; color: var(--body); }
+.email-brief-due { margin-left: 8px; color: var(--muted); font-size: 13px; }
+/* The approval screen styles its own headings and text; the brief keeps its own. */
+.approval-shell .email-brief > h2 { margin: 0; font-family: var(--font-body); font-size: 15px; line-height: 22px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--body); }
+.approval-shell .email-brief-summary { font-size: 14.5px; line-height: 1.6; color: var(--body); }
+
 /* Admin → Role inboxes */
 .email-inboxes-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; }
 .email-inboxes-list > li { padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }

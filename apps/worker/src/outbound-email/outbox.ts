@@ -38,7 +38,12 @@ export async function queueApprovedEmail(
     [input.workspaceId, sender],
   );
   const accountId = account.rows[0]?.id ?? null;
-  const state = accountId ? 'queued' as const : 'pending_connection' as const;
+  // An agent's own address sends as the agent (C100); it needs no mailbox connection.
+  const agentInbox = accountId ? null : (await tx.query<{ id: string }>(
+    `SELECT id FROM email_inboxes WHERE workspace_id=$1 AND address=$2 AND kind='agent' AND status='active'`,
+    [input.workspaceId, sender],
+  )).rows[0]?.id ?? null;
+  const state = accountId || agentInbox ? 'queued' as const : 'pending_connection' as const;
   const ids: string[] = [];
 
   for (const [recipientIndex, recipient] of input.payload.details.recipients.entries()) {
@@ -62,8 +67,8 @@ export async function queueApprovedEmail(
       `INSERT INTO outbound_email_outbox
          (workspace_id,request_id,authorization_revision,authorization_hash,candidate_id,
           account_id,recipient_index,sender_address,recipient_name,recipient_address,
-          subject,body,state,inbound_message_id,in_reply_to,references_header)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          subject,body,state,inbound_message_id,in_reply_to,references_header,sender_inbox_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        ON CONFLICT (workspace_id,request_id,authorization_revision,authorization_hash,recipient_index)
        DO UPDATE SET id=outbound_email_outbox.id
        RETURNING id`,
@@ -72,7 +77,7 @@ export async function queueApprovedEmail(
         recipient.candidate_id ?? null, accountId, recipientIndex, sender,
         recipient.name, recipient.address.trim().toLowerCase(),
         input.payload.details.subject ?? '', input.payload.details.body, state,
-        thread?.messageId ?? null, thread?.inReplyTo ?? null, thread?.references ?? null,
+        thread?.messageId ?? null, thread?.inReplyTo ?? null, thread?.references ?? null, agentInbox,
       ],
     );
     if (inserted.rows[0]) ids.push(inserted.rows[0].id);

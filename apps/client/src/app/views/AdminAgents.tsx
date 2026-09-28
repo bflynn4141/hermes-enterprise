@@ -6,6 +6,7 @@
 // this view links to nothing that would show it: no sessions, traces or
 // waiting actions for an agent the viewer cannot read. Every change here asks
 // the server, which needs a recent sign-in for it.
+import { CopyAddress, useAgentAddress } from './AdminEmailInboxes.js';
 import { useCallback, useEffect, useState } from 'react';
 import { ADMIN, LIB, type AgentDirectory, type AgentDirectoryEntry, type EnterpriseSkillAssignment, type EnterpriseSkillCatalogEntry } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
@@ -156,6 +157,7 @@ function AgentGovernance({ agent, onChanged, onUpdated }: { agent: AgentDirector
     <NameCard agent={agent} onUpdated={onUpdated} />
     <AdminSettingsCard title="Role" footer={<><p>Roles are set for Partnerships and Finance together.</p><Button onClick={() => nav(LIB('handoffs'))}>Change roles</Button></>}>
       <div className="kv"><span className="grow">Works for</span><span className="meta">{agent.owner?.name ?? 'No owner'}</span></div>
+      <AgentEmailRow agentId={agent.id} />
       <div className="kv"><span className="grow">Role</span><span className="meta">{agent.role ? `${agent.role.team.name}, for ${agent.role.principal.name}` : 'No role'}</span></div>
       <div className="kv"><span className="grow">Visibility</span><span className="meta">{agent.context_scope === 'workspace' ? 'Shared with the workspace' : `Private to ${owner}`}</span></div>
       <div className="kv"><span className="grow">Status</span><span className="meta">{agentStatusLabel(agent)}</span></div>
@@ -167,6 +169,13 @@ function AgentGovernance({ agent, onChanged, onUpdated }: { agent: AgentDirector
       <ApprovalSwitches workspaceId={state.workspace.id} agentId={agent.id} agentName={agent.name} />
     </AdminSettingsCard>
   </>;
+}
+
+/** The agent's own address (C100); it has one as soon as someone owns it. */
+function AgentEmailRow({ agentId }: { agentId: string }) {
+  const address = useAgentAddress(agentId);
+  if (address === undefined) return null;
+  return <div className="kv"><span className="grow">Email</span>{address ? <CopyAddress address={address} /> : <span className="meta">Once it has an owner</span>}</div>;
 }
 
 /** Status line for a save pair: the problem when there is one, else "Saved." once. */

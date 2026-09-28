@@ -8,6 +8,8 @@
 import {
   emailAttachmentSchema,
   emailBodySchema,
+  emailBriefSchema,
+  type EmailBrief,
   inboundEmailViewSchema,
   senderFactsSchema,
   type InboundEmailView,
@@ -67,6 +69,7 @@ export const EMAIL_PROBLEM_SQL = `CASE
       WHEN COALESCE(r.error->>'reason', m.triage_error) IN
         ('no_key', 'key_invalid', 'key_unverified', 'provider_not_allowed', 'unknown_model') THEN 'needs_setup'
       WHEN m.triage_error = 'inbox_owner_missing' THEN 'no_owner'
+      WHEN m.triage_error = 'daily_limit' THEN 'daily_limit'
       ELSE 'other'
     END
   END`;
@@ -76,7 +79,7 @@ interface MessageRow {
   inbox_id: string;
   address: string;
   label: string;
-  role_slug: string;
+  role_slug: string | null;
   received_at: Date;
   subject: string;
   message_id: string | null;
@@ -88,6 +91,13 @@ interface MessageRow {
   status: string;
   request_ids: string[];
   raw_sha256: string;
+  brief: unknown;
+}
+
+/** A stored brief, or null when there is none or it no longer parses: it is display only. */
+export function parseBrief(value: unknown): EmailBrief | null {
+  const parsed = emailBriefSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export interface StoredEmail {
@@ -98,7 +108,7 @@ export interface StoredEmail {
 export async function loadInboundEmail(tx: Tx, workspaceId: string, messageId: string): Promise<StoredEmail | null> {
   const found = await tx.query<MessageRow>(
     `SELECT m.id, m.inbox_id, i.address, i.label, i.role_slug, m.received_at, m.subject, m.message_id,
-            m.to_addresses, m.cc_addresses, m.sender_facts, m.body, m.attachments, m.request_ids, m.raw_sha256,
+            m.to_addresses, m.cc_addresses, m.sender_facts, m.body, m.attachments, m.request_ids, m.raw_sha256, m.brief,
             ${DERIVED_EMAIL_STATUS_SQL} AS status
        FROM inbound_email_messages m
        JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
@@ -129,6 +139,7 @@ export async function loadInboundEmail(tx: Tx, workspaceId: string, messageId: s
       attachments: z.array(emailAttachmentSchema).parse(row.attachments),
       status: row.status,
       request_ids: row.request_ids.slice(0, 10),
+      brief: parseBrief(row.brief),
     }),
   };
 }

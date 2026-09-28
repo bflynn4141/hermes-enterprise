@@ -29,6 +29,7 @@ import {
   type ApprovalPolicy,
   type SenderFacts,
   type SuggestEmailHandoffInput,
+  type EmailBrief,
   type SuggestEmailReplyInput,
 } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
@@ -48,9 +49,12 @@ export interface InboxRow {
   readonly id: string;
   readonly address: string;
   readonly label: string;
-  readonly role_slug: string;
+  /** Null for an agent's own address while the agent has no role (C100). */
+  readonly role_slug: string | null;
   readonly agent_id: string;
   readonly status: string;
+  /** `agent`: the agent's own address, which its replies are sent from (C100). */
+  readonly kind: 'agent' | 'role';
 }
 
 /** The person an inbox's agent acts for. A reply goes out in their name. */
@@ -163,7 +167,7 @@ export async function ensureInboxApprovals(
   const counts = others.rows[0] ?? { admins: 0, holders: 0 };
   const reviewers: ApprovalPolicy['steps'][number]['reviewers'] = [
     ...(counts.admins > 0 ? [{ kind: 'role' as const, role: 'admin', minimum_distinct_members: 1 }] : []),
-    ...(counts.holders > 0 ? [{ kind: 'role' as const, role: inbox.role_slug, minimum_distinct_members: 1 }] : []),
+    ...(counts.holders > 0 && inbox.role_slug ? [{ kind: 'role' as const, role: inbox.role_slug, minimum_distinct_members: 1 }] : []),
   ];
   if (reviewers.length === 0) {
     await tx.query(
@@ -196,10 +200,12 @@ async function messageForRun(tx: Tx, workspaceId: string, runId: string, agentId
   const found = await tx.query<{
     id: string; subject: string; from_address: string; from_name: string | null; raw_sha256: string;
     received_at: Date; sender_facts: unknown; session_id: string;
-    inbox_id: string; address: string; label: string; role_slug: string; agent_id: string; inbox_status: string;
+    inbox_id: string; address: string; label: string; role_slug: string | null; agent_id: string; inbox_status: string;
+    inbox_kind: 'agent' | 'role';
   }>(
     `SELECT m.id, m.subject, m.from_address, m.from_name, m.raw_sha256, m.received_at, m.sender_facts,
-            r.session_id, i.id AS inbox_id, i.address, i.label, i.role_slug, i.agent_id, i.status AS inbox_status
+            r.session_id, i.id AS inbox_id, i.address, i.label, i.role_slug, i.agent_id, i.status AS inbox_status,
+            i.kind AS inbox_kind
        FROM inbound_email_messages m
        JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
        JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
@@ -214,7 +220,7 @@ async function messageForRun(tx: Tx, workspaceId: string, runId: string, agentId
   const facts = senderFactsSchema.parse(row.sender_facts);
   return {
     id: row.id,
-    inbox: { id: row.inbox_id, address: row.address, label: row.label, role_slug: row.role_slug, agent_id: row.agent_id, status: row.inbox_status },
+    inbox: { id: row.inbox_id, address: row.address, label: row.label, role_slug: row.role_slug, agent_id: row.agent_id, status: row.inbox_status, kind: row.inbox_kind },
     subject: row.subject,
     fromAddress: row.from_address,
     fromName: row.from_name,
@@ -223,6 +229,15 @@ async function messageForRun(tx: Tx, workspaceId: string, runId: string, agentId
     facts,
     sessionId: row.session_id,
   };
+}
+
+/** The agent's summary and action items for the message; the latest suggestion's replaces an earlier one. */
+async function recordBrief(tx: Tx, workspaceId: string, messageId: string, brief: EmailBrief | undefined): Promise<void> {
+  if (!brief) return;
+  await tx.query(
+    `UPDATE inbound_email_messages SET brief=$3::jsonb WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId, messageId, JSON.stringify(brief)],
+  );
 }
 
 async function recordSuggestion(tx: Tx, workspaceId: string, messageId: string, requestId: string): Promise<void> {
@@ -261,8 +276,13 @@ async function addReplyAudience(
   );
 }
 
-/** The address a reply is sent from: a connected sender mailbox, else the owner. */
-async function replySender(tx: Tx, workspaceId: string, owner: InboxOwner): Promise<string> {
+/**
+ * The address a reply is sent from. An agent's own address answers as the
+ * agent (C100). An Admin-made role address (C98) answers from a connected
+ * sender mailbox, else the owner.
+ */
+async function replySender(tx: Tx, workspaceId: string, inbox: InboxRow, owner: InboxOwner): Promise<string> {
+  if (inbox.kind === 'agent') return inbox.address;
   const account = await tx.query<{ address: string }>(
     `SELECT address FROM outbound_email_accounts
       WHERE workspace_id=$1 AND status='connected'
@@ -306,7 +326,7 @@ export async function suggestEmailReply(
   const sendingEnabled = context.env.EMAIL_REPLY_MODE === 'send_after_approval';
   const caution = flagged && secondReviewerAvailable;
   const draftOnly = !sendingEnabled || (flagged && !secondReviewerAvailable);
-  const sender = await replySender(tx, workspaceId, owner);
+  const sender = await replySender(tx, workspaceId, message.inbox, owner);
   const recipientName = (message.fromName ?? message.fromAddress).slice(0, 200);
   const subject = replySubject(message.subject);
   const consequence = draftOnly
@@ -356,6 +376,7 @@ export async function suggestEmailReply(
   });
   await addReplyAudience(tx, workspaceId, approval.request_id, message.inbox, owner, caution);
   await recordSuggestion(tx, workspaceId, message.id, approval.request_id);
+  await recordBrief(tx, workspaceId, message.id, input.brief);
   return {
     request_id: approval.request_id,
     status: approval.status,
@@ -365,6 +386,7 @@ export async function suggestEmailReply(
 }
 
 async function roleNameOf(tx: Tx, workspaceId: string, slug: string): Promise<string> {
+  // A role that no longer exists still reads as words, not a slug.
   const found = await tx.query<{ name: string }>(
     `SELECT name FROM workspace_roles WHERE workspace_id=$1 AND slug=$2`,
     [workspaceId, slug],
@@ -422,9 +444,12 @@ export async function suggestEmailHandoff(
         agent_id: context.agentId,
         session_id: message.sessionId,
         inbound_email_id: message.id,
-        from_role_slug: message.inbox.role_slug,
+        // An agent with no role hands off as itself (C100).
+        ...(message.inbox.role_slug ? { from_role_slug: message.inbox.role_slug } : {}),
         to_role_slug: input.role_slug,
-        from_role_name: (await roleNameOf(tx, workspaceId, message.inbox.role_slug)).slice(0, 120),
+        from_role_name: (message.inbox.role_slug
+          ? await roleNameOf(tx, workspaceId, message.inbox.role_slug)
+          : message.inbox.label).slice(0, 120),
         to_role_name: roleName.slice(0, 120),
       }),
       context.runId, message.sessionId, `email-handoff:${context.toolCallId}`,
@@ -432,6 +457,7 @@ export async function suggestEmailHandoff(
   );
   const requestId = inserted.rows[0]?.id;
   if (!requestId) throw new Error('email_handoff_request_missing');
+  await recordBrief(tx, workspaceId, message.id, input.brief);
   {
     // The receiving role decides; the inbox owner can follow what they handed over.
     const owner = await inboxOwner(tx, workspaceId, message.inbox.agent_id);

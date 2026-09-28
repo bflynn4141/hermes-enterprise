@@ -1,35 +1,56 @@
-# Role inboxes
+# Agent email
 
-A role inbox is an email address that belongs to a role, such as Partnerships.
-People forward or copy mail to it; the role's agent reads each message and
-suggests a reply or a hand-off to another role; a person approves anything that
-leaves the company. Decision [C98](decisions/08-runtime-and-team-workflows.md)
-records the reasoning. This page is the operator and developer reference.
+Every agent has its own email address (decision
+[C100](decisions/08-runtime-and-team-workflows.md), which extends
+[C98](decisions/08-runtime-and-team-workflows.md)). People email the agent
+directly, copy it on a thread, or route a shared address such as partners@ to
+it. The agent reads each message and suggests a reply or a hand-off to another
+role; a person approves anything that leaves the company, and an approved
+reply goes out from the agent's own address through Cloudflare Email Service.
+This page is the operator and developer reference.
+
+Admins do not provision addresses. They configure roles (who holds each one,
+which agent works in it), and an agent's role decides who reviews its mail:
+its owner, plus the holders of its role. Addresses an Admin made for a role
+before C100 (`kind = 'role'`) keep working and reply as before.
 
 ## The flow
 
-1. **An Admin adds an inbox** in Admin → Role inboxes: a role, the agent that
-   reads it (it must have an owner, who replies in their own name) and a name.
-   Hermes creates `<role>-<8 random characters>@<EMAIL_INTAKE_DOMAIN>`.
+1. **An agent gets its address** when it is created with an owner, or the
+   first time anyone looks for it (bootstrap, Admin → Email), which is how
+   agents made before C100 get theirs (`inbound-email/agent-address.ts`).
+   Hermes creates `<agent-name>-<6 random characters>@<EMAIL_INTAKE_DOMAIN>`
+   and gives the agent the suggestion tools and reply policies. An agent with
+   no owner gets none: its mail would have nobody to review it.
 2. **Mail arrives** through Cloudflare Email Routing at the Worker's `email()`
    handler (`src/index.ts`). `inbound-email/intake.ts` resolves the address to
    a workspace, parses the MIME, sanitizes the HTML, computes sender facts and
    stores the message with one `email_triage` job. Unknown or paused addresses
    are rejected at SMTP time; a repeated delivery is a no-op.
 3. **The agent reads it** (`inbound-email/triage.ts`) in an intake-mode run in
-   its owner's "Email · <inbox>" session. It sees the sender facts and the
+   its owner's "Email · <agent>" session. An agent reads at most
+   `AGENT_EMAIL_DAILY_READS` (default 50) a day on its own; past that a message
+   waits with **Read it now**, because every address is on by default and a
+   leaked one must not become an open tap on the model provider. It sees the sender facts and the
    visible text between nonce markers, and can call only `suggest_reply`,
    `suggest_handoff` and `get_workspace_context`. Those instructions go to
    the model only (`run_turns`); the conversation stores the turn as an
    email card (message kind `email`: sender and subject), and cards are kept
    out of later turns' history.
-4. **Suggestions reach people** (`inbound-email/suggestions.ts`):
+4. **Suggestions reach people** (`inbound-email/suggestions.ts`), each with the
+   agent's brief when it gave one: a summary and the action items, ours and the
+   sender's, stored on the message and shown above the suggestion:
    - a reply is a communication approval in the Inbox, showing the original
      email rendered safely above the suggested words;
    - a hand-off is a task in the target role's Inbox, showing the same email.
-5. **An approved reply** enters the outbox threaded under the original. It is
-   sent through a connected Gmail sender, waits for one, or, where the effect
-   executor is simulated, is recorded as simulated.
+5. **An approved reply** enters the outbox threaded under the original. A
+   reply to an agent's own address is sent as the agent (`From: Iris
+   <iris-…@…>`) through the `EMAIL` binding (`outbound-email/agent-send.ts`),
+   with `In-Reply-To` and `References`; Cloudflare's message id is stored.
+   Throttling retries; a refusal is `failed`; anything Cloudflare did not name
+   as a refusal is `ambiguous` and never retried. Without the binding it is
+   simulated where effects are simulated. A reply to an older role address is
+   sent through a connected Gmail or Microsoft 365 sender, or waits for one.
 
 ## When the agent could not read a message
 
@@ -45,7 +66,7 @@ id carry the number, so every retry is a fresh job and a fresh intake run.
   failure and 5 minutes after the second, or longer if the provider sent
   Retry-After. After three attempts it stops. Generic run recovery
   (`runs/recovery.ts`) skips `email-triage:` runs, so nothing else retries them.
-- **By a person.** Admin → Role inboxes shows **Try again** on a message whose
+- **By a person.** Admin → Email shows **Try again** on a message whose
   run failed or completed without saving a suggestion, or whose job failed
   before starting a run. A completed run alone does not prove the message
   needed no reply: a tool transport failure can also end that way. The button calls `POST /w/:ws/email/messages/:id/retry`, which anyone
@@ -123,7 +144,10 @@ images, MIME alternatives, and unchanged historical evidence.
 |---|---|---|
 | `EMAIL_INTAKE_DOMAIN` | `in.hermes.localhost` | unset until Email Routing is configured |
 | `EMAIL_INTAKE_AUTHSERV_ID` | default `mx.cloudflare.net` | confirm against a real message's headers |
-| `EMAIL_REPLY_MODE` | `send_after_approval` (delivery is simulated) | `draft_only` |
+| `EMAIL_REPLY_MODE` | `send_after_approval` | `draft_only` |
+| `EMAIL` binding (`send_email`) | Wrangler's local simulator | added once Email Sending is enabled for the domain |
+| `AGENT_EMAIL_DAILY_READS` | default 50 | default 50 |
+| `AGENT_EMAIL_RECIPIENT_MODE` | unset (anyone) | staging `members`: only the workspace's active members, read at send time; production unset while replies are drafts |
 
 To turn it on for a deployed environment:
 
@@ -132,8 +156,10 @@ To turn it on for a deployed environment:
 2. Send one real message and check its `Authentication-Results` header; set
    `EMAIL_INTAKE_AUTHSERV_ID` if the authserv-id is not `mx.cloudflare.net`.
 3. Set `EMAIL_INTAKE_DOMAIN` in `wrangler.jsonc` for that environment.
-4. For replies that actually send, connect a Gmail sender (Admin → Email) and
-   set `EMAIL_REPLY_MODE=send_after_approval`.
+4. For replies that actually send as the agent, enable Cloudflare Email Sending
+   for the same domain (it adds its SPF, DKIM and DMARC records), add the
+   `send_email` binding named `EMAIL` to that environment, and set
+   `EMAIL_REPLY_MODE=send_after_approval`.
 
 ## Hosted Hermes agents
 

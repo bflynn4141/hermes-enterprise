@@ -29,7 +29,7 @@ import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
-import { EmailCautions, EmailMessageView, emailCautions } from './EmailMessage.js';
+import { EmailBriefView, EmailCautions, EmailMessageView, emailCautions } from './EmailMessage.js';
 import { useStepUp } from './use-step-up.js';
 import { approvalRefusalMessage } from './approval-routes.js';
 import {
@@ -546,6 +546,7 @@ function EmailHandoffView({ request }: { request: RequestEntity }) {
   const title = request.label.startsWith(`${to}: `) ? request.label.slice(to.length + 2) : request.label;
   return <div className="scroll"><div className="app-body">
     <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{title}</h1><p className="meta">Handed to {to} from {from} · {handled ? 'Handled' : 'Waiting for your team'}</p></div></div>
+    {email?.brief && <div style={{ marginBottom: 20 }}><EmailBriefView brief={email.brief} sender={email.sender} /></div>}
     <section className="email-reply-draft" aria-label="Why this was handed to you">
       <h2>{agent}’s note</h2>
       <p style={{ margin: 0, fontSize: 15, lineHeight: '23px' }}>{summary}</p>

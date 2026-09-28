@@ -2085,8 +2085,19 @@ export function createMockBackend(input: MockOptions = {}) {
       const items = agentDirectory();
       return json({ items, total: items.length });
     }
-    // Admin → Role inboxes (C98), without mail: addresses on a fixture domain.
-    if (p('/email/inboxes') && method === 'GET') return json({ domain: EMAIL_INTAKE_DOMAIN, inboxes: emailInboxes, can_manage: seat === 'admin' });
+    // Agent email (C98, C100), without mail: every owned agent has its own
+    // address on a fixture domain, created the first time anyone looks.
+    if (p('/email/inboxes') && method === 'GET') {
+      for (const agent of agentDirectory()) {
+        if (!agent.owner || emailInboxes.some((row) => row.kind === 'agent' && row.agent.id === agent.id)) continue;
+        emailInboxes = [...emailInboxes, {
+          id: mockUuid(1_600 + emailInboxes.length), address: `${agent.name.toLowerCase().replace(/[^a-z0-9]+/gu, '-')}-mk${emailInboxes.length + 1}q4z@${EMAIL_INTAKE_DOMAIN}`,
+          label: agent.name, kind: 'agent', role_slug: agent.role?.team.slug ?? null, agent: { id: agent.id, name: agent.name },
+          status: 'active', created_at: iso(), message_count: 0, latest_received_at: null,
+        }];
+      }
+      return json({ domain: EMAIL_INTAKE_DOMAIN, inboxes: emailInboxes, can_manage: seat === 'admin' });
+    }
     if (p('/email/inboxes') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
       const agent = agentDirectory().find((entry) => entry.id === body.agent_id);
@@ -2096,7 +2107,7 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!roles.some((row) => row.slug === slug)) return fail(422, 'unknown_role');
       const inbox = {
         id: mockUuid(1_600 + emailInboxes.length), address: `${slug.replace(/_/gu, '-')}-mock${emailInboxes.length + 1}@${EMAIL_INTAKE_DOMAIN}`,
-        label: String(body.label ?? '').trim(), role_slug: slug, agent: { id: agent.id, name: agent.name },
+        label: String(body.label ?? '').trim(), kind: 'role' as const, role_slug: slug, agent: { id: agent.id, name: agent.name },
         status: 'active' as const, created_at: iso(), message_count: 0, latest_received_at: null,
       };
       emailInboxes = [...emailInboxes, inbox];

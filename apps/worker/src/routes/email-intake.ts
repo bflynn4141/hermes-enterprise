@@ -36,21 +36,20 @@ import { consumeRate } from '../auth/rate-limit.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { publishEvents } from '../jobs.js';
 import { retryEmailTriage } from '../inbound-email/triage.js';
-import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
-import { ensureInboxApprovals, inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
+import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail, parseBrief } from '../inbound-email/view.js';
+import { inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
+import { addressToken, ensureAgentInboxes, grantInboxAuthority, inboxCapabilityScope as capabilityScope, intakeDomain } from '../inbound-email/agent-address.js';
 import { emailCautionResourceKey, emailInboxResourceKey } from '@hermes/shared';
 import { RouteError } from './errors.js';
 import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
 
-/** The tools an inbox gives its agent. Named for what they do, see engine/tools.ts. */
-const INBOX_TOOL_NAMES = ['suggest_reply', 'suggest_handoff', 'get_workspace_context'];
-const capabilityScope = (inboxId: string): string => `email-inbox:${inboxId}`;
 
 interface InboxRow {
   id: string;
   address: string;
   label: string;
-  role_slug: string;
+  role_slug: string | null;
+  kind: 'agent' | 'role';
   agent_id: string;
   agent_name: string;
   status: 'active' | 'paused';
@@ -60,7 +59,7 @@ interface InboxRow {
 }
 
 const INBOX_SELECT = `
-  SELECT i.id, i.address, i.label, i.role_slug, i.agent_id, a.name AS agent_name, i.status, i.created_at,
+  SELECT i.id, i.address, i.label, i.role_slug, i.kind, i.agent_id, a.name AS agent_name, i.status, i.created_at,
          (SELECT count(*)::int FROM inbound_email_messages m WHERE m.workspace_id=i.workspace_id AND m.inbox_id=i.id) AS message_count,
          (SELECT max(m.received_at) FROM inbound_email_messages m WHERE m.workspace_id=i.workspace_id AND m.inbox_id=i.id) AS latest_received_at
     FROM email_inboxes i
@@ -70,6 +69,7 @@ const inboxView = (row: InboxRow): EmailInbox => emailInboxSchema.parse({
   id: row.id,
   address: row.address,
   label: row.label,
+  kind: row.kind,
   role_slug: row.role_slug,
   agent: { id: row.agent_id, name: row.agent_name },
   status: row.status,
@@ -103,16 +103,13 @@ async function auditInbox(work: TenantWork, kind: 'email_inbox.created' | 'email
   ])));
 }
 
-/** Eight characters of base32: unguessable enough that an address is not a directory of roles. */
-function addressToken(): string {
-  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join('');
-}
 
 export async function listEmailInboxes(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await inWorkspace(c, async (work) => {
+    // Every agent has its own address (C100); agents made before that, or
+    // before they had an owner, get theirs the first time anyone looks.
+    await ensureAgentInboxes(work.tx, intakeDomain(c.env.EMAIL_INTAKE_DOMAIN), work.workspaceId,
+      { admin: work.role === 'admin', userId: work.userId });
     const rows = await work.tx.query<InboxRow>(
       `${INBOX_SELECT}
         WHERE i.workspace_id=$1
@@ -122,7 +119,7 @@ export async function listEmailInboxes(c: Context<{ Bindings: Env }>): Promise<R
                AND (i.role_slug = ANY(viewer.reviewer_roles)
                     OR EXISTS (SELECT 1 FROM agent_owners ao WHERE ao.workspace_id=i.workspace_id AND ao.agent_id=i.agent_id AND ao.member_id=viewer.id))
           ))
-        ORDER BY i.created_at`,
+        ORDER BY (i.kind = 'agent') DESC, a.name, i.created_at`,
       [work.workspaceId, work.userId, work.role === 'admin'],
     );
     return {
@@ -164,27 +161,15 @@ export async function createEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
     if (!owner) throw new RouteError('That agent has no owner to reply as. Give it an owner first.', 'agent_owner_missing', 422);
 
     const localRole = input.role_slug.replace(/_/gu, '-').slice(0, 40);
-    const address = `${localRole}-${addressToken()}@${domain}`;
+    const address = `${localRole}-${addressToken(8)}@${domain}`;
     const inserted = await work.tx.query<{ id: string }>(
-      `INSERT INTO email_inboxes (workspace_id, role_slug, agent_id, address, label, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      `INSERT INTO email_inboxes (workspace_id, kind, role_slug, agent_id, address, label, created_by)
+       VALUES ($1,'role',$2,$3,$4,$5,$6) RETURNING id`,
       [work.workspaceId, input.role_slug, input.agent_id, address, input.label, work.userId],
     );
     const id = inserted.rows[0]!.id;
-    // The inbox is what gives its agent the suggestion tools; removing the
-    // inbox removes this row and with it the authority.
-    const position = await work.tx.query<{ next: number }>(
-      `SELECT COALESCE(max(position), -1)::int + 1 AS next FROM agent_capabilities WHERE workspace_id=$1 AND agent_id=$2`,
-      [work.workspaceId, input.agent_id],
-    );
-    await work.tx.query(
-      `INSERT INTO agent_capabilities (workspace_id, agent_id, kind, title, scope, tool_names, position)
-       VALUES ($1,$2,'approves',$3,$4,$5::text[],$6)`,
-      [work.workspaceId, input.agent_id, `Suggest replies and hand-offs for ${input.label}`.slice(0, 200),
-        capabilityScope(id), INBOX_TOOL_NAMES, position.rows[0]?.next ?? 0],
-    );
-    await ensureInboxApprovals(work.tx, work.workspaceId,
-      { id, address, label: input.label, role_slug: input.role_slug, agent_id: input.agent_id, status: 'active' }, owner);
+    await grantInboxAuthority(work.tx, work.workspaceId,
+      { id, address, label: input.label, role_slug: input.role_slug, agent_id: input.agent_id, status: 'active', kind: 'role' }, owner);
     await auditInbox(work, 'email_inbox.created');
     const row = await work.tx.query<InboxRow>(`${INBOX_SELECT} WHERE i.workspace_id=$1 AND i.id=$2`, [work.workspaceId, id]);
     return inboxView(row.rows[0]!);
@@ -257,10 +242,10 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
 /** Recent messages as list rows; `where` filters `m` with $1 = workspace and $2 = the id it names. */
 async function listItems(work: TenantWork, where: 'inbox' | 'message', id: string): Promise<InboundEmailListItem[]> {
   const rows = await work.tx.query<{
-    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[];
+    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; brief: unknown;
     can_retry: boolean; retrying: boolean; problem: string | null;
   }>(
-    `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, ${DERIVED_EMAIL_STATUS_SQL} AS status,
+    `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, m.brief, ${DERIVED_EMAIL_STATUS_SQL} AS status,
             ${EMAIL_RETRYABLE_SQL} AS can_retry,
             (m.status = 'received' AND m.triage_attempt > 1 AND NOT ${EMAIL_RETRYABLE_SQL}) AS retrying,
             ${EMAIL_PROBLEM_SQL} AS problem
@@ -278,6 +263,7 @@ async function listItems(work: TenantWork, where: 'inbox' | 'message', id: strin
     sender: row.sender_facts,
     status: row.status,
     request_ids: row.request_ids.slice(0, 10),
+    brief: parseBrief(row.brief),
     can_retry: row.can_retry,
     retrying: row.retrying,
     problem: row.problem,

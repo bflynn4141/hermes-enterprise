@@ -40,6 +40,9 @@ GMAIL_OUTREACH_ENABLED="0"
 # Microsoft 365 / Outlook sending account (C99). Register an app in Microsoft
 # Entra with this redirect URI and the delegated Graph permissions Mail.Send and
 # User.Read, then create a client secret.
+# Emails one agent reads a day before the rest wait for a person (C100).
+# AGENT_EMAIL_DAILY_READS="50"
+
 MICROSOFT_MAIL_ENABLED="0"
 # MICROSOFT_CLIENT_ID=""
 # MICROSOFT_CLIENT_SECRET=""

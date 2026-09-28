@@ -132,6 +132,19 @@ export interface Env {
   GMAIL_REDIRECT_URI?: string;
   /** Test-only HTTP injection; production uses Google endpoints directly. */
   GMAIL_FETCHER?: Fetcher;
+  /**
+   * Cloudflare Email Service binding (C100): approved replies go out from the
+   * agent's own address. Unset, replies to an agent's address are simulated
+   * where effects are simulated and otherwise wait.
+   */
+  EMAIL?: SendEmail;
+  /**
+   * 'members' sends approved email only to the workspace's active members
+   * (staging, C100); any other value sends to nobody. Unset: any recipient.
+   */
+  AGENT_EMAIL_RECIPIENT_MODE?: string;
+  /** Emails one agent reads a day before the rest wait for a person (C100); default 50. */
+  AGENT_EMAIL_DAILY_READS?: string;
   /** Microsoft 365 / Outlook sending account (C99); off unless '1' and every value below is set. */
   MICROSOFT_MAIL_ENABLED?: string;
   MICROSOFT_CLIENT_ID?: string;
