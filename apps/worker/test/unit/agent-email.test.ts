@@ -56,23 +56,15 @@ describe('sending as an agent', () => {
   });
 });
 
-describe('recipient allowlist (staging)', () => {
-  it('allows anyone unless the deployment asks for an allowlist', () => {
-    expect(recipientAllowed({}, 'anyone@example.com')).toBe(true);
-    expect(recipientAllowed({ AGENT_EMAIL_ALLOWED_RECIPIENTS: 'a@b.c' }, 'anyone@example.com')).toBe(true);
+describe('recipient rule (staging)', () => {
+  const tx = { query: async () => { throw new Error('must not query'); } } as never;
+
+  it('allows anyone when the deployment sets no rule, without a query', async () => {
+    expect(await recipientAllowed(tx, {}, 'w', 'anyone@example.com')).toBe(true);
   });
 
-  it('matches exact addresses and @domains, case-insensitively', () => {
-    const env = { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: ' Tester@Example.com , @northwind.example ' };
-    expect(recipientAllowed(env, 'tester@example.com')).toBe(true);
-    expect(recipientAllowed(env, 'priya@NORTHWIND.example')).toBe(true);
-    expect(recipientAllowed(env, 'other@example.com')).toBe(false);
-    expect(recipientAllowed(env, 'priya@evil-northwind.example')).toBe(false);
-    expect(recipientAllowed(env, 'x@sub.northwind.example')).toBe(false);
-  });
-
-  it('sends to nobody when the list is missing or empty', () => {
-    expect(recipientAllowed({ AGENT_EMAIL_RECIPIENT_MODE: 'allowlist' }, 'tester@example.com')).toBe(false);
-    expect(recipientAllowed({ AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: ' , ' }, 'tester@example.com')).toBe(false);
+  it('sends to nobody for a rule it does not know, so a typo fails closed', async () => {
+    expect(await recipientAllowed(tx, { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist' }, 'w', 'anyone@example.com')).toBe(false);
+    expect(await recipientAllowed(tx, { AGENT_EMAIL_RECIPIENT_MODE: 'Members' }, 'w', 'anyone@example.com')).toBe(false);
   });
 });

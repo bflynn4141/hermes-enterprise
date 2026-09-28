@@ -254,10 +254,14 @@ describe('every agent has its own email address (C100)', () => {
       .toEqual([{ state: 'cancelled', last_error: 'sender_account_mismatch' }]);
   });
 
-  it('on an allowlisted deployment, sends nothing to anyone else and says why', async () => {
+  it('on a members-only deployment, does not email someone who was only invited', async () => {
     sent.length = 0;
     const fx = await seedAgent();
-    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: 'tester@example.com' });
+    // Priya has a pending invitation: invited is not a member.
+    await scoped(fx.workspaceId, `INSERT INTO invitations (workspace_id, email, role, expires_at)
+      VALUES ($1, 'priya@northwind.example', 'member', now() + interval '7 days')`, [fx.workspaceId]);
+    expect(await scoped(fx.workspaceId, `SELECT status FROM invitations WHERE workspace_id=$1`, [fx.workspaceId])).toEqual([{ status: 'pending' }]);
+    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'members' });
     try {
       const { requestId, outbox } = await approvedReply(fx);
       expect(sent).toHaveLength(0);
@@ -266,21 +270,34 @@ describe('every agent has its own email address (C100)', () => {
       const [approval] = await scoped<{ effect_status: string; effect_reason: string }>(fx.workspaceId,
         'SELECT effect_status, effect_reason FROM approval_requests WHERE request_id=$1', [requestId]);
       expect(approval).toMatchObject({ effect_status: 'failed' });
-      expect(approval!.effect_reason).toContain('only emails approved addresses');
+      expect(approval!.effect_reason).toBe('Nothing was sent: this test workspace only emails its members, and priya@northwind.example is not one.');
     } finally {
-      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined, AGENT_EMAIL_ALLOWED_RECIPIENTS: undefined });
+      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined });
     }
   });
 
-  it('on an allowlisted deployment, sends to an allowed domain', async () => {
-    sent.length = 0;
+  it('on a members-only deployment, emails an active member, and stops once they are inactive', async () => {
     const fx = await seedAgent();
-    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'allowlist', AGENT_EMAIL_ALLOWED_RECIPIENTS: '@northwind.example' });
+    const [member] = await scoped<{ email: string }>(fx.workspaceId, 'SELECT email FROM users WHERE id=$1', [fx.memberId]);
+    const fromMember = async (subject: string) => {
+      const stored = await receiveInboundEmail(env, { to: fx.address, raw: rawEmail({ to: fx.address, from: member!.email, subject, html: '<p>Can you check this?</p>' }) });
+      if (stored.status !== 'stored') throw new Error('not stored');
+      const run = await triage(fx, stored.messageId);
+      const suggestion = await suggestReply(fx, run);
+      await scoped(fx.workspaceId, `UPDATE runs SET status='completed', ended_at=now() WHERE id=$1`, [run]);
+      await approve(fx, fx.adminId, suggestion.request_id);
+      return (await scoped<{ state: string }>(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE request_id=$1', [suggestion.request_id]))[0]!.state;
+    };
+    Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: 'members' });
     try {
-      await approvedReply(fx);
-      expect(sent.map((message) => message.to.email)).toEqual(['priya@northwind.example']);
+      sent.length = 0;
+      expect(await fromMember('First')).toBe('sent');
+      expect(sent.map((message) => message.to.email)).toEqual([member!.email.toLowerCase()]);
+      await scoped(fx.workspaceId, `UPDATE members SET status='inactive' WHERE workspace_id=$1 AND user_id=$2`, [fx.workspaceId, fx.memberId]);
+      expect(await fromMember('Second')).toBe('cancelled');
+      expect(sent).toHaveLength(1);
     } finally {
-      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined, AGENT_EMAIL_ALLOWED_RECIPIENTS: undefined });
+      Object.assign(env, { AGENT_EMAIL_RECIPIENT_MODE: undefined });
     }
   });
 

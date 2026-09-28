@@ -95,14 +95,14 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       published.push(...await recordSimulatedReply(tx, job.workspace_id, row));
       return null;
     }
-    if (!recipientAllowed(env, row.recipient_address)) {
-      // A test deployment that only emails the people testing it. The
-      // approval says so instead of waiting for a send that will not happen.
+    if (!(await recipientAllowed(tx, env, job.workspace_id, row.recipient_address))) {
+      // A test deployment that only emails its own members. The approval
+      // says so instead of waiting for a send that will not happen.
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='recipient_not_allowed' WHERE id=$1`, [row.id]);
       await tx.query(
         `UPDATE approval_requests SET effect_status='failed',effect_reason=$3,work_status='completed'
           WHERE workspace_id=$1 AND request_id=$2`,
-        [job.workspace_id, row.request_id, `Nothing was sent: this test workspace only emails approved addresses, and ${row.recipient_address} is not one of them.`],
+        [job.workspace_id, row.request_id, `Nothing was sent: this test workspace only emails its members, and ${row.recipient_address} is not one.`],
       );
       return null;
     }

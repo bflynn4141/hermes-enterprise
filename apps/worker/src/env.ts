@@ -139,12 +139,10 @@ export interface Env {
    */
   EMAIL?: SendEmail;
   /**
-   * 'allowlist' sends approved email only to AGENT_EMAIL_ALLOWED_RECIPIENTS
-   * and to nobody when that is empty (staging, C100). Unset: any recipient.
+   * 'members' sends approved email only to the workspace's active members
+   * (staging, C100); any other value sends to nobody. Unset: any recipient.
    */
   AGENT_EMAIL_RECIPIENT_MODE?: string;
-  /** Comma-separated addresses, or `@domain` for a whole domain. A secret: the repository is public. */
-  AGENT_EMAIL_ALLOWED_RECIPIENTS?: string;
   /** Emails one agent reads a day before the rest wait for a person (C100); default 50. */
   AGENT_EMAIL_DAILY_READS?: string;
   /** Microsoft 365 / Outlook sending account (C99); off unless '1' and every value below is set. */
