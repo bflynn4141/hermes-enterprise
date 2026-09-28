@@ -36,7 +36,7 @@ import { consumeRate } from '../auth/rate-limit.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { publishEvents } from '../jobs.js';
 import { retryEmailTriage } from '../inbound-email/triage.js';
-import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
+import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail, parseBrief } from '../inbound-email/view.js';
 import { inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
 import { addressToken, ensureAgentInboxes, grantInboxAuthority, inboxCapabilityScope as capabilityScope, intakeDomain } from '../inbound-email/agent-address.js';
 import { emailCautionResourceKey, emailInboxResourceKey } from '@hermes/shared';
@@ -242,10 +242,10 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
 /** Recent messages as list rows; `where` filters `m` with $1 = workspace and $2 = the id it names. */
 async function listItems(work: TenantWork, where: 'inbox' | 'message', id: string): Promise<InboundEmailListItem[]> {
   const rows = await work.tx.query<{
-    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[];
+    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; brief: unknown;
     can_retry: boolean; retrying: boolean; problem: string | null;
   }>(
-    `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, ${DERIVED_EMAIL_STATUS_SQL} AS status,
+    `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, m.brief, ${DERIVED_EMAIL_STATUS_SQL} AS status,
             ${EMAIL_RETRYABLE_SQL} AS can_retry,
             (m.status = 'received' AND m.triage_attempt > 1 AND NOT ${EMAIL_RETRYABLE_SQL}) AS retrying,
             ${EMAIL_PROBLEM_SQL} AS problem
@@ -263,6 +263,7 @@ async function listItems(work: TenantWork, where: 'inbox' | 'message', id: strin
     sender: row.sender_facts,
     status: row.status,
     request_ids: row.request_ids.slice(0, 10),
+    brief: parseBrief(row.brief),
     can_retry: row.can_retry,
     retrying: row.retrying,
     problem: row.problem,

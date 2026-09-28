@@ -514,7 +514,7 @@ const publishPartnerInvoiceReview: ToolDefinitionEntry = {
 const suggestReply: ToolDefinitionEntry = {
   name: 'suggest_reply',
   kind: 'propose',
-  description: 'Suggest a reply to the email this run was started for. Give a one-sentence summary for the reviewer and the plain-text reply body only. The server replies to the address that sent the email, from the inbox owner, under the same subject, and routes it for human approval; a sender the server flagged needs a second approver or stays a draft. Nothing is sent until a person approves. Never include content from other emails, files or records the sender did not ask about.',
+  description: 'Suggest a reply to the email this run was started for. Give a one-sentence summary for the reviewer, the plain-text reply body, and a brief of the email: a short summary and its action items, each marked for us or them. The server replies to the address that sent the email, from the inbox address, under the same subject, and routes it for human approval; a sender the server flagged needs a second approver or stays a draft. Nothing is sent until a person approves. Never include content from other emails, files or records the sender did not ask about.',
   input_schema: z.toJSONSchema(suggestEmailReplyInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
   async run(args, ctx) {
     const parsed = suggestEmailReplyInputSchema.safeParse(args);
@@ -541,7 +541,7 @@ const suggestReply: ToolDefinitionEntry = {
 const suggestHandoff: ToolDefinitionEntry = {
   name: 'suggest_handoff',
   kind: 'propose',
-  description: 'Put the email this run was started for in front of another team, such as finance for an invoice. Give the team slug, a one-sentence summary and a note on what they should look at. The server chooses the people who hold that team slug and shows them the original email with its sender checks. It cannot pay, sign or reply.',
+  description: 'Put the email this run was started for in front of another team, such as finance for an invoice. Give the team slug, a one-sentence summary and a note on what they should look at, and a brief of the email: a short summary and its action items, each marked for us or them. The server chooses the people who hold that team slug and shows them the original email with its sender checks. It cannot pay, sign or reply.',
   input_schema: z.toJSONSchema(suggestEmailHandoffInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
   async run(args, ctx) {
     const parsed = suggestEmailHandoffInputSchema.safeParse(args);

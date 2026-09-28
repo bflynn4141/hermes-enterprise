@@ -1695,6 +1695,8 @@ export const inboundEmailMessages = pgTable('inbound_email_messages', {
   triageError: text('triage_error'),
   triageAttempt: integer('triage_attempt').notNull().default(1),
   requestIds: uuid('request_ids').array().notNull(),
+  /** The agent's summary and action items (0080). */
+  brief: jsonb('brief'),
 });
 
 export const contactSuppressions = pgTable('contact_suppressions', {

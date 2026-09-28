@@ -162,6 +162,7 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
             : <span className="email-inbox-subject">{subject}</span>}
           <span className="email-inbox-sub">
             {message.sender.name ?? message.sender.address}
+            {message.brief && message.brief.action_items.some((item) => item.owner === 'us') && ` · ${message.brief.action_items.filter((item) => item.owner === 'us').length} to do`}
             {flagged && <span className="email-inbox-flag"> · Check the sender</span>}
           </span>
         </span>

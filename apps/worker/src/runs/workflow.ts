@@ -215,6 +215,14 @@ export const EMAIL_TRIAGE_SCRIPT = [
           name: 'suggest_reply',
           arguments: JSON.stringify({
             summary: 'Thank Priya for the September invoice, say Finance will confirm timing, and offer two call slots next week.',
+            brief: {
+              summary: 'Northwind sent its September partnership invoice for the co-hosted workshops and asked for a co-marketing call next week to plan the November webinar.',
+              action_items: [
+                { text: 'Check invoice NW-2026-09 against the partner terms and schedule payment', owner: 'us', due: 'net 30' },
+                { text: 'Offer times for a co-marketing call next week', owner: 'us', due: 'next week' },
+                { text: 'Share the plan for the November webinar on the call', owner: 'them', due: null },
+              ],
+            },
             body: 'Hi Priya,\n\nThanks for sending over the September invoice. I have passed it to our Finance team, and they will confirm the payment timing with you directly.\n\nFor the co-marketing call, Tuesday or Wednesday afternoon next week works on our side. Send a couple of times that suit you and I will confirm.\n\nBest regards',
           }),
         },

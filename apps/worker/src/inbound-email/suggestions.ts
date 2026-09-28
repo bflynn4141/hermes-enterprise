@@ -29,6 +29,7 @@ import {
   type ApprovalPolicy,
   type SenderFacts,
   type SuggestEmailHandoffInput,
+  type EmailBrief,
   type SuggestEmailReplyInput,
 } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
@@ -230,6 +231,15 @@ async function messageForRun(tx: Tx, workspaceId: string, runId: string, agentId
   };
 }
 
+/** The agent's summary and action items for the message; the latest suggestion's replaces an earlier one. */
+async function recordBrief(tx: Tx, workspaceId: string, messageId: string, brief: EmailBrief | undefined): Promise<void> {
+  if (!brief) return;
+  await tx.query(
+    `UPDATE inbound_email_messages SET brief=$3::jsonb WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId, messageId, JSON.stringify(brief)],
+  );
+}
+
 async function recordSuggestion(tx: Tx, workspaceId: string, messageId: string, requestId: string): Promise<void> {
   await tx.query(
     `UPDATE inbound_email_messages
@@ -366,6 +376,7 @@ export async function suggestEmailReply(
   });
   await addReplyAudience(tx, workspaceId, approval.request_id, message.inbox, owner, caution);
   await recordSuggestion(tx, workspaceId, message.id, approval.request_id);
+  await recordBrief(tx, workspaceId, message.id, input.brief);
   return {
     request_id: approval.request_id,
     status: approval.status,
@@ -446,6 +457,7 @@ export async function suggestEmailHandoff(
   );
   const requestId = inserted.rows[0]?.id;
   if (!requestId) throw new Error('email_handoff_request_missing');
+  await recordBrief(tx, workspaceId, message.id, input.brief);
   {
     // The receiving role decides; the inbox owner can follow what they handed over.
     const owner = await inboxOwner(tx, workspaceId, message.inbox.agent_id);

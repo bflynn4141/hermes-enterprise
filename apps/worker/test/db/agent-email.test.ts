@@ -301,6 +301,27 @@ describe('every agent has its own email address (C100)', () => {
     }
   });
 
+  it('keeps the agent\'s brief with the email: summary and action items, ours and theirs', async () => {
+    const fx = await seedAgent();
+    const id = await receive(fx, 'Q4 plan');
+    const run = await triage(fx, id);
+    const brief = {
+      summary: 'Priya proposes a Q4 co-marketing plan and needs our budget and a webinar date.',
+      action_items: [
+        { text: 'Confirm the Q4 co-marketing budget', owner: 'us' as const, due: 'by Friday' },
+        { text: 'Send the draft webinar agenda', owner: 'them' as const, due: null },
+      ],
+    };
+    await withWorkspaceTransaction(env, fx.workspaceId, (tx) => suggestEmailReply({
+      tx, workspaceId: fx.workspaceId, jobs: [], env, runId: run, toolCallId: `call_${randomUUID()}`, agentId: fx.agentId,
+    }, { summary: 'Acknowledge and confirm next steps.', body: 'Thanks Priya, we will confirm by Friday.', brief }));
+    const view = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/messages/${id}`);
+    expect(view.status).toBe(200);
+    expect(((await view.json()) as { brief: unknown }).brief).toEqual(brief);
+    const list = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}/messages`);
+    expect(inboundEmailListSchema.parse(await list.json()).messages.find((message) => message.id === id)?.brief).toEqual(brief);
+  });
+
   it('stops reading at the daily limit, and a person can have it read one anyway', async () => {
     const fx = await seedAgent();
     // Each read finishes before the next, as it would with a real model.

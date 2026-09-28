@@ -2025,6 +2025,15 @@ Microsoft callback; refresh under the row lock).
   approval says why, and an unknown mode sends to nobody. Production stays
   draft-only. `test/unit/config.test.ts` holds both rules.
 
+- **A brief with every suggestion.** With a reply or hand-off the agent adds a
+  brief: a short summary of what the email says and asks, and its action items,
+  each marked `us` (this team) or `them` (the sender), with a due date only when
+  the email gives one (0080, `inbound_email_messages.brief`). It is optional
+  fields on the existing tools, not a new tool, so hosted bridges need no new
+  revision. The brief is the agent's reading of untrusted text: it is shown
+  above the suggested reply and on hand-offs, counted in Admin → Email, and
+  never acts by itself.
+
 **Not in this pass.** Replies from a customer's own subdomain
 (`agents.acme.com`); hosted Cloud agents until the C98 bridge re-pin; outreach
 still uses a connected Google or Microsoft account.

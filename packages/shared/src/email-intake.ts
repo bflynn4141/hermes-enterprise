@@ -120,6 +120,23 @@ export const emailAttachmentSchema = z.object({
   unread_reason: z.enum(ATTACHMENT_UNREAD_REASONS).nullable().default(null),
 }).strict();
 
+/**
+ * What the agent took from an email: a short summary and the action items in
+ * it (C100). `owner` says whose move it is: `us`, the team that received it,
+ * or `them`, the sender. A due date only when the email gives one. It is the
+ * agent's reading of untrusted text, shown as such; it never acts by itself.
+ */
+export const emailActionItemSchema = z.object({
+  text: z.string().trim().min(1).max(300),
+  owner: z.enum(['us', 'them']),
+  due: z.string().trim().min(1).max(80).nullable().optional(),
+}).strict();
+export const emailBriefSchema = z.object({
+  summary: z.string().trim().min(1).max(600),
+  action_items: z.array(emailActionItemSchema).max(12),
+}).strict();
+export type EmailBrief = z.infer<typeof emailBriefSchema>;
+
 export const INBOUND_EMAIL_STATUSES = ['received', 'triaging', 'suggested', 'no_action', 'failed'] as const;
 
 export const inboundEmailViewSchema = z.object({
@@ -141,6 +158,8 @@ export const inboundEmailViewSchema = z.object({
   attachments: z.array(emailAttachmentSchema).max(50),
   status: z.enum(INBOUND_EMAIL_STATUSES),
   request_ids: z.array(uuidSchema).max(10),
+  /** The agent's summary and action items, once it has read the email. */
+  brief: emailBriefSchema.nullable().default(null),
 }).strict();
 export type InboundEmailView = z.infer<typeof inboundEmailViewSchema>;
 
@@ -185,7 +204,7 @@ export type CreateEmailInboxInput = z.infer<typeof createEmailInboxInputSchema>;
  * suggested anything, or its job stopped before starting one.
  */
 export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
-  id: true, received_at: true, subject: true, sender: true, status: true, request_ids: true,
+  id: true, received_at: true, subject: true, sender: true, status: true, request_ids: true, brief: true,
 }).extend({
   can_retry: z.boolean(),
   /** Hermes will try again by itself shortly (a provider was busy). */
@@ -209,6 +228,8 @@ export type InboundEmailList = z.infer<typeof inboundEmailListSchema>;
 export const suggestEmailReplyInputSchema = z.object({
   summary: z.string().trim().min(1).max(1000),
   body: z.string().trim().min(1).max(10_000),
+  /** What the email says and asks, for the person reviewing it. */
+  brief: emailBriefSchema.optional(),
 }).strict();
 export type SuggestEmailReplyInput = z.infer<typeof suggestEmailReplyInputSchema>;
 
@@ -217,6 +238,8 @@ export const suggestEmailHandoffInputSchema = z.object({
   role_slug: roleSlugSchema,
   summary: z.string().trim().min(1).max(1000),
   note: z.string().trim().min(1).max(4000),
+  /** What the email says and asks, for the people it is handed to. */
+  brief: emailBriefSchema.optional(),
 }).strict();
 export type SuggestEmailHandoffInput = z.infer<typeof suggestEmailHandoffInputSchema>;
 

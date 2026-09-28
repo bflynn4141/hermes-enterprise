@@ -14,7 +14,7 @@
 // stored facts, so older messages read the same way as new ones. Nothing here
 // is the agent's opinion: the agent's suggestion is shown separately.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { EmailWarning, EmailWarningCode, InboundEmailView, SenderFacts } from '@hermes/shared';
+import type { EmailBrief, EmailWarning, EmailWarningCode, InboundEmailView, SenderFacts } from '@hermes/shared';
 import { Icon } from '../ui/icons.js';
 import './email-message.css';
 
@@ -165,6 +165,30 @@ export function linkDestination(href: string): string {
   } catch {
     return href.length > 80 ? `${href.slice(0, 77)}…` : href;
   }
+}
+
+/**
+ * What the agent took from an email (C100): a summary, what this team has to
+ * do and what the sender said they would, with a due date only where the email
+ * gave one. It is the agent's reading, so it sits beside the email, never in
+ * place of it.
+ */
+export function EmailBriefView({ brief, sender }: { brief: EmailBrief; sender: SenderFacts }) {
+  const ours = brief.action_items.filter((item) => item.owner === 'us');
+  const theirs = brief.action_items.filter((item) => item.owner === 'them');
+  const who = sender.name?.trim().split(/\s+/u)[0] || sender.address;
+  const list = (items: EmailBrief['action_items']) => <ul>
+    {items.map((item, index) => <li key={index}>
+      <span>{item.text}</span>
+      {item.due && <span className="email-brief-due">{item.due}</span>}
+    </li>)}
+  </ul>;
+  return <section className="email-brief" aria-label="Summary and action items">
+    <h2>Summary</h2>
+    <p className="email-brief-summary">{brief.summary}</p>
+    {ours.length > 0 && <div className="email-brief-group"><h3>To do</h3>{list(ours)}</div>}
+    {theirs.length > 0 && <div className="email-brief-group"><h3>Waiting on {who}</h3>{list(theirs)}</div>}
+  </section>;
 }
 
 export function EmailMessageView({ email, agentName, showCautions = true }: {

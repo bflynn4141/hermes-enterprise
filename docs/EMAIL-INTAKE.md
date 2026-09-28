@@ -37,7 +37,9 @@ before C100 (`kind = 'role'`) keep working and reply as before.
    the model only (`run_turns`); the conversation stores the turn as an
    email card (message kind `email`: sender and subject), and cards are kept
    out of later turns' history.
-4. **Suggestions reach people** (`inbound-email/suggestions.ts`):
+4. **Suggestions reach people** (`inbound-email/suggestions.ts`), each with the
+   agent's brief when it gave one: a summary and the action items, ours and the
+   sender's, stored on the message and shown above the suggestion:
    - a reply is a communication approval in the Inbox, showing the original
      email rendered safely above the suggested words;
    - a hand-off is a task in the target role's Inbox, showing the same email.
