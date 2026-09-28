@@ -5,12 +5,12 @@
 // Settings carries personal preferences and member-safe connection/privacy facts.
 // Admin carries workspace configuration and the irreversible controls behind step-up.
 //
-// FilterTable supports History and InsightCards supports usage reports.
+// FilterTable supports History.
 // Run limits use explicit saves. Members use the product’s own inline rows
 // (decision C46) — `RecordsTable` is a database surface and a membership list
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { FilterTable, InsightCards } from '@hermes/motion-components';
+import { FilterTable } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
@@ -472,7 +472,7 @@ export function Members() {
             ? 'Hermes sets up an agent for them first. The invitation email goes out once it is ready.'
             : 'Hermes sets aside an agent for them. Their card shows whether the invitation email was sent.'}</p>
           {setupOnly && !setupRoles.includes('finance-agent') && <p className="meta">
-            Finance appears here once a Finance agent is added under Admin → Agent capacity.
+            Finance appears here once a Finance agent is added under Admin → Capacity.
           </p>}
           {roles.length > 0 && <div className="member-approvals">
             <RoleChecklist roles={roles} selected={inviteRoles} locked={jobRoleLock} disabled={pending === 'invite'} onChange={setInviteRoles} />
@@ -1158,34 +1158,13 @@ function SavedDocument({ id }: { id: string }) {
 // Settings
 // ---------------------------------------------------------------------------
 
-function SettingsViewHeader({ mode }: { mode: 'admin' | 'user' }) {
-  const nav = useNav();
-  const admin = useIsAdmin();
-  return (
-    <div className="settings-view-header">
-      <h1 className="display-32">{mode === 'admin' ? 'Admin' : 'Settings'}</h1>
-      {admin ? (
-        <select
-          className="settings-view-switch"
-          aria-label="Settings view"
-          value={mode}
-          onChange={(event) => nav(event.target.value === 'admin' ? ADMIN('Organization') : SETTINGS('Notifications'))}
-        >
-          <option value="admin">Admin View</option>
-          <option value="user">User View</option>
-        </select>
-      ) : <span className="settings-view-label">User View</span>}
-    </div>
-  );
-}
-
 export function Settings({ view }: { view: string }) {
   const nav = useNav();
   const selected = SETTINGS_TABS.includes(view as (typeof SETTINGS_TABS)[number]) ? view : 'Notifications';
   return (
     <div className="scroll">
       <div className="app-body settings-page" style={{ minHeight: '100%' }}>
-        <SettingsViewHeader mode="user" />
+        <h1 className="sr-only">Settings</h1>
         <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={selected} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
         {selected === 'Notifications' && <NotificationsTab />}
         {selected === 'Slack account' && <SlackTab personal />}
@@ -1206,13 +1185,11 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'Roles' && <AdminRoles roleId={id} />}
       {selected === 'Approvals' && <AdminApprovals routeKey={id} />}
       {selected === 'All agents' && <AdminAgents agentId={id} />}
-      {selected === 'Agents' && <AgentsTab />}
       {selected === 'Slack' && <SlackTab />}
-      {selected === 'Email' && <EmailTab />}
-      {selected === 'Inboxes' && <AdminEmailInboxes />}
-      {selected === 'Provider keys' && <ProviderKeysTab />}
+      {selected === 'Email' && <EmailPage />}
+      {selected === 'Provider keys' && <div className="admin-detail-page"><ProviderKeysTab /><ModelDefaults /></div>}
       {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
-      {selected === 'Usage' && <UsageTab />}
+      {selected === 'Usage' && <div className="admin-detail-page"><UsageTab /><UsageLimits /></div>}
       {selected === 'Data and privacy' && <PrivacyTab adminControls />}
       {selected === 'intelligence' && <AdminSharedIntelligence />}
     </div>
@@ -1220,7 +1197,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
   return (
     <div className="scroll">
       <div className="app-body admin-settings-page">
-        <SettingsViewHeader mode="admin" />
+        <h1 className="sr-only">Admin</h1>
         <AdminDetailLayout selected={selected}>
           {panel}
         </AdminDetailLayout>
@@ -1277,10 +1254,6 @@ function EmailTab() {
   if (!connection && !statusError) return <Skeleton rows={4} label="Loading email connection" />;
   const connected = connection?.status === 'connected';
   const sendingEnabled = connection?.mode === 'send_after_approval';
-  const minutes = connection?.discovery_interval_minutes ?? 0;
-  const discoveryCadence = minutes % 60 === 0
-    ? minutes === 60 ? 'hour' : `${minutes / 60} hours`
-    : `${minutes} minutes`;
   const statusLabel = statusError
     ? 'Status unavailable'
     : !connection?.configured
@@ -1294,76 +1267,43 @@ function EmailTab() {
             : 'Not connected';
   const statusTone = connected ? 'ok' : connection?.status === 'error' || statusError ? 'warn' : 'muted';
   return (
-    <div className="admin-detail-page">
-      <div className="admin-detail-heading">
-        <div>
-          <h2>Email</h2>
-          <p className="meta">Connect the Gmail account Hermes sends approved emails from: partner outreach, and replies your team approves from a role inbox.</p>
-        </div>
-        <Pill tone={statusTone}>{statusLabel}</Pill>
-      </div>
+    <>
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
-        title={statusError
-          ? 'Gmail status is unavailable'
-          : connected
-            ? connection?.address ? `Sending from ${connection.address}` : 'Gmail is connected'
-            : connection?.status === 'error'
-              ? 'Gmail needs to be reconnected'
-              : connection?.configured
-                ? 'Connect a Gmail account for sending'
-                : 'Sending from Gmail is not available yet'}
+        title="Sending account"
         description={connected
-          ? 'Approved outreach, and replies your team approves from a role inbox, are sent from this account.'
-          : statusError
-            ? 'Hermes could not check the connection.'
-            : connection?.configured
-              ? 'Choose the account in Google. Approved outreach, and replies your team approves from a role inbox, are sent from it.'
-              : UNCONFIGURED_GMAIL}
-        footer={<>
-          <p className="meta">{statusError
-            ? 'Checking again does not change the connection.'
-            : connected
-              ? 'Reconnect to switch to another account or renew access.'
-              : connection?.configured
-                ? 'You sign in with Google, not in Hermes.'
-                : 'Until then, approved emails wait in Hermes and nothing is sent.'}</p>
-          {statusError ? (
-            <Button disabled={busy} onClick={load}>Retry</Button>
-          ) : admin && connection?.configured ? (
-            <Button primary={!connected} disabled={busy} onClick={connect}>
-              {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
-            </Button>
-          ) : null}
-        </>}
+          ? 'Approved replies and outreach go out from this Gmail account.'
+          : connection?.configured || statusError ? 'Approved replies and outreach go out from a Gmail account you connect.' : UNCONFIGURED_GMAIL}
+        footer={statusError ? (
+          <Button disabled={busy} onClick={load}>Try again</Button>
+        ) : admin && connection?.configured ? (
+          <Button primary={!connected} disabled={busy} onClick={connect}>
+            {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
+          </Button>
+        ) : undefined}
       >
-          {statusError ? (
-            <p className="meta" role="alert">{statusError}</p>
-          ) : connection && (
-            <>
-              <div className="kv"><span className="grow">Connection</span><span className="meta">{statusLabel}</span></div>
-              {connection.address && <div className="kv"><span className="grow">Sends from</span><span className="meta">{connection.address}</span></div>}
-              {connection.configured && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{connection.pending_messages}</span></div>}
-            </>
-          )}
+        {statusError ? (
+          <p className="meta" role="alert">{statusError}</p>
+        ) : connection && (
+          <>
+            <div className="kv"><span className="grow">Status</span><Pill tone={statusTone}>{statusLabel}</Pill></div>
+            {connection.address && <div className="kv"><span className="grow">Sends from</span><span className="meta">{connection.address}</span></div>}
+            {connection.configured && <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'On, only what a person approved' : 'Off, approved emails are kept as drafts'}</span></div>}
+            {connection.configured && connection.pending_messages > 0 && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{connection.pending_messages}</span></div>}
+          </>
+        )}
       </AdminSettingsCard>
+    </>
+  );
+}
 
-      <AdminSettingsCard title="How sending works" description="Finding people, drafting and sending stay separate, so a person decides what leaves the workspace.">
-          <div className="kv"><span className="grow">Finding partners</span><span className="meta">{connection
-            ? connection.discovery_enabled ? `The agent looks for new partners every ${discoveryCadence}` : 'The agent does not look for partners on its own'
-            : 'Shown once the connection loads'}</span></div>
-          <div className="kv"><span className="grow">Drafts</span><span className="meta">The agent writes each email for review in the Inbox</span></div>
-          <div className="kv"><span className="grow">Sending</span><span className="meta">{connection
-            ? sendingEnabled ? 'Only what a person approved, exactly as approved' : 'Approved emails are saved as drafts. Nothing is sent yet'
-            : 'Could not check whether sending is on'}</span></div>
-      </AdminSettingsCard>
-
-      <AdminSettingsCard title="Who can do what" description="Connecting the account and approving each email are separate steps.">
-          <div className="kv"><span className="grow">Connecting</span><span className="meta">A workspace Admin signs in with Google</span></div>
-          <div className="kv"><span className="grow">Access</span><span className="meta">Stored encrypted. Hermes never sees the password</span></div>
-          <div className="kv"><span className="grow">Approving</span><span className="meta">Every email is reviewed in the Inbox</span></div>
-          <div className="kv"><span className="grow">What is sent</span><span className="meta">Exactly the words a person approved, and only when sending is on</span></div>
-      </AdminSettingsCard>
+/** Admin → Email: the role inboxes that receive mail, then the account approved replies go out from. */
+function EmailPage() {
+  return (
+    <div className="admin-detail-page">
+      <header className="admin-detail-heading"><div><h2>Email</h2><p>Role inboxes receive email. Approved replies go out from the sending account.</p></div></header>
+      <AdminEmailInboxes embedded />
+      <EmailTab />
     </div>
   );
 }
@@ -1477,11 +1417,6 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         >
           <p className="meta" role="alert">{statusError}</p>
         </AdminSettingsCard>
-        <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
-          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private conversation with the agent</span></div>
-          <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
-          <div className="kv"><span className="grow">Approvals</span><span className="meta">Only in the Hermes Inbox</span></div>
-        </AdminSettingsCard>
       </div>
     );
   }
@@ -1561,19 +1496,6 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         <div className="kv"><span className="grow">Connection</span><span className="meta">{statusLabel}</span></div>
         {connected && <div className="kv"><span className="grow">Slack workspace</span><span className="meta">{destination}</span></div>}
         {connected && connection.installation_kind && <div className="kv"><span className="grow">Installation</span><span className="meta">{connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'}</span></div>}
-      </AdminSettingsCard>
-
-      <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
-          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private conversation with the agent</span></div>
-          <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
-          <div className="kv"><span className="grow">Approvals</span><span className="meta">Only in the Hermes Inbox</span></div>
-      </AdminSettingsCard>
-
-      <AdminSettingsCard title="Permissions and identity" description="Workspace installation and member identity linking are separate steps.">
-          <div className="kv"><span className="grow">Connecting</span><span className="meta">A workspace Admin approves it in Slack</span></div>
-          <div className="kv"><span className="grow">Each member</span><span className="meta">Links their own Slack account with a one-time command</span></div>
-          <div className="kv"><span className="grow">Approvals</span><span className="meta">Nothing can be approved from Slack</span></div>
-          {connected && connection.granted_scopes.length > 0 && <div className="kv"><span className="grow">What Hermes can do in Slack</span><span className="meta">Read messages sent to it and reply in the same place</span></div>}
       </AdminSettingsCard>
 
       {connected && (
@@ -1770,7 +1692,7 @@ function OrganizationTab() {
 
   return (
     <>
-      <header className="admin-detail-heading"><div><h2>Workspace details</h2><p>Manage your organization, its members, and its Cloud connection.</p></div></header>
+      <header className="admin-detail-heading"><div><h2>General</h2></div></header>
       <AdminSettingsCard title="Workspace information">
       {[
         ['Workspace', state.workspace.name],
@@ -1824,7 +1746,7 @@ function OrganizationTab() {
           ) : (
             <div className="row">
               <span className="meta grow" style={{ maxWidth: 620 }}>
-                Everyone loses access right away: shared links stop working, conversations become read-only and work in progress stops. Everything is deleted seven days later, and you can cancel until then.
+                Everyone loses access right away. Everything is deleted after seven days; you can cancel until then.
               </span>
               <Button
                 quiet
@@ -1918,32 +1840,21 @@ function OrganizationTab() {
  * Run limits save explicitly and render the server response. Zero tokens
  * is a deliberate stop; an empty daily limit means no limit.
  */
-function AgentsTab() {
+/** Workspace settings as the server holds them, and one way to change them, for Models and Usage. */
+function useWorkspaceSettings() {
   const state = useAppState();
   const adapter = useAdapter();
-  const admin = useIsAdmin();
-  const nav = useNav();
-  const catalog = catalogRows(state);
   const [ack, setAck] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
-  const settings = state.settings as { default_model_id?: string; default_effort?: string | null; default_runtime?: string; daily_token_cap?: number | null; max_concurrent_runs?: number };
-  const current = catalog.find((row) => row.model_id === settings.default_model_id);
+  const settings = state.settings as { default_model_id?: string; default_effort?: string | null; daily_token_cap?: number | null; max_concurrent_runs?: number };
 
-  // The caps as the server holds them, not as bootstrap left them: bootstrap is
-  // a snapshot from page load and this screen is where they change.
+  // Bootstrap is a snapshot from page load; these screens are where settings change.
   useEffect(() => {
-    if (!state.workspace.id) return;
+    if (!state.workspace.id) return undefined;
     let live = true;
-    void adapter.rest
-      .settings(state.workspace.id)
-      .then((next) => {
-        if (live) setView(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
+    void adapter.rest.settings(state.workspace.id).then((next) => { if (live) setView(next); }).catch(() => undefined);
+    return () => { live = false; };
   }, [adapter, state.workspace.id]);
 
   const save = (patch: Record<string, unknown>): Promise<boolean> => {
@@ -1952,13 +1863,13 @@ function AgentsTab() {
       .patchSettings(state.workspace.id, patch)
       .then((next) => {
         setView(next);
-        setAck('default_model_id' in patch || 'default_effort' in patch);
+        setAck(true);
         setTimeout(() => setAck(false), 1600);
         return true;
       })
       .catch((caught: unknown) => {
         const reason = (caught as { reason?: string }).reason;
-        setError(reason === 'not_admin' ? EMPTY.adminRequired : reason === 'bad_cap' ? 'Enter a whole number, or leave it empty for no limit.' : 'Could not save that. Try again.');
+        setError(reason === 'not_admin' ? EMPTY.adminRequired : reason === 'bad_cap' ? 'Enter a whole number, or leave it empty for no limit.' : 'Couldn’t save that. Try again.');
         return false;
       });
   };
@@ -1970,30 +1881,24 @@ function AgentsTab() {
     active_runs: 0,
     warn: false,
   };
+  return {
+    ack, error, save, caps,
+    modelId: view?.defaults.model_id ?? settings.default_model_id,
+    effort: view?.defaults.effort ?? settings.default_effort,
+  };
+}
 
+/** The model and effort new conversations start with (Models page). */
+function ModelDefaults() {
+  const state = useAppState();
+  const admin = useIsAdmin();
+  const nav = useNav();
+  const catalog = catalogRows(state);
+  const { ack, error, save, modelId, effort } = useWorkspaceSettings();
+  const current = catalog.find((row) => row.model_id === modelId);
   return (
-    <>
-      <header className="admin-detail-heading"><div><h2>Agent defaults</h2><p>Choose the model new conversations start with, and limits for the whole workspace.</p></div></header>
-      <AdminSettingsCard title="Your agent">
-      <div className="list-row">
-        <Glass name="iris" size={32} className="row-icon" />
-        <div className="row-main">
-          <span className="t">{state.agent.name}</span>
-          <span className="s">{state.agent.email ?? 'Email not connected'}</span>
-        </div>
-        <Button onClick={() => nav(CTX)}>Manage</Button>
-      </div>
-      </AdminSettingsCard>
-      <AdminSettingsCard title="Model defaults">
-      <div className="row">
-        <span className="grow" />
-        <span style={{ position: 'relative' }}>
-          <span className="meta">Applies to new conversations</span>
-          <Ack show={ack} style={{ right: 0, top: -40 }}>
-            Saved · New conversations use this
-          </Ack>
-        </span>
-      </div>
+    <AdminSettingsCard title="Default model" description="New conversations start with this model.">
+      <span style={{ position: 'relative', display: 'block' }}><Ack show={ack} style={{ right: 0, top: -40 }}>Saved</Ack></span>
       {catalog.length === 0 ? (
         <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(ADMIN('Provider keys'))}>Connect Nous Portal</Button>} />
       ) : (
@@ -2002,9 +1907,9 @@ function AgentsTab() {
             <MenuItem
               key={row.model_id}
               role="radio"
-              checked={(view?.defaults.model_id ?? settings.default_model_id) === row.model_id}
+              checked={modelId === row.model_id}
               disabled={!row.enabled || !admin}
-              sub={row.enabled ? `From ${providerName(row.provider)}` : modelUnavailableReason(row.disabled_reason, row.provider)}
+              sub={row.enabled ? undefined : modelUnavailableReason(row.disabled_reason, row.provider)}
               onClick={() => save({ default_model_id: row.model_id })}
             >
               {row.label}
@@ -2013,11 +1918,11 @@ function AgentsTab() {
         </div>
       )}
       <div className="kv">
-        <span className="grow">Default effort</span>
+        <span className="grow">Effort</span>
         {current?.effort ? (
           <div className="effort-row" role="radiogroup" aria-label="Default effort">
             {current.effort.map((value) => (
-              <button key={value} type="button" role="radio" aria-checked={(view?.defaults.effort ?? settings.default_effort) === value} disabled={!admin} onClick={() => save({ default_effort: value })}>
+              <button key={value} type="button" role="radio" aria-checked={effort === value} disabled={!admin} onClick={() => save({ default_effort: value })}>
                 {effortLabel(value)}
               </button>
             ))}
@@ -2026,30 +1931,31 @@ function AgentsTab() {
           <span className="meta">Not available for this model</span>
         )}
       </div>
+      {error && <p className="meta" role="alert">{error}</p>}
+    </AdminSettingsCard>
+  );
+}
 
-      </AdminSettingsCard>
-      {admin && <AdminRunLimits key={`${caps.daily_token_cap}:${caps.max_concurrent_runs}`} dailyLimit={caps.daily_token_cap} concurrentLimit={caps.max_concurrent_runs} onSave={save} />}
+/** Daily usage and tasks at the same time, editable (Usage page). */
+function UsageLimits() {
+  const admin = useIsAdmin();
+  const { error, save, caps } = useWorkspaceSettings();
+  if (!admin) return null;
+  return (
+    <>
+      <AdminRunLimits key={`${caps.daily_token_cap}:${caps.max_concurrent_runs}`} dailyLimit={caps.daily_token_cap} concurrentLimit={caps.max_concurrent_runs} onSave={save} />
       <AdminSettingsCard title="Current usage">
-      <div className="kv">
-        <span className="grow">Daily usage limit</span>
-        <span className="meta">
-          {caps.daily_token_cap === null ? 'No limit' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} used today`}
-        </span>
-        {admin && caps.daily_token_cap !== null && (
-          <Button link onClick={() => save({ daily_token_cap: null })}>
-            Remove limit
-          </Button>
-        )}
-      </div>
-      <div className="kv">
-        <span className="grow">Tasks at the same time</span>
-        <span className="meta">
-          {caps.active_runs} of {caps.max_concurrent_runs} running now
-        </span>
-      </div>
+        <div className="kv">
+          <span className="grow">Today</span>
+          <span className="meta">{caps.daily_token_cap === null ? 'No limit' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} used today`}</span>
+          {caps.daily_token_cap !== null && <Button link onClick={() => void save({ daily_token_cap: null })}>Remove limit</Button>}
+        </div>
+        <div className="kv">
+          <span className="grow">Running</span>
+          <span className="meta">{caps.active_runs} of {caps.max_concurrent_runs} running now</span>
+        </div>
       </AdminSettingsCard>
       {error && <p className="meta" role="alert">{error}</p>}
-      <p className="meta">Model defaults apply to new conversations. Limits apply to the whole workspace. Changes are recorded in History.</p>
     </>
   );
 }
@@ -2069,7 +1975,7 @@ export const providerName = (id: string | null | undefined): string =>
 /** Why a catalog row cannot be chosen, in words an Admin can act on. The stored reason is never shown as-is. */
 const modelUnavailableReason = (reason: string | null | undefined, provider: string): string =>
   !reason ? `Connect ${providerName(provider)} to use this`
-    : /catalog sync/i.test(reason) ? `Check the ${providerName(provider)} connection in Model providers to use this`
+    : /catalog sync/i.test(reason) ? `Check the ${providerName(provider)} connection in Admin → Models to use this`
       : /no longer listed/i.test(reason) ? `No longer offered by ${providerName(provider)}`
         : 'Not available right now';
 
@@ -2316,9 +2222,8 @@ function ProviderKeysTab() {
 
   return (
     <>
-      <div className="row">
-        <h2 className="section-title">Model providers</h2>
-        <span className="grow" />
+      <div className="admin-detail-heading">
+        <div><h2>Models</h2><p>Your agents run on models from Nous Portal.</p></div>
         {!locked && (
           <Button
             onClick={() => {
@@ -2407,9 +2312,6 @@ function ProviderKeysTab() {
         </div>
       )}
       {notice && <p className="meta">{notice}</p>}
-      <p className="meta">
-        Nous Portal runs the models your agents use. Hermes stores the connection encrypted and keeps it signed in. Connecting also updates the list of models you can choose.
-      </p>
 
       <Dialog
         open={dialog === 'add'}
@@ -2483,10 +2385,10 @@ function ProviderKeysTab() {
  * is the server's rather than ours — a client that forgot it would be a client
  * quietly making a claim we cannot stand behind.
  *
- * The charts are `InsightCards`, driven by `by_day`: a cost-and-token compare
- * card, an anomaly card over the same series, and an allocation card over
- * `by_key`. When a range has one day in it there is no shape to draw, so the
- * carousel is not rendered at all rather than drawn as a flat line.
+ * One chart, model usage per day, as on Vercel's usage page. Cost per day and
+ * per key are already the "By day" and "By key" lists below it, so they are not
+ * drawn a second time. A range with one day has no shape to draw, so the chart
+ * is left out rather than drawn as a flat line.
  */
 function UsageTab() {
   const state = useAppState();
@@ -2538,11 +2440,9 @@ function UsageTab() {
     }));
   }, [usage, group]);
 
-  const pages = useMemo(() => (usage ? insightPages(usage) : []), [usage]);
-
   return (
     <>
-      <header className="admin-detail-heading"><div><h2>Usage</h2><p>Review workspace model usage and estimated costs over time.</p></div></header>
+      <header className="admin-detail-heading"><div><h2>Usage</h2></div></header>
       <div className="row" style={{ gap: 16 }}>
         <Tabs
           tabs={[
@@ -2591,9 +2491,10 @@ function UsageTab() {
               subtitle={`${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap?.toLocaleString() ?? 'no limit'} used today · ${usage.caps.active_runs} of ${usage.caps.max_concurrent_runs} tasks running`}
             />
           )}
-          {pages.length > 0 && (
-            <div className="hermes-ui">
-              <InsightCards pages={pages} labels={{ title: USAGE_RANGE_TITLES[usage.range] ?? 'Usage' }} />
+          {usage.by_day.length > 1 && (
+            <div className="usage-card">
+              <span className="meta">Model usage per day</span>
+              <Sparkline values={usage.by_day.map((day) => day.total_tokens)} stroke="var(--accent, #4a86ff)" label={`Model usage per day over ${usage.by_day.length} days`} />
             </div>
           )}
           <Tabs
@@ -2622,38 +2523,11 @@ function UsageTab() {
               ))}
             </div>
           )}
-          <div className="kv">
-            <span className="grow">Daily usage limit</span>
-            <span className="meta">
-              {usage.caps.daily_token_cap === null ? 'No limit' : `${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap.toLocaleString()} used today`}
-            </span>
-          </div>
-          <div className="kv">
-            <span className="grow">Tasks at the same time</span>
-            <span className="meta">
-              {usage.caps.active_runs} of {usage.caps.max_concurrent_runs} running now
-            </span>
-          </div>
         </>
       )}
     </>
   );
 }
-
-/**
- * The three `InsightCards` pages, built from one report.
- *
- * The library's own `CompareCard`, `AnomalyCard` and `AllocationCard` are not
- * reachable: `index.ts` exports the carousel and not the three cards it ships
- * with, and the package publishes no subpath in its `exports` map, so there is
- * nothing to import them from. What is adopted is therefore the carousel — the
- * pager, the prose and the pill — with three small charts of our own drawn
- * from `by_day` and `by_key`. Every number on them is a number the server sent;
- * nothing is smoothed, padded or invented, and a range with fewer than two days
- * has no series to draw, so the caller renders no carousel rather than a
- * straight line pretending to be a trend.
- */
-const USAGE_RANGE_TITLES: Readonly<Record<string, string>> = { today: 'Usage today', '7d': 'Usage, last 7 days', '30d': 'Usage, last 30 days', '90d': 'Usage, last 90 days' };
 
 /** A report day (`YYYY-MM-DD`, already in the workspace's timezone) as "Sep 27". */
 const formatUsageDay = (day: string): string => {
@@ -2668,87 +2542,11 @@ function Sparkline({ values, stroke, label }: { values: number[]; stroke: string
   const step = values.length > 1 ? width / (values.length - 1) : width;
   const points = values.map((value, index) => `${(index * step).toFixed(1)},${(height - (value / max) * (height - 8) - 4).toFixed(1)}`);
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={label} style={{ display: 'block' }}>
-      <polyline points={points.join(' ')} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      {points.map((point, index) => {
-        const [x, y] = point.split(',');
-        return <circle key={index} cx={x} cy={y} r="2.5" fill={stroke} />;
-      })}
+    // Stretched to the card's width; the stroke keeps its weight when it is.
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" width="100%" height={height} role="img" aria-label={label} style={{ display: 'block' }}>
+      <polyline points={points.join(' ')} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   );
-}
-
-function Bars({ values, fill, label }: { values: number[]; fill: string; label: string }) {
-  const max = Math.max(...values, 1);
-  const width = 300;
-  const height = 96;
-  const slot = width / values.length;
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={label} style={{ display: 'block' }}>
-      {values.map((value, index) => {
-        const barHeight = Math.max(2, (value / max) * (height - 6));
-        return <rect key={index} x={index * slot + slot * 0.2} y={height - barHeight} width={slot * 0.6} height={barHeight} rx="2" fill={fill} />;
-      })}
-    </svg>
-  );
-}
-
-function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card: () => JSX.Element; pill: string }[] {
-  const days = usage.by_day;
-  if (days.length < 2) return [];
-  const tokens = days.map((day) => day.total_tokens);
-  const spend = days.map((day) => day.cost_usd_estimate);
-  const keys = usage.by_key.filter((row) => row.total_tokens > 0);
-  const keyTotal = keys.reduce((sum, row) => sum + row.total_tokens, 0) || 1;
-
-  return [
-    {
-      key: 'tokens',
-      pill: `${days.length} days`,
-      prose: `${usage.totals.total_tokens.toLocaleString()} units of model usage over ${days.length} days, an estimated $${usage.totals.cost_usd_estimate.toFixed(3)}.`,
-      Card: () => (
-        <div className="usage-card">
-          <span className="meta">Model usage per day</span>
-          <Sparkline values={tokens} stroke="var(--accent, #4a86ff)" label={`Model usage per day over ${days.length} days`} />
-        </div>
-      ),
-    },
-    {
-      key: 'spend',
-      pill: `${usage.totals.calls.toLocaleString()} requests`,
-      prose: `${usage.totals.calls.toLocaleString()} model requests, ${usage.totals.errors} of them failed. Spend follows usage unless a model changed.`,
-      Card: () => (
-        <div className="usage-card">
-          <span className="meta">Estimated cost per day, USD</span>
-          <Bars values={spend} fill="var(--green, #2c8a5a)" label={`Estimated cost per day over ${days.length} days`} />
-        </div>
-      ),
-    },
-    {
-      key: 'keys',
-      pill: keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'}` : 'No key recorded',
-      prose: keys.length ? 'Which key paid for what. A removed key keeps its spend rather than vanishing from the total.' : 'No provider key is recorded for these requests.',
-      Card: () => (
-        <div className="usage-card">
-          {keys.length === 0 && <span className="meta">Nothing to allocate.</span>}
-          {keys.slice(0, 6).map((row) => {
-            const pct = Math.round((row.total_tokens / keyTotal) * 100);
-            return (
-              <div className="usage-alloc" key={row.key_id ?? `${row.provider}-removed`}>
-                <span className="t">{row.label ?? `${providerName(row.provider)} · removed key`}</span>
-                <span className="bar" aria-hidden>
-                  <span style={{ width: `${pct}%` }} />
-                </span>
-                <span className="meta">
-                  {pct}% · ${row.cost_usd_estimate.toFixed(3)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      ),
-    },
-  ];
 }
 
 /**
@@ -2950,10 +2748,14 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
 
   return (
     <>
-      <div>
-        <h2 className="section-title">Data and privacy</h2>
-        <p className="meta">What Hermes keeps, for how long, where it is stored and who processes it.</p>
-      </div>
+      {adminControls ? (
+        <header className="admin-detail-heading"><div><h2>Data &amp; privacy</h2><p>What Hermes keeps, for how long, and where.</p></div></header>
+      ) : (
+        <div>
+          <h2 className="section-title">Data and privacy</h2>
+          <p className="meta">What Hermes keeps, for how long, and where.</p>
+        </div>
+      )}
 
       {failed && <EmptyState icon="context" title="Privacy details could not be loaded" detail="Try again shortly. Nothing here is shown from memory." />}
       {!privacy && !failed && <Skeleton rows={4} label="Loading retention facts" />}
@@ -3025,11 +2827,6 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           </div>
 
           <h2 className="section-title">Erasure</h2>
-          <p style={{ maxWidth: 760 }}>
-            When you ask Hermes to erase someone, their details disappear from the product right away; History keeps only a record that something happened.
-            Copies kept for recovering from failures take longer to expire: database recovery history after {privacy.erasure.point_in_time_history_days} days and the nightly backup after {privacy.erasure.backup_retention_days} days.
-            Erasure is therefore complete {privacy.erasure.complete_after_days} days after you ask.
-          </p>
           <div className="stat-grid">
             <div className="stat">
               <span className="k">Removed from Hermes</span>
@@ -3054,8 +2851,8 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
             [
               ['Sign-in provider', privacy.residency.identity_provider],
               ['Database (Neon)', 'The region chosen when this workspace was created'],
-              ['File storage (Cloudflare)', 'The region chosen when this workspace was created. It cannot be changed later.'],
-              ['Processing (Cloudflare)', 'Requests run wherever they arrive. Background tasks, queues and logs have no region setting; the data-processing agreement says so.'],
+              ['File storage (Cloudflare)', 'The region chosen when this workspace was created'],
+              ['Processing (Cloudflare)', 'Wherever each request arrives; no region setting'],
             ] as const
           ).map(([label, value]) => (
             <div className="kv" key={label}>

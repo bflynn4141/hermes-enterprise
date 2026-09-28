@@ -9,7 +9,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { REQ, type AgentDirectoryEntry, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { sortRoles } from './AdminRoles.js';
 import { useStepUp } from './use-step-up.js';
 import { useEmailPolling } from './use-email-polling.js';
@@ -35,8 +34,8 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
     case 'failed': {
       const why: Record<NonNullable<InboundEmailListItem['problem']>, string> = {
         provider_busy: `The model was busy, so ${agent} couldn’t read it. Nothing was sent.`,
-        needs_setup: `${agent}’s model needs attention in Model providers. Nothing was sent.`,
-        no_owner: `${agent} has no owner to reply as. Give it an owner in All agents, then try again.`,
+        needs_setup: `${agent}’s model needs attention in Admin → Models. Nothing was sent.`,
+        no_owner: `${agent} has no owner to reply as. Give it an owner in Admin → Agents, then try again.`,
         inbox_paused: 'The inbox is paused. Resume it, then try again.',
         other: `Something went wrong while ${agent} was reading it. Nothing was sent.`,
       };
@@ -59,7 +58,7 @@ export function inboxErrorMessage(error: unknown): string {
   switch ((error as { reason?: string } | null)?.reason) {
     case 'reauth_required': return 'Please sign in again to change inboxes.';
     case 'email_intake_not_configured': return 'Role inboxes aren’t turned on for this Hermes yet. Ask the person who runs Hermes for your company to turn them on.';
-    case 'agent_owner_missing': return 'That agent has no owner to reply as. Give it an owner in All agents first.';
+    case 'agent_owner_missing': return 'That agent has no owner to reply as. Give it an owner in Admin → Agents first.';
     case 'unknown_role': return 'That role no longer exists. Reload and try again.';
     case 'unknown_agent': return 'That agent no longer exists. Reload and try again.';
     default: return 'Couldn’t save. Nothing was changed. Try again.';
@@ -242,7 +241,8 @@ export function NewInbox({ roles, agents, onCreated, onClose }: {
   </Dialog>;
 }
 
-export function AdminEmailInboxes() {
+/** Role inboxes. `embedded` renders it as a section of the Email page. */
+export function AdminEmailInboxes({ embedded = false }: { embedded?: boolean }) {
   const adapter = useAdapter();
   const state = useAppState();
   const [inboxes, setInboxes] = useState<EmailInbox[] | null>(null);
@@ -293,18 +293,18 @@ export function AdminEmailInboxes() {
   if (loadError && !inboxes) return <div role="alert" className="admin-roles-error"><p>Could not load role inboxes. Try again.</p><Button onClick={polling.refresh}>Try again</Button></div>;
   if (!inboxes) return <Skeleton rows={4} label="Loading role inboxes" />;
   return <>
-    <header className="admin-detail-heading">
+    <header className={embedded ? 'admin-section-heading' : 'admin-detail-heading'}>
       <div>
-        <h2>Role inboxes</h2>
-        <p>Give a role an address people can forward or copy email to. Its agent reads each message and suggests a reply or a hand-off. Nothing is sent until a person approves it.</p>
+        {embedded ? <h3>Role inboxes</h3> : <h2>Role inboxes</h2>}
+        <p>Each role gets an address. Its agent suggests replies; people approve them.</p>
       </div>
       <Button disabled={!domain || busyId !== null} onClick={() => setAdding(true)}>Add inbox</Button>
     </header>
-    {!domain && <p className="email-inbox-help">Role inboxes aren’t turned on for this Hermes yet. The person who runs Hermes for your company can turn them on.</p>}
+    {!domain && <p className="email-inbox-help">Role inboxes aren’t turned on for this Hermes yet.</p>}
     {loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh role inboxes. We’ll try again. <Button small disabled={busyId !== null} onClick={polling.refresh}>Try now</Button></p>}
     {problem !== null && <Problem error={problem} />}
     {inboxes.length === 0
-      ? <EmptyState icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships so partner email reaches its agent." />
+      ? (embedded ? <p className="email-inbox-facts">No role inboxes yet.</p> : <EmptyState icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships to start." />)
       : <ul className="email-inboxes-list" aria-label="Role inboxes">
         {inboxes.map((inbox) => <li key={inbox.id}>
           <div className="email-inbox-top">
@@ -320,17 +320,14 @@ export function AdminEmailInboxes() {
           <RecentMail inbox={inbox} />
         </li>)}
       </ul>}
-    <AdminSettingsCard title="Getting email to an inbox" description="Any of these works. Hermes only sees what reaches the address.">
-      <div className="email-inbox-help">
-        <ol>
-          <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
-          <li>In Google Workspace, send a group’s email to it too: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
-          <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
-          <li>Send a test email to the address. It shows up here within a minute.</li>
-        </ol>
-        <p>Replies only ever go to the person who sent the email. If something about the sender needs checking, like a lookalike address or new bank details, a second person approves the reply too.</p>
-      </div>
-    </AdminSettingsCard>
+    <details className="admin-help">
+      <summary>How to send email to an inbox</summary>
+      <ol>
+        <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
+        <li>In Google Workspace: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
+        <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
+      </ol>
+    </details>
     {adding && <NewInbox roles={roles} agents={agents} onClose={() => setAdding(false)} onCreated={(inbox) => { polling.refresh(); replace(inbox); setAdding(false); }} />}
     {removing && <Dialog open title={`Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
       <Button onClick={() => setRemoving(null)}>Keep it</Button>

@@ -22,6 +22,7 @@
 //     re-stamped by a fixture before the scenarios that need it.
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const SEED_WORKSPACE = '11111111-1111-4111-8111-111111111111';
@@ -380,7 +381,7 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
 
   // Model providers live under Admin since the Admin split (PR92–96).
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
-  await page.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
+  await openAdminPage(page, 'Models');
   await expect(page.getByText('Connect Nous Portal to enable models')).toBeVisible();
   await context.close();
 });

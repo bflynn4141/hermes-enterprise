@@ -75,7 +75,7 @@ export function readableToolActions(names: readonly string[]): string[] {
 const RETRY = 'Retry to try again.';
 const MODEL_DOWN = "The model didn't answer. Retry in a moment.";
 const MODEL_BUSY = 'The model is busy right now. Try again in a minute.';
-const MODEL_AUTH = 'The model connection was rejected. An Admin needs to reconnect it in Admin → Model providers.';
+const MODEL_AUTH = 'The model connection was rejected. An Admin needs to reconnect it in Admin → Models.';
 const MODEL_QUOTA = 'The model account has run out of credit. An Admin needs to add credit or choose another model.';
 const MODEL_REJECTED = 'The model turned down this request. Try rewording it or choose another model.';
 const MODEL_GONE = "The chosen model isn't available anymore. Pick another model and try again.";

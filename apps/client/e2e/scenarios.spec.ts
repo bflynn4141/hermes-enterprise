@@ -192,7 +192,7 @@ test.describe('members write feedback', () => {
     const lena = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
     await lena.getByRole('button', { name: 'Resend' }).click();
     await expect(app.getByRole('alert')).toHaveText(
-      'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.',
+      'There is no agent ready for a new member. Add one under Admin → Capacity, then try again.',
     );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
@@ -205,7 +205,7 @@ test.describe('members write feedback', () => {
     await email.fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
     await expect(invite.getByRole('alert')).toHaveText(
-      'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.',
+      'There is no agent ready for a new member. Add one under Admin → Capacity, then try again.',
     );
     await expect(email).toHaveValue('new.member@example.com');
     await invite.getByRole('button', { name: 'Cancel' }).click();

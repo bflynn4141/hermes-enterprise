@@ -19,6 +19,7 @@
 import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
+import { openAdminPage } from './admin-nav.js';
 
 const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const q = (value: string): string => `'${String(value).replace(/'/g, "''")}'`;
@@ -55,10 +56,9 @@ async function openShell(page: Page, workspaceId: string): Promise<void> {
  * Workspace controls moved out of Settings and under the Admin entry (PR92,
  * then grouped in PR95/PR96, then a single sidebar in place of stacked tabs).
  */
-async function openAdminPage(page: Page, _group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
+async function openAdmin(page: Page, item: string): Promise<void> {
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
-  const app = pane(page);
-  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: item, exact: true }).click();
+  await openAdminPage(page, item);
 }
 
 /** A turn through the real route, so the run is a real run. */
@@ -292,14 +292,14 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await settle(page, fixture.workspaceId, sessionId);
 
   await page.reload();
-  await openAdminPage(page, 'Organization', 'Usage');
+  await openAdmin(page, 'Usage');
 
   // The disclaimer is the server's sentence, rendered beside the total rather
   // than in a footnote. It is asserted verbatim because a client that
   // paraphrased it would be making a claim we cannot stand behind.
   const app = pane(page);
   await expect(
-    app.getByText('Estimated, billed by your provider. These figures are our arithmetic over published prices; your provider invoices your own key and is the authority.'),
+    app.getByText('Estimated from published prices. Your provider’s bill is final.'),
   ).toBeVisible({ timeout: 20_000 });
   await expect(app.getByText('Model usage', { exact: true })).toBeVisible();
 
@@ -400,7 +400,7 @@ test('M6 · an Admin schedules the workspace for deletion and then cancels it', 
   // the screen rather than about how long the suite has been running.
   refreshStepUp();
 
-  await openAdminPage(page, 'Organization', 'Workspace details');
+  await openAdmin(page, 'General');
   const app = pane(page);
   await app.getByRole('button', { name: 'Delete workspace…' }).click();
 
@@ -478,10 +478,10 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('Read-only Gmail is not available yet')).toBeVisible();
   await expect(app.getByText('No sending account connected')).toBeVisible();
 
-  await openAdminPage(page, 'Organization', 'Usage');
+  await openAdmin(page, 'Usage');
   await expect(app.getByText('No usage yet')).toBeVisible({ timeout: 15_000 });
 
-  await openAdminPage(page, 'Agents', 'Agent defaults');
+  await openAdmin(page, 'Models');
   // Not an empty state: the Nous Portal rows are there — the default's row is
   // written by migration 0016 — and each says *why* it cannot be chosen. That
   // is the honest shape: "no models" would be wrong, and a silent list of
@@ -490,13 +490,13 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByRole('radio', { name: /Check the Nous Portal connection/ })).toBeDisabled();
   await expect(app.getByText('Daily usage limit')).toBeVisible();
 
-  await openAdminPage(page, 'Organization', 'Data & privacy');
+  await openAdmin(page, 'Data & privacy');
   await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
   // The retention facts are the server's and are there with or without a key.
   await expect(app.getByText('Database recovery history').first()).toBeVisible();
   await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
 
-  await openAdminPage(page, 'Organization', 'Workspace details');
+  await openAdmin(page, 'General');
   await expect(app.getByRole('button', { name: 'Delete workspace…' })).toBeVisible();
 }
 

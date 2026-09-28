@@ -76,8 +76,8 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     return <ApprovalRouteDetail key={selected.key} route={selected} roles={roles} onSaved={replace} />;
   }
   const { decisions, actions } = splitRoutes(routes);
-  const group = (title: string, description: string, rows: ApprovalRoute[]) => <section className="admin-approvals-group" aria-label={title}>
-    <header><h3>{title}</h3><p>{description}</p></header>
+  const group = (title: string, description: string | null, rows: ApprovalRoute[]) => <section className="admin-approvals-group" aria-label={title}>
+    <header><h3>{title}</h3>{description && <p>{description}</p>}</header>
     <ul className="admin-roles-list" aria-label={title}>
       {rows.map((route) => <li key={route.key}>
         <button type="button" className="admin-roles-row" onClick={() => nav({ ...ADMIN(ADMIN_APPROVALS_VIEW), id: route.key })}>
@@ -95,11 +95,10 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
   return <>
     <header className="admin-detail-heading"><div>
       <h2>Approvals</h2>
-      <p>{APPROVALS_SCOPE}</p>
-      <p>{APPROVALS_LIVE}</p>
+      <p>{APPROVALS_SCOPE} {APPROVALS_LIVE}</p>
     </div></header>
-    {group('Decisions', 'Closing a request an agent prepared. One person decides unless you ask for more.', decisions)}
-    {group('Actions after approval', 'What happens once a request is approved. These can need more than one person.', actions)}
+    {group('Decisions', null, decisions)}
+    {group('Actions after approval', null, actions)}
     <AdminApprovalsWorkflow />
   </>;
 }

@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 const ENTERPRISE_AGENT_ID = '4d623027-d550-488e-8582-345c38704ad9';
 const CONTROL_SECRET = 'fixture-control-secret-long-enough';
@@ -20,8 +21,8 @@ async function openRuntimeCapacity(page: Page): Promise<ReturnType<Page['getByRo
   await page.goto(START);
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
   const app = page.getByRole('region', { name: 'Application' });
-  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Agent capacity', exact: true }).click();
-  await expect(app.getByRole('heading', { name: 'Agent capacity' })).toBeVisible();
+  await openAdminPage(page, 'Capacity');
+  await expect(app.getByRole('heading', { name: 'Capacity', exact: true })).toBeVisible();
   return app;
 }
 
@@ -80,6 +81,6 @@ test.describe('Hermes runtime capacity setup', () => {
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-narrow.png'), fullPage: true });
     const contentOverflow = await app.locator('.runtime-capacity').evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(contentOverflow).toBeLessThanOrEqual(1);
-    await expect(app.getByRole('navigation', { name: 'Admin settings' })).toBeVisible();
+    await expect(app.getByRole('button', { name: /^Admin pages/ })).toBeVisible();
   });
 });

@@ -118,7 +118,7 @@ export function AdminAgents({ agentId }: { agentId: string | null }) {
     />;
   }
   return <>
-    <header className="admin-detail-heading"><div><h2>Agents</h2><p>Every agent in this workspace, who it works for, and what it may do. You can change an agent’s name, role, model, skills and approvals. Its conversations stay with the people it works for.</p></div></header>
+    <header className="admin-detail-heading"><div><h2>Agents</h2><p>Who each agent works for, and what it may do.</p></div></header>
     {directory.items.length === 0
       ? <EmptyState icon="iris" title="No agents yet" detail="An agent appears here when someone joins and finishes setup." />
       : <ul className="admin-agents-list" aria-label="Agents">

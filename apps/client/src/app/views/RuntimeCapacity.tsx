@@ -299,8 +299,8 @@ export function RuntimeCapacityTab() {
     <div className="runtime-capacity">
       <header className="runtime-capacity-heading">
         <div>
-          <h2>Agent capacity</h2>
-          <p>Add a Hermes Cloud agent so a new member can be given one. Create a one-time setup code for the agent, then connect it and let Hermes check it.</p>
+          <h2>Capacity</h2>
+          <p>Add a Hermes Cloud agent so a new member can be given one.</p>
         </div>
       </header>
 

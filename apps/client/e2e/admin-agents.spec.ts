@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectAdminPage } from './admin-nav.js';
 
 // Admin → Agents against the mock backend. The mock mirrors the server's
 // boundary: an Admin can change a member agent's skills and approval switches,
@@ -10,8 +11,7 @@ test('an Admin sees every agent and governs a member agent without its conversat
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/#admin/All%20agents');
   const pane = app(page);
-  const adminNav = pane.getByRole('navigation', { name: 'Admin settings' });
-  await expect(adminNav.getByRole('button', { name: 'All agents', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expectAdminPage(page, 'Agents');
   await expect(pane.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
 
   const list = pane.getByRole('list', { name: 'Agents' });

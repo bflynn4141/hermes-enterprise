@@ -120,7 +120,7 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
     <header className="admin-detail-heading">
       <div>
         <h2>Roles</h2>
-        <p>Roles are the jobs people hold here. Holding one is what lets someone decide the matching approvals: Finance decides partner invoices.</p>
+        <p>Who holds each job, and what they approve.</p>
       </div>
       <Button onClick={() => setCreating(true)}>New role</Button>
     </header>

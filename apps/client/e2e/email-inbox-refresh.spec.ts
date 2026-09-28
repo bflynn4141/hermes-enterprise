@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 test('role inboxes keep checking for email until the page is hidden or closed', async ({ page }) => {
   await page.addInitScript(() => {
@@ -38,7 +39,7 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect.poll(async () => (await reads()).messages).toBe(after.messages + 1);
-  await page.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Workspace details', exact: true }).click();
+  await openAdminPage(page, 'General');
   const closed = await reads();
   await page.clock.runFor(15_000);
   expect(await reads()).toEqual(closed);

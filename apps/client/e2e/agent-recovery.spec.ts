@@ -77,7 +77,7 @@ test('scheduled recovery shows its countdown and allows cancellation', async ({ 
 test('a blocked model connection explains the next action without starting work', async ({ page }) => {
   await page.goto('/?recovery=blocked');
   const card = page.getByRole('region', { name: 'Agent activity' });
-  await expect(card).toContainText('Reconnect Nous Portal in Admin → Model providers before retrying.');
+  await expect(card).toContainText('Reconnect Nous Portal in Admin → Models before retrying.');
   await expect(card.getByRole('button', { name: 'Retry task', exact: true })).toHaveCount(0);
   await expect(card.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });

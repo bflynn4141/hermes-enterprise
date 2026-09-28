@@ -4,6 +4,7 @@
 //
 //     npx playwright test e2e/qa-screens.spec.ts
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 const shot = (name: string) => ({ path: `qa/${name}.png`, fullPage: false });
 
@@ -101,22 +102,21 @@ test('every main screen renders', async ({ page }) => {
   await expect(appPane.getByText('Partner Program Guide', { exact: true })).toBeVisible();
   await page.screenshot(shot('15-library-documents'));
 
-  // 16. Admin → Model providers. Admin pages live in one left rail.
-  const adminPage = (label: string) => appPane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: label, exact: true });
+  // 16. Admin → Models.
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
-  await adminPage('Model providers').click();
-  await expect(appPane.getByRole('heading', { name: 'Model providers' })).toBeVisible();
+  await openAdminPage(page, 'Models');
+  await expect(appPane.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
   await page.screenshot(shot('16-settings-provider-keys'));
 
   // 17. Admin → Usage.
-  await adminPage('Usage').click();
+  await openAdminPage(page, 'Usage');
   // The server's own sentence, which the client renders beside the total.
-  await expect(appPane.getByText(/Estimated, billed by your provider/)).toBeVisible();
+  await expect(appPane.getByText(/Estimated from published prices/)).toBeVisible();
   await page.screenshot(shot('17-settings-usage'));
 
-  // 18. Admin → Agent defaults.
-  await adminPage('Agent defaults').click();
-  await expect(appPane.getByRole('heading', { name: 'Model defaults' })).toBeVisible();
+  // 18. Admin → Models, default model.
+  await openAdminPage(page, 'Models');
+  await expect(appPane.getByRole('heading', { name: 'Default model' })).toBeVisible();
   await page.screenshot(shot('18-settings-agents'));
 
   // 19. Settings → Data and privacy, with the processor facts.
@@ -137,7 +137,7 @@ test('the first-run empty states render', async ({ page }) => {
   await page.screenshot(shot('21-empty-inbox'));
 
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
-  await appPane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
+  await openAdminPage(page, 'Models');
   await expect(appPane.getByText(/Connect Nous Portal to enable models/)).toBeVisible();
   await page.screenshot(shot('22-empty-provider-keys'));
 });
@@ -156,7 +156,7 @@ test('onboarding and the shared viewer render', async ({ page }) => {
   await page.screenshot(shot('24-onboarding-create'));
 
   await page.goto('/onboarding/join?token=inv_demo');
-  await expect(page.getByRole('heading', { name: 'Join a workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Join /, level: 1 })).toBeVisible();
   await page.screenshot(shot('25-onboarding-join'));
 
   await page.goto('/shared/mock-share-token');

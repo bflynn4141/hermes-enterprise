@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 async function openSlack(page: import('@playwright/test').Page, url = '/', member = false) {
   await page.goto(url);
@@ -10,19 +11,18 @@ async function openSlack(page: import('@playwright/test').Page, url = '/', membe
   } else {
     await page.getByRole('button', { name: 'Admin', exact: true }).click();
     await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-    await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Slack', exact: true }).click();
+    await openAdminPage(page, 'Slack');
     await expect(app.locator('.admin-settings-view').getByRole('heading', { name: 'Slack', exact: true })).toBeVisible();
   }
   return app;
 }
 
 test.describe('Slack connection settings', () => {
-  test('explains the transport and approval boundary before an Admin connects', async ({ page }) => {
+  test('offers the connection without an explainer before an Admin connects', async ({ page }) => {
     const app = await openSlack(page);
     await expect(app.getByRole('button', { name: 'Connect Slack' })).toBeVisible();
-    await expect(app.getByText('One private conversation with the agent')).toBeVisible();
-    await expect(app.getByText('Mention the app; replies stay in the thread')).toBeVisible();
-    await expect(app.getByText('Only in the Hermes Inbox')).toBeVisible();
+    // Admin pages hold settings, not how-it-works essays (docs/DESIGN.md, Admin).
+    await expect(app.getByRole('heading', { name: 'How Slack works' })).toHaveCount(0);
   });
 
   test('lets every signed-in member create an explicit one-time identity link', async ({ page }) => {

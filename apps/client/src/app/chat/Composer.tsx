@@ -144,7 +144,7 @@ export function Composer({ session }: { session: SessionState }) {
   const activeStep = status?.steps.find((step) => step.state === 'active');
   const workingPhase = toolPhase ?? (activeStep ? readableStep(activeStep) : null);
   // A run that read a role-inbox email is retried from the email itself
-  // (automatically when the model was busy, or Try again in Role inboxes),
+  // (automatically when the model was busy, or Try again in Admin → Email),
   // never from here: a second retry path would read the email twice.
   const emailRun = Boolean(status && session.messages.some((message) => message.run_id === status.id && emailTurn(message)));
 
@@ -160,7 +160,7 @@ export function Composer({ session }: { session: SessionState }) {
                 ? `${readableWaitingLabel(status.waiting_label) ?? 'Waiting'} · Nothing sent`
                 : status.status === 'stopped'
                   ? 'Stopped · Completed work kept'
-                  : emailRun ? 'Couldn’t finish reading this email · Nothing was sent. It can be tried again from Role inboxes.' : `${runErrorSentence(status.error)} · Completed work kept`}
+                  : emailRun ? 'Couldn’t finish reading this email · Nothing was sent. It can be tried again from Admin → Email.' : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
           {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}

@@ -206,7 +206,7 @@ const RECOVERY_REWRITES: Readonly<Record<string, string>> = {
   'The engine is paused for a deployment. Retry when it is ready.': 'Hermes is updating. Retry in a moment.',
   'The workspace reached its daily token limit. Retry after the limit resets or is updated.': 'This workspace has used its daily allowance. Retry after it resets or an Admin raises it.',
   'The provider requested an extended wait. Automatic retry is paused; check the model connection before retrying.': 'The model asked for a longer wait, so automatic retries are paused. Check the model connection before retrying.',
-  'Reconnect the model provider in Settings before retrying.': 'Reconnect Nous Portal in Admin → Model providers before retrying.',
+  'Reconnect the model provider in Settings before retrying.': 'Reconnect Nous Portal in Admin → Models before retrying.',
   'The failed attempt’s model settings are no longer available. Start a new turn instead.': 'The model this task used isn’t available anymore. Send a new message instead.',
   'This task already created reviewed work. Open its trace to continue without duplicating it.': 'This task already created reviewed work. Open what it did to continue without repeating it.',
   'This task reached a tool that may have changed something. Review its trace before starting another attempt.': 'This task may have already changed something. Review what it did before trying again.',

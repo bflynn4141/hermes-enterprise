@@ -187,8 +187,8 @@ export function AdminSharedIntelligence() {
   return (
     <div className="scroll admin-intelligence-scroll">
       <div className="app-body admin-intelligence">
-        <div className="admin-intelligence-title">
-          <div><h1 className="display-32">Shared Intelligence</h1><p>Rank the lessons members shared against the outcomes your team is working on. The ranking only suggests what to look at first; people decide what is reviewed and published.</p></div>
+        <div className="admin-intelligence-title admin-detail-heading">
+          <div><h2>Shared Intelligence</h2><p>Lessons members shared, ranked against your team’s goals.</p></div>
           <Button onClick={() => setAddingGoal((value) => !value)}>{addingGoal ? 'Cancel' : 'Add goal'}</Button>
         </div>
 

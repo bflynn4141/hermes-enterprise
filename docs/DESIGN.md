@@ -1,4 +1,4 @@
-# Interface language and email design
+# Interface language, email and Admin design
 
 This is the reference for how Hermes talks to people on screen, and for the
 email and inbox surfaces in particular. It was written for the September 27,
@@ -106,7 +106,7 @@ one action: "Mark handled".
 
 ### Role inbox setup
 
-Admin → Role inboxes follows the Help Scout order: choose the role and the
+Role inboxes sit at the top of Admin → Email, above the sending account. Setup follows the Help Scout order: choose the role and the
 agent, name it, copy the address, then route mail to it with Google
 Workspace's own menu names. A deployment without a receiving domain says so
 in one sentence and names who can turn it on, never the configuration key.
@@ -116,6 +116,37 @@ in one sentence and names who can turn it on, never the configuration key.
 An incoming email appears in the agent's "Email · Partnerships" conversation
 as an email card (sender, subject, "Open in Inbox"), not as the instructions
 the agent received. The agent's instructions are stored for the model only.
+
+## Admin
+
+Reworked on September 27, 2026 after the Admin page proved too hard to
+navigate: 13 links stacked above the content in the side pane, so every page
+started about 620px down, and most pages opened with paragraphs explaining how
+the feature works. The pattern comes from Vercel's and Linear's settings (with
+Stripe's and GitHub Primer's as checks).
+
+- **Every page has its own address and one navigation.** Where there is room,
+  a left rail lists the pages in groups. In the narrow side pane the rail
+  becomes one "Admin pages" menu button, and the page starts right under it.
+  The Admin/User view switch is gone; the sidebar's Settings and Admin entries
+  already do that job.
+- **Three groups, eleven pages, no group of one.** Workspace: General, Roles,
+  Approvals, Usage, Data & privacy. Agents: Agents, Models, Capacity, Shared
+  Intelligence. Connections: Slack, Email. A page that only held one setting
+  joins the page it belongs to: the default model lives on Models, run limits
+  on Usage, role inboxes on Email. Old links (`Agents`, `Inboxes`,
+  `Inbox rules`) land on the page that absorbed them.
+- **A title and at most one sentence.** The page heading carries one short
+  sentence or none. Cards take a title, at most one sentence, the controls,
+  and one footer action (Vercel's fieldset).
+- **No how-it-works cards.** Settings pages hold settings. Step-by-step help
+  that someone needs once goes behind a disclosure ("How to send email to an
+  inbox"), closed by default. Explanations of the product belong in docs.
+- **Say it once.** A number shown in a stat row is not repeated in a chart
+  caption, and a list below a chart is not drawn again as a second chart.
+- **Directions use the rail's names.** Messages that send someone to a page
+  say "Admin → Models", "Admin → Capacity", "Admin → Email", matching the
+  labels in the rail.
 
 ## Motion
 

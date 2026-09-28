@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 const FRESH_WORKSPACE = '/?data=empty&key=none';
 
 async function selectModelProviders(page: import('@playwright/test').Page) {
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
+  await openAdminPage(page, 'Models');
   return app;
 }
 
