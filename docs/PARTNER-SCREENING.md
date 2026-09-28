@@ -221,7 +221,7 @@ The server also needs `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
 `GMAIL_STATE_SECRET`, and the exact `GMAIL_REDIRECT_URI`. The Google OAuth web
 client must enable the Gmail API and register the callback. Hermes requests the
 narrow `gmail.send` sensitive scope plus OpenID email identity; it does not ask
-to read the mailbox. Admins connect the dedicated address in Settings → Email.
+to read the mailbox. Admins connect the dedicated address in Admin → Email.
 Refresh credentials use the same envelope-encryption boundary as other provider
 credentials.
 
@@ -230,6 +230,28 @@ mailbox. Use a controlled recipient for the first approved message, inspect the
 Gmail sent folder and Hermes outbox receipt, then enable send-after-approval.
 Google may require OAuth app verification before use beyond configured test
 users.
+
+The sending account can instead be a Microsoft 365 mailbox (decision C99):
+
+```dotenv
+MICROSOFT_MAIL_ENABLED="1"
+MICROSOFT_CLIENT_ID="<Entra application (client) ID>"
+MICROSOFT_CLIENT_SECRET="<client secret value>"
+MICROSOFT_STATE_SECRET="<at least 32 random characters>"
+MICROSOFT_REDIRECT_URI="https://<worker host>/integrations/microsoft/oauth/callback"
+# MICROSOFT_TENANT="organizations"   # or one tenant's ID or domain
+```
+
+Register a web application in Microsoft Entra (App registrations → New
+registration, "Accounts in any organizational directory" unless you pin one
+tenant), add the redirect URI above under Authentication, add the delegated
+Microsoft Graph permissions `Mail.Send` and `User.Read`, and create a client
+secret under Certificates & secrets. Hermes asks only to send as the chosen
+mailbox and to read its address; it never reads mail. A customer's tenant may
+require an administrator to grant consent once, and Microsoft shows an
+"unverified" publisher until the app completes publisher verification. Admins
+choose Connect Google or Connect Microsoft in Admin → Email; the same
+`PARTNER_OUTREACH_EMAIL_MODE` gate applies to both.
 
 ## Live onboarding
 

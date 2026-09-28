@@ -163,7 +163,8 @@ interface MockOptions {
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
-  email?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
+  /** `microsoft`: connected, with a Microsoft 365 sending account (C99). */
+  email?: 'disconnected' | 'connected' | 'microsoft' | 'unconfigured' | 'unavailable';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
   /** Contract fixture for native execution over explicitly labeled sample inputs. */
@@ -1071,7 +1072,8 @@ export function createMockBackend(input: MockOptions = {}) {
   };
 
   let slackConnected = options.slack === 'connected';
-  let emailConnected = options.email === 'connected';
+  let emailConnected = options.email === 'connected' || options.email === 'microsoft';
+  let emailProvider: 'gmail' | 'microsoft' = options.email === 'microsoft' ? 'microsoft' : 'gmail';
   let emailEvidenceConnected = options.email === 'connected';
   let importedEmailEvidence = 0;
 
@@ -2619,13 +2621,22 @@ export function createMockBackend(input: MockOptions = {}) {
     if (path.startsWith(`/w/${WS}/integrations/email`)) {
       if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
         emailConnected = true;
+        emailProvider = 'gmail';
         return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=fixture', expires_at: iso(600) }, 201);
       }
+      if (method === 'POST' && path.endsWith('/microsoft/oauth/start')) {
+        emailConnected = true;
+        emailProvider = 'microsoft';
+        return json({ authorize_url: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?client_id=fixture', expires_at: iso(600) }, 201);
+      }
       if (options.email === 'unavailable') return fail(503, 'unavailable');
+      const available = options.email !== 'unconfigured';
       return json({
-        configured: options.email !== 'unconfigured',
+        configured: available,
         status: emailConnected ? 'connected' : 'disconnected',
-        address: emailConnected && seat === 'admin' ? 'iris-partners@example.com' : null,
+        address: emailConnected && seat === 'admin' ? (emailProvider === 'microsoft' ? 'partners@contoso.example' : 'iris-partners@example.com') : null,
+        provider: emailConnected ? emailProvider : null,
+        providers: { gmail: available, microsoft: available },
         connected_at: emailConnected ? iso(0) : null,
         pending_messages: emailConnected && seat === 'admin' ? 2 : 0,
         can_manage: seat === 'admin',

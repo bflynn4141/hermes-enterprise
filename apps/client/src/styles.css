@@ -636,6 +636,9 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-settings-card-footer { padding: 16px 24px; background: rgba(255,255,255,.025); border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .admin-settings-card-footer p { flex: 1 1 230px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .admin-settings-card-footer > .btn { margin-left: auto; }
+/* A sending account's actions: one per service, logo first, right-aligned. */
+.sender-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; }
+.sender-actions .btn { display: inline-flex; align-items: center; gap: 8px; }
 .admin-settings-card-danger { border-color: rgba(242,139,156,.3); }
 .admin-settings-card-danger .admin-settings-card-header h3 { color: #F2A8B5; }
 .admin-settings-card code { overflow-wrap: anywhere; white-space: normal; }

@@ -1724,6 +1724,8 @@ export const gmailOauthStates = pgTable('gmail_oauth_states', {
   expiresAt: ts('expires_at').notNull(),
   consumedAt: ts('consumed_at'),
   createdAt: now('created_at'),
+  /** 'gmail' | 'microsoft' (0078). */
+  provider: text('provider').notNull().default('gmail'),
 });
 
 export const gmailEvidenceAccounts = pgTable(

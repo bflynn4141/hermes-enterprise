@@ -3,10 +3,12 @@ import { outboundEmailConnectionSchema, outboundEmailOAuthStartSchema } from '@h
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
-import { exchangeGmailCode, gmailProfile } from '../outbound-email/gmail-api.js';
+import { exchangeGmailCode, gmailProfile, type GmailTokenBundle } from '../outbound-email/gmail-api.js';
 import { gmailAuthorizeUrl, gmailConfig, gmailFetcher } from '../outbound-email/gmail-config.js';
 import { signGmailOAuthState, verifyGmailOAuthState } from '../outbound-email/gmail-security.js';
-import { loadGmailAccount, storeGmailAccount } from '../outbound-email/gmail-store.js';
+import { loadSendingAccount, storeSendingAccount, type SendingProvider } from '../outbound-email/gmail-store.js';
+import { exchangeMicrosoftCode, microsoftProfile } from '../outbound-email/microsoft-api.js';
+import { microsoftAuthorizeUrl, microsoftConfig, microsoftFetcher } from '../outbound-email/microsoft-config.js';
 import { sha256Hex } from '../integrations/slack/security.js';
 import { automatedTriggersEnabled, automationIntervalMinutes } from '../partner-screening/automation.js';
 import { inWorkspace } from './tenant.js';
@@ -14,9 +16,10 @@ import { RouteError } from './errors.js';
 
 const OAUTH_TTL_SECONDS = 10 * 60;
 export async function getOutboundEmailConnection(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const configured = gmailConfig(c.env) !== null;
+  const providers = { gmail: gmailConfig(c.env) !== null, microsoft: microsoftConfig(c.env) !== null };
+  const configured = providers.gmail || providers.microsoft;
   const result = await inWorkspace(c, async (work) => {
-    const account = await loadGmailAccount(work.tx, work.workspaceId);
+    const account = await loadSendingAccount(work.tx, work.workspaceId);
     const pending = await work.tx.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM outbound_email_outbox
         WHERE workspace_id=$1 AND state IN ('pending_connection','queued','sending','ambiguous')`,
@@ -27,6 +30,8 @@ export async function getOutboundEmailConnection(c: Context<{ Bindings: Env }>):
       configured,
       status: !configured ? 'unavailable' : account?.status === 'connected' ? 'connected' : account?.status === 'error' ? 'error' : 'disconnected',
       address: admin ? account?.address ?? null : null,
+      provider: account && account.status !== 'disconnected' ? account.provider : null,
+      providers,
       connected_at: admin && account?.status === 'connected' ? account.updated_at.toISOString() : null,
       pending_messages: admin ? pending.rows[0]?.count ?? 0 : 0,
       can_manage: admin,
@@ -38,11 +43,16 @@ export async function getOutboundEmailConnection(c: Context<{ Bindings: Env }>):
   return c.json(result);
 }
 
-export async function startGmailOAuth(c: Context<{ Bindings: Env }>): Promise<Response> {
+/** Begin connecting a sending account: a signed, single-use state tied to the Admin and the provider. */
+async function startSendingOAuth(
+  c: Context<{ Bindings: Env }>,
+  provider: SendingProvider,
+  config: { stateSecret: string; redirectUri: string } | null,
+  authorizeUrl: (state: string) => string,
+): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
-  const config = gmailConfig(c.env);
-  if (!config) throw new RouteError('Gmail outreach is not configured for this deployment', 'gmail_unavailable', 503);
+  if (!config) throw new RouteError(`${PROVIDER_NAME[provider]} sending is not configured for this deployment`, `${provider}_unavailable`, 503);
   const started = await inWorkspace(c, async (work) => {
     work.requireAdmin('connecting an outreach mailbox');
     requireStepUp(work.session);
@@ -58,27 +68,49 @@ export async function startGmailOAuth(c: Context<{ Bindings: Env }>): Promise<Re
     const state = await signGmailOAuthState(payload, config.stateSecret);
     await work.tx.query(
       `INSERT INTO gmail_oauth_states
-         (workspace_id,requested_by,state_digest,redirect_uri,expires_at)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [work.workspaceId, work.userId, await sha256Hex(state), config.redirectUri, new Date(payload.expires_at * 1000)],
+         (workspace_id,requested_by,state_digest,redirect_uri,expires_at,provider)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [work.workspaceId, work.userId, await sha256Hex(state), config.redirectUri, new Date(payload.expires_at * 1000), provider],
     );
-    return outboundEmailOAuthStartSchema.parse({ authorize_url: gmailAuthorizeUrl(config, state), expires_at: new Date(payload.expires_at * 1000).toISOString() });
+    return outboundEmailOAuthStartSchema.parse({ authorize_url: authorizeUrl(state), expires_at: new Date(payload.expires_at * 1000).toISOString() });
   });
   return c.json(started, 201);
 }
 
-function callbackLocation(workspaceId: string, result: 'connected' | 'failed'): string {
-  return `/workspace/${encodeURIComponent(workspaceId)}?gmail=${result}#admin/Email`;
+const PROVIDER_NAME = { gmail: 'Gmail', microsoft: 'Microsoft' } as const;
+
+export async function startGmailOAuth(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const config = gmailConfig(c.env);
+  return startSendingOAuth(c, 'gmail', config, (state) => gmailAuthorizeUrl(config!, state));
 }
 
-export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const config = gmailConfig(c.env);
-  if (!config) throw new RouteError('Gmail outreach is not configured for this deployment', 'gmail_unavailable', 503);
+export async function startMicrosoftOAuth(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const config = microsoftConfig(c.env);
+  return startSendingOAuth(c, 'microsoft', config, (state) => microsoftAuthorizeUrl(config!, state));
+}
+
+function callbackLocation(workspaceId: string, provider: SendingProvider, result: 'connected' | 'failed'): string {
+  return `/workspace/${encodeURIComponent(workspaceId)}?${provider}=${result}#admin/Email`;
+}
+
+/**
+ * Finish connecting a sending account: consume the provider's single-use state,
+ * learn the mailbox's address, seal its token, then release the approved emails
+ * that were waiting for that exact sender.
+ */
+async function completeSendingOAuth(
+  c: Context<{ Bindings: Env }>,
+  provider: SendingProvider,
+  config: { stateSecret: string; redirectUri: string } | null,
+  connect: (code: string) => Promise<{ token: GmailTokenBundle; address: string }>,
+): Promise<Response> {
+  const name = PROVIDER_NAME[provider];
+  if (!config) throw new RouteError(`${name} sending is not configured for this deployment`, `${provider}_unavailable`, 503);
   const stateRaw = c.req.query('state') ?? '';
   const code = c.req.query('code') ?? '';
   const state = await verifyGmailOAuthState(stateRaw, config.stateSecret);
   if (!state || !code || state.redirect_uri !== config.redirectUri) {
-    throw new RouteError('the Gmail connection link is invalid or expired', 'gmail_oauth_state_invalid', 400);
+    throw new RouteError(`the ${name} connection link is invalid or expired`, 'gmail_oauth_state_invalid', 400);
   }
   const digest = await sha256Hex(stateRaw);
   await withWorkspaceTransaction(c.env, state.workspace_id, async (tx) => {
@@ -87,23 +119,23 @@ export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise
         JOIN members m ON m.workspace_id=s.workspace_id AND m.user_id=s.requested_by
        WHERE s.workspace_id=$1 AND s.requested_by=$2 AND s.state_digest=$3
          AND s.consumed_at IS NULL AND s.expires_at>now() AND m.status='active'
+         AND s.provider=$4
        FOR UPDATE`,
-      [state.workspace_id, state.user_id, digest],
+      [state.workspace_id, state.user_id, digest, provider],
     );
-    if (match.rows[0]?.role !== 'admin') throw new RouteError('the Gmail connection link is no longer valid', 'gmail_oauth_state_invalid', 400);
+    if (match.rows[0]?.role !== 'admin') throw new RouteError(`the ${name} connection link is no longer valid`, 'gmail_oauth_state_invalid', 400);
     await tx.query(`UPDATE gmail_oauth_states SET consumed_at=now() WHERE workspace_id=$1 AND id=$2`, [state.workspace_id, match.rows[0].id]);
   });
 
   try {
-    const fetcher = gmailFetcher(c.env);
-    const token = await exchangeGmailCode(config, code, fetcher);
-    const address = await gmailProfile(token.access_token, fetcher);
+    const { token, address } = await connect(code);
     const jobs = await withWorkspaceTransaction(c.env, state.workspace_id, async (tx) => {
-      const account = await storeGmailAccount(tx, c.env, {
+      const account = await storeSendingAccount(tx, c.env, {
         workspaceId: state.workspace_id,
         connectedBy: state.user_id,
         address,
         token,
+        provider,
       });
       const pending = await tx.query<{ id: string }>(
         `UPDATE outbound_email_outbox SET account_id=$3,state='queued',last_error=NULL
@@ -142,15 +174,33 @@ export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise
       }
       await tx.query(
         `INSERT INTO events (workspace_id,actor_type,actor_user_id,kind)
-         VALUES ($1,'user',$2,'gmail.connected')`,
-        [state.workspace_id, state.user_id],
+         VALUES ($1,'user',$2,$3)`,
+        [state.workspace_id, state.user_id, provider === 'microsoft' ? 'microsoft_mail.connected' : 'gmail.connected'],
       );
       return jobIds;
     });
     if (jobs.length) c.executionCtx.waitUntil(runJobsAfterCommit(c.env, state.workspace_id, jobs));
-    return c.redirect(callbackLocation(state.workspace_id, 'connected'), 302);
+    return c.redirect(callbackLocation(state.workspace_id, provider, 'connected'), 302);
   } catch (error) {
-    console.error(JSON.stringify({ at: 'gmail.oauth.callback', ok: false, error: error instanceof Error ? error.message : 'upstream_failed' }));
-    return c.redirect(callbackLocation(state.workspace_id, 'failed'), 302);
+    console.error(JSON.stringify({ at: `${provider}.oauth.callback`, ok: false, error: error instanceof Error ? error.message : 'upstream_failed' }));
+    return c.redirect(callbackLocation(state.workspace_id, provider, 'failed'), 302);
   }
+}
+
+export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const config = gmailConfig(c.env);
+  return completeSendingOAuth(c, 'gmail', config, async (code) => {
+    const fetcher = gmailFetcher(c.env);
+    const token = await exchangeGmailCode(config!, code, fetcher);
+    return { token, address: await gmailProfile(token.access_token, fetcher) };
+  });
+}
+
+export async function microsoftOAuthCallback(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const config = microsoftConfig(c.env);
+  return completeSendingOAuth(c, 'microsoft', config, async (code) => {
+    const fetcher = microsoftFetcher(c.env);
+    const token = await exchangeMicrosoftCode(config!, code, fetcher);
+    return { token, address: await microsoftProfile(token.access_token, fetcher) };
+  });
 }

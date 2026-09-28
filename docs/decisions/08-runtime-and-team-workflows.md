@@ -1948,3 +1948,40 @@ deletion on removal), and `packages/shared/test/events.test.ts` (an intake
 run's `run.started` parses, which a live walkthrough caught when the client
 resynced on it).
 
+## C99. A Microsoft 365 mailbox can be the sending account
+
+**Decided September 27, 2026.** Companies on Microsoft 365 could receive email
+through role inboxes (C98) but could send approved email only from Gmail.
+
+- **Same model, second transport.** A Microsoft account is an
+  `outbound_email_accounts` row with `provider='microsoft'` (0078): one row per
+  address, its token sealed under the same envelope boundary. The outbox still
+  matches an approved email to an account by the exact sender the approval
+  named, and the send job still re-checks the approval's revision and hash
+  before sending, whichever provider holds the mailbox.
+- **The approved bytes, not a re-rendering.** Graph's `/me/sendMail` accepts a
+  base64 MIME message, so Hermes sends the same RFC 5322 message it would give
+  Gmail, including `In-Reply-To` and `References` for a role-inbox reply. Graph
+  answers 202 with no message id; its `request-id` is stored as the provider
+  reference. 429 retries; 5xx and transport failures are ambiguous and are not
+  retried, as for Gmail.
+- **Narrow permissions.** Delegated `Mail.Send` and `User.Read` plus
+  `offline_access`; nothing reads the mailbox. The sign-in always asks which
+  account (`prompt=select_account`), because the Admin connecting is often
+  signed in as themselves rather than the shared sender. An account without a
+  mailbox address is refused rather than guessed. Microsoft rotates refresh
+  tokens; the newest one replaces the stored one.
+- **One state table, provider-bound.** Single-use OAuth states gain a
+  `provider` column, and each callback consumes only its own provider's
+  states.
+
+**Not in this pass.** Reading Outlook threads as evidence (Gmail has
+`gmail-evidence`); an Entra app for staging, which needs a person to register
+it and set the secrets.
+
+**Evidence.** `test/unit/microsoft-outbound.test.ts` (config gate and tenant
+validation, scopes, token exchange and rotation, mailbox address rules, MIME
+send and error classes) and `test/db/microsoft-sending.test.ts` (an approved
+role-inbox reply waiting for a mailbox is sent through Graph after connecting,
+with threading headers; the connection view; a Google state refused by the
+Microsoft callback; refresh under the row lock).

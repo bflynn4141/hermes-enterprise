@@ -9,6 +9,7 @@
 // Run limits use explicit saves. Members use the product’s own inline rows
 // (decision C46) — `RecordsTable` is a database surface and a membership list
 // is not one.
+import { BrandIcon } from '../ui/brand-icons.js';
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
@@ -1202,7 +1203,14 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
   );
 }
 
-const UNCONFIGURED_GMAIL = 'Sending from Gmail is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.';
+const UNCONFIGURED_EMAIL = 'Sending email is not available on this deployment yet. Ask the person who runs Hermes for your company to turn it on.';
+
+/** The two services a sending account can be (C99), in the words and logos people know them by. */
+const SENDERS = {
+  gmail: { service: 'Google', product: 'Gmail', brand: 'gmail', signIn: 'google', opening: 'Opening Google…' },
+  microsoft: { service: 'Microsoft', product: 'Microsoft 365', brand: 'microsoft', signIn: 'microsoft', opening: 'Opening Microsoft…' },
+} as const;
+type SenderProvider = keyof typeof SENDERS;
 
 function EmailTab() {
   const state = useAppState();
@@ -1210,11 +1218,16 @@ function EmailTab() {
   const admin = useIsAdmin();
   const [connection, setConnection] = useState<OutboundEmailConnection | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const callback = useCallbackResult('gmail');
-  const [notice, setNotice] = useState<string | null>(() => (callback === 'connected'
-    ? 'Gmail is connected. Approved emails will be sent from this account.'
-    : callback === 'failed' ? 'Gmail was not connected. Nothing changed. Try again.' : null));
+  const [busy, setBusy] = useState<SenderProvider | null>(null);
+  const gmailResult = useCallbackResult('gmail');
+  const microsoftResult = useCallbackResult('microsoft');
+  const [notice, setNotice] = useState<string | null>(() => {
+    const [provider, result] = microsoftResult ? ['microsoft', microsoftResult] as const : ['gmail', gmailResult] as const;
+    const { product } = SENDERS[provider];
+    return result === 'connected'
+      ? `${product} is connected. Approved emails will be sent from this account.`
+      : result === 'failed' ? `${product} was not connected. Nothing changed. Try again.` : null;
+  });
 
   const load = (): void => {
     if (!state.workspace.id) return;
@@ -1226,55 +1239,73 @@ function EmailTab() {
   };
   useEffect(load, [adapter, state.workspace.id]);
 
-  const connect = async (): Promise<void> => {
-    setBusy(true);
+  const connect = async (provider: SenderProvider): Promise<void> => {
+    setBusy(provider);
     setNotice(null);
     try {
-      const started = await adapter.rest.startGmailOAuth(state.workspace.id);
+      const started = provider === 'microsoft'
+        ? await adapter.rest.startMicrosoftOAuth(state.workspace.id)
+        : await adapter.rest.startGmailOAuth(state.workspace.id);
       window.location.assign(started.authorize_url);
     } catch (caught) {
       const error = caught as { status?: number; reason?: string };
       if (error.status === 401 && error.reason === 'reauth_required') {
-        const url = adapter.auth.stepUpUrl(window.location.href, 'gmail');
+        const url = adapter.auth.stepUpUrl(window.location.href, provider);
         if (url) window.location.assign(url);
         else setNotice('This needs a recent sign-in. Sign in again to continue.');
       } else {
-        setNotice(error.reason === 'gmail_unavailable'
-          ? UNCONFIGURED_GMAIL
-          : error.reason === 'admin_required' ? EMPTY.adminRequired : 'Google could not be opened. Nothing changed. Try again.');
+        setNotice(error.reason === `${provider}_unavailable`
+          ? UNCONFIGURED_EMAIL
+          : error.reason === 'admin_required' ? EMPTY.adminRequired : `${SENDERS[provider].service} could not be opened. Nothing changed. Try again.`);
       }
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   if (!connection && !statusError) return <Skeleton rows={4} label="Loading email connection" />;
   const connected = connection?.status === 'connected';
+  const current = connection?.provider ? SENDERS[connection.provider] : null;
+  const available = (Object.keys(SENDERS) as SenderProvider[]).filter((provider) => connection?.providers[provider]);
   const sendingEnabled = connection?.mode === 'send_after_approval';
   const badge: ConnectionBadge | null = statusError ? null : connected ? { label: 'Connected', tone: 'ok' } : connection?.status === 'error' ? { label: 'Needs attention', tone: 'warn' } : null;
+  const connectButton = (provider: SenderProvider, primary = false) => (
+    <Button key={provider} primary={primary} disabled={busy !== null} onClick={() => void connect(provider)}>
+      <BrandIcon name={SENDERS[provider].signIn} size={16} />
+      {busy === provider ? SENDERS[provider].opening : `Connect ${SENDERS[provider].service}`}
+    </Button>
+  );
+  const other = connection?.provider ? available.find((provider) => provider !== connection.provider) : undefined;
   return (
     <>
       {notice && <Ack show>{notice}</Ack>}
       <AdminSettingsCard
         title="Sending account"
-        brand="gmail"
+        brand={current && connection?.status !== 'disconnected' ? current.brand : 'email'}
         badge={badge}
-        description={connected
-          ? 'Approved replies and outreach go out from this Gmail account.'
-          : connection?.configured || statusError ? 'Approved replies and outreach go out from a Gmail account you connect.' : UNCONFIGURED_GMAIL}
+        description={current && connected
+          ? `Approved replies and outreach go out from this ${current.product} account.`
+          : connection?.configured || statusError ? 'Approved replies and outreach go out from a Google or Microsoft account you connect.' : UNCONFIGURED_EMAIL}
         footer={statusError ? (
-          <Button disabled={busy} onClick={load}>Try again</Button>
+          <Button disabled={busy !== null} onClick={load}>Try again</Button>
         ) : admin && connection?.configured ? (
-          <Button primary={!connected} disabled={busy} onClick={connect}>
-            {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
-          </Button>
+          current && connection.provider ? (
+            <div className="sender-actions">
+              {other && <Button link disabled={busy !== null} onClick={() => void connect(other)}>Use {SENDERS[other].service} instead</Button>}
+              <Button primary={!connected} disabled={busy !== null} onClick={() => void connect(connection.provider!)}>
+                {busy === connection.provider ? current.opening : `Reconnect ${current.product}`}
+              </Button>
+            </div>
+          ) : (
+            <div className="sender-actions">{available.map((provider) => connectButton(provider))}</div>
+          )
         ) : undefined}
       >
         {statusError ? (
           <p className="meta" role="alert">{statusError}</p>
-        ) : connection && (
+        ) : connection && (connection.address || connection.configured) && (
           <>
             {connection.address && <div className="kv"><span className="grow">Sends from</span><span className="meta">{connection.address}</span></div>}
-            {connection.configured && <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'On, only what a person approved' : 'Off, approved emails are kept as drafts'}</span></div>}
+            {connection.configured && connected && <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'On, only what a person approved' : 'Off, approved emails are kept as drafts'}</span></div>}
             {connection.configured && connection.pending_messages > 0 && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{connection.pending_messages}</span></div>}
           </>
         )}

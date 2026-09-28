@@ -37,6 +37,16 @@ GMAIL_OUTREACH_ENABLED="0"
 # GMAIL_STATE_SECRET=""
 # GMAIL_REDIRECT_URI="http://localhost:8787/integrations/gmail/oauth/callback"
 
+# Microsoft 365 / Outlook sending account (C99). Register an app in Microsoft
+# Entra with this redirect URI and the delegated Graph permissions Mail.Send and
+# User.Read, then create a client secret.
+MICROSOFT_MAIL_ENABLED="0"
+# MICROSOFT_CLIENT_ID=""
+# MICROSOFT_CLIENT_SECRET=""
+# MICROSOFT_STATE_SECRET="replace-with-at-least-32-random-characters"
+# MICROSOFT_REDIRECT_URI="http://localhost:8787/integrations/microsoft/oauth/callback"
+# MICROSOFT_TENANT="organizations"
+
 # Optional selected-thread evidence intake. Use a separate Google OAuth client;
 # never reuse the outreach sender client or its secret.
 GMAIL_EVIDENCE_ENABLED="0"

@@ -325,6 +325,7 @@ export function AdminEmailInboxes() {
       <ol>
         <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
         <li>In Google Workspace: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
+        <li>In Microsoft 365: Exchange admin center → Mail flow → Rules → Add a rule that sends a copy to the address.</li>
         <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
       </ol>
     </details>}
