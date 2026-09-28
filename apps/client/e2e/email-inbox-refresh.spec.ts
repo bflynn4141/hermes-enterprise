@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 test('role inboxes keep checking for email until the page is hidden or closed', async ({ page }) => {
   await page.addInitScript(() => {
@@ -13,7 +14,7 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
   await page.goto('/#admin/Inboxes');
   await page.getByRole('button', { name: 'Add inbox', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Add inbox', exact: true }).click();
-  await expect(page.getByText('No email yet. Send one to the address above to try it.')).toBeVisible();
+  await expect(page.getByText('No email yet')).toBeVisible();
   const reads = () => page.evaluate(() => {
     const paths = (window as unknown as { __emailReads: string[] }).__emailReads;
     return { inboxes: paths.filter((path) => path.endsWith('/inboxes')).length, messages: paths.filter((path) => path.endsWith('/messages')).length };
@@ -38,7 +39,7 @@ test('role inboxes keep checking for email until the page is hidden or closed', 
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect.poll(async () => (await reads()).messages).toBe(after.messages + 1);
-  await page.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Workspace details', exact: true }).click();
+  await openAdminPage(page, 'General');
   const closed = await reads();
   await page.clock.runFor(15_000);
   expect(await reads()).toEqual(closed);

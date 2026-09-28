@@ -1025,7 +1025,7 @@ export function createMockBackend(input: MockOptions = {}) {
     from: '2026-10-06T00:00:00.000Z',
     to: '2026-10-12T23:59:59.000Z',
     disclaimer:
-      'Estimated, billed by your provider. These figures are our arithmetic over published prices; your provider invoices your own key and is the authority.',
+      'Estimated from published prices. Your provider’s bill is final.',
     totals: usageDays.reduce(
       (acc, day) => ({
         input_tokens: acc.input_tokens + day.input_tokens,

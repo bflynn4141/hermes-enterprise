@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { EnterpriseSkillAssignment, InstructionVersion, SkillVersion } from '@hermes/shared';
 import { useAdapter, useAppState, useIsAdmin, useNav } from '../store-context.js';
 import { agentName } from '../selectors.js';
-import { Button } from '../ui/primitives.js';
+import { Button, EmptyState } from '../ui/primitives.js';
 import { AgentHead, AgentTabsRow } from './Agent.js';
 import { SkillAssignmentEditor } from './Workspace.js';
 import './agent-skills-settings.css';
@@ -111,7 +111,7 @@ function SkillsSettings() {
     {loading && <p role="status" className="meta">Loading agent settings…</p>}
     {error && <div role="alert" className="iris-skills-error"><p>{error}</p><Button disabled={saving} onClick={() => setRefresh((value) => value + 1)}>Reload current settings</Button></div>}
     {status && <p role="status" className="meta">{status}</p>}
-    {!loading && !agentId && <p>No agent selected.</p>}
+    {!loading && !agentId && <EmptyState icon="iris" title="No agent selected" />}
     {!loading && ready && agentId && <>
       <section className="iris-skills-instructions" aria-label={`Instructions for ${agent}`}>
         <div className="iris-skills-heading"><div><h2 className="display-28">Instructions for {agent}</h2><p className="meta">{current ? `${current.provenance ?? 'Saved instructions'} · ${new Date(current.created_at).toLocaleDateString()}` : 'No standing instructions saved yet'}</p></div>
@@ -126,7 +126,7 @@ function SkillsSettings() {
       </section>
       {proposals.map((proposal) => <section className="iris-skills-instructions" key={proposal.id} aria-label="Proposed instructions"><h3 className="section-title">Suggested instruction change</h3><p className="meta">{proposal.provenance ?? 'Proposed by a run'} · Not saved</p><details><summary>Compare with current instructions</summary><p className="iris-skills-copy">{current?.text ?? proposal.before ?? 'No current instructions'}</p></details><p className="iris-skills-copy">{proposal.text}</p><div className="iris-skills-actions"><Button disabled={!admin || saving || editing} onClick={() => void decide(proposal, 'discard')}>Discard</Button><Button primary disabled={!admin || saving || editing} onClick={() => void decide(proposal, 'accept')}>Accept for future runs</Button></div></section>)}
       <section><h2 className="display-28">Assigned skills</h2><p className="meta">Each skill runs within {agent}’s permissions.</p>
-        {!assignments.length && !skills.some((row) => row.adopted) && <p className="meta">No skills assigned yet.</p>}
+        {!assignments.length && !skills.some((row) => row.adopted) && <EmptyState compact icon="skill" title="No skills assigned yet" />}
         {assignments.map((assignment) => <div key={assignment.id}><div className="iris-skills-row"><div><h3>{assignment.name}</h3><p className="meta">{assignment.description} · {assignment.version}</p><p className="meta">{assignment.team?.name ?? 'Workspace'} · {assignment.agent_name ?? agent} · {assignment.state === 'active' ? 'Active' : 'Paused'} · revision {assignment.revision}</p></div><Button disabled={!admin || saving} aria-expanded={configuring === assignment.id} onClick={() => setConfiguring(configuring === assignment.id ? null : assignment.id)}>{configuring === assignment.id ? 'Close' : 'Configure →'}</Button></div>
           {configuring === assignment.id && <SkillAssignmentEditor key={`${assignment.id}:${assignment.revision}`} assignment={assignment} onCancel={() => setConfiguring(null)} onSave={async (patch) => { const next = await adapter.rest.updateSkillAssignment(workspaceId, agentId, assignment.id, patch); setAssignments((rows) => rows.map((row) => row.id === next.id ? next : row)); setConfiguring(null); setStatus('Skill configuration saved.'); }} />}
         </div>)}

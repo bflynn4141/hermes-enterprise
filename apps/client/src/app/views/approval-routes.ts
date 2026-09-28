@@ -17,8 +17,8 @@ import {
 
 export const ADMIN_APPROVALS_VIEW = 'Approvals';
 
-export const APPROVALS_SCOPE = 'Who approves business decisions and the actions that follow them. This is separate from the command safety checks Hermes agents ask for.';
-export const APPROVALS_LIVE = 'Changes apply to work already waiting as well as new work.';
+/** Shown beside Save once something changed: the one consequence to know. */
+export const APPROVALS_LIVE = 'Saving also applies to work already waiting.';
 export const NO_APPROVER_MESSAGE = 'Choose at least one group who can approve.';
 export const OTHER_CURRENCY_HINT = 'Amounts in another currency use this rule too.';
 export const AMOUNT_PROBLEM = 'Enter an amount above zero, like 5000.';

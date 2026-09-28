@@ -71,6 +71,12 @@ Changes to RLS, grants, migrations, decisions, provider credentials, or runtime
 admission require focused tests in addition to typechecking. Validate interface
 changes in a rendered browser at desktop and narrow widths.
 
+Build interface from the primitives in `apps/client/src/app/ui` and follow
+[docs/DESIGN.md](docs/DESIGN.md): `Tabs` for page and section navigation,
+`EmptyState` for anything empty, sentence case, one sentence under a title.
+`apps/client/src/app/design-system.test.ts` enforces the checkable rules in
+`pnpm check:quick`; fix the code rather than widening its allowlists.
+
 For a user-visible change, deploy a preview once the pull request exists and
 check the change there: `node scripts/preview.mjs up <pr> --comment`. It posts
 the link on the PR; take it down with `down <pr>` when the PR closes. See

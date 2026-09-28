@@ -1,4 +1,4 @@
-# Interface language and email design
+# Interface language, email and Admin design
 
 This is the reference for how Hermes talks to people on screen, and for the
 email and inbox surfaces in particular. It was written for the September 27,
@@ -106,7 +106,7 @@ one action: "Mark handled".
 
 ### Role inbox setup
 
-Admin → Role inboxes follows the Help Scout order: choose the role and the
+Role inboxes sit at the top of Admin → Email, above the sending account. Setup follows the Help Scout order: choose the role and the
 agent, name it, copy the address, then route mail to it with Google
 Workspace's own menu names. A deployment without a receiving domain says so
 in one sentence and names who can turn it on, never the configuration key.
@@ -116,6 +116,106 @@ in one sentence and names who can turn it on, never the configuration key.
 An incoming email appears in the agent's "Email · Partnerships" conversation
 as an email card (sender, subject, "Open in Inbox"), not as the instructions
 the agent received. The agent's instructions are stored for the model only.
+
+## Admin
+
+Reworked on September 27, 2026 after the Admin page proved too hard to
+navigate: 13 links stacked above the content in the side pane, so every page
+started about 620px down, and most pages opened with paragraphs explaining how
+the feature works. The pattern comes from Vercel's and Linear's settings (with
+Stripe's and GitHub Primer's as checks).
+
+- **Every page has its own address; navigation is two levels of tabs.** The
+  left rail names only the three sections. The section's pages are tabs above
+  the content, the same `Tabs` the Agent page uses; the tab names the page, so
+  the page's own heading is for screen readers only. Where the pane is too
+  narrow for a rail, the sections become a row of tabs too. No dropdown menus
+  for navigation. The Admin/User view switch is gone; the sidebar's Settings
+  and Admin entries already do that job.
+- **Three sections, eleven pages, no section of one.** Workspace: General, Roles,
+  Approvals, Usage, Data & privacy. Agents: Agents, Models, Capacity, Shared
+  Intelligence. Connections: Slack, Email. A page that only held one setting
+  joins the page it belongs to: the default model lives on Models, run limits
+  on Usage, role inboxes on Email. Old links (`Agents`, `Inboxes`,
+  `Inbox rules`) land on the page that absorbed them.
+- **Nothing floats under the tabs.** A page starts with `AdminPageHeader`,
+  which has a title for screen readers and an optional row of actions, and no
+  description slot. Cards take a title, at most one sentence, the controls,
+  and one footer action (Vercel's fieldset). A consequence worth knowing goes
+  where the action is: "Saving also applies to work already waiting" appears
+  beside Save once something changed. Only a drill-down (one agent, one role,
+  one approval) shows a visible title with the record's own description.
+- **Status lives in its row.** A connection's state is a pill in the card's
+  Status or Connection row, not a second pill beside the page.
+- **No how-it-works cards.** Settings pages hold settings. Step-by-step help
+  that someone needs once goes behind a disclosure ("How to send email to an
+  inbox"), closed by default. Explanations of the product belong in docs.
+- **Say it once.** A number shown in a stat row is not repeated in a chart
+  caption, and a list below a chart is not drawn again as a second chart.
+- **Directions use the rail's names.** Messages that send someone to a page
+  say "Admin → Models", "Admin → Capacity", "Admin → Email", matching the
+  labels in the rail.
+
+## Connections
+
+Admin → Connections holds one page per connected service (Slack, Email). Set
+on September 27, 2026 from a review of how agent products add and manage
+connections: Composio, Arcade, Pipedream Connect, Claude's and ChatGPT's
+connectors, Merge Agent Handler, Paragon and Notion AI.
+
+- **A list, not a gallery, while there are few.** Galleries belong to large
+  catalogs (Claude's directory, Composio). With two to six services, each is a
+  tab with its logo; add an "Add connection" gallery only past about six.
+- **Every connection shows its service's logo** (`BrandIcon`, from the CC0
+  Iconify logos set) in its tab and on its card, so it is recognisable before
+  it is read.
+- **Status only when it says something.** No badge for "Not connected"; the
+  Connect button says it. A healthy connection is a quiet green "Connected"
+  beside the title. Only a connection that needs someone gets a pill: "Needs
+  attention". Never a status row repeating the title.
+- **Name the account agents act as.** A connected card shows which account
+  (Sends from, the Slack workspace) without opening anything.
+- **Say what stops before disconnecting.** The confirmation names what stops
+  working; earlier work stays.
+- **Organization connections and personal links stay distinct.** The Slack
+  install and the Gmail sending account belong to the workspace; a person's
+  Slack identity link is theirs.
+
+Next, when the data exists (not built yet): a "What agents can do" list per
+connection that links each action to its approval rule rather than repeating
+it; who has linked their Slack identity; last used and a periodic health check
+so an expired token shows here before an approved action fails.
+
+## Design system rules
+
+These hold across the app. `apps/client/src/app/design-system.test.ts` checks
+the ones a pattern can catch, in `pnpm check:quick`, and names the primitive to
+use when it fails.
+
+- **Navigation between views is `Tabs`.** A page with sibling views shows them
+  as a tab row (`Tabs strong` for a page's top level, as on the Agent page). A
+  dropdown is for choosing a value in a form, not for moving between pages.
+  Only the phone layout falls back to a native select. Checked: no
+  `role="tablist"` outside the primitive.
+- **Anything empty is an `EmptyState`.** A list, tab, section or popover with
+  nothing in it shows an icon and a short title, plus at most one line of
+  detail, centered. Its action sits below the words, inside the empty state:
+  while a list is empty, its "Add …" button moves out of the header and into
+  the empty state, and returns to the header once there is something to list.
+  Use `compact` inside a card, section or popover; the full size fills a page
+  or tab. Never a bare "No … yet." sentence. `icon` accepts only glass icons
+  that exist. A missing value in a field
+  ("No owner", "No limit") is a value, not an empty state, and stays text.
+  Checked: an emptiness test followed by a "No…"/"Nothing…" element, or any
+  element reading "No … yet".
+- **Sentence case, no uppercase eyebrows.** Checked: no `text-transform:
+  uppercase` except an invoice's printed labels and the development-only
+  account switcher.
+- **Text is 12px or larger.** Older styles below 12px are being paid down; the
+  check is a ratchet, so the count may fall but not rise.
+- **A title and at most one sentence.** Checked for Admin pages: only the
+  three drill-downs may use a visible heading with a description. Elsewhere
+  reviewed against this document.
 
 ## Motion
 

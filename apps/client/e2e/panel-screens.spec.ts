@@ -7,6 +7,7 @@
 //
 //     npx playwright test e2e/panel-screens.spec.ts
 import { expect, test, type Page } from '@playwright/test';
+import { openAdminPage } from './admin-nav.js';
 import { expectNoNavOverlap, setPanel, type Panel } from './panel-helpers.js';
 
 const shot = (name: string) => ({ path: `qa/panel/${name}.png`, fullPage: false });
@@ -51,7 +52,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       // "Open Iris" button in two of the three states, and it sorts first.
       await view(page).getByRole('button', { name: /^Open/ }).first().click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Allowed tools')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Steps', exact: true })).toBeVisible()),
   },
   {
     key: 'inbox',
@@ -131,25 +132,25 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     key: 'admin-model-providers',
     go: async (page) => {
       await nav(page, 'Admin').click();
-      await adminPage(page, 'Model providers').click();
+      await openAdminPage(page, 'Models');
     },
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Model providers' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Models', exact: true })).toBeVisible()),
   },
   {
     key: 'admin-usage',
     go: async (page) => {
       await nav(page, 'Admin').click();
-      await adminPage(page, 'Usage').click();
+      await openAdminPage(page, 'Usage');
     },
-    ready: async (page) => void (await expect(app(page).getByText(/Estimated, billed by your provider/)).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByText(/Estimated from published prices/)).toBeVisible()),
   },
   {
     key: 'admin-agent-defaults',
     go: async (page) => {
       await nav(page, 'Admin').click();
-      await adminPage(page, 'Agent defaults').click();
+      await openAdminPage(page, 'Models');
     },
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Model defaults' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Default model' })).toBeVisible()),
   },
   {
     key: 'settings-privacy',
@@ -163,7 +164,6 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
 
 const app = (page: Page) => page.getByRole('region', { name: 'Application' });
 /** One Admin page in the settings rail. */
-const adminPage = (page: Page, label: string) => app(page).getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: label, exact: true });
 /** The app pane's content, below its header and subheader. */
 const view = (page: Page) => page.locator('.pane-app .object-view');
 /** Nav clicks are scoped: "History" is also a button inside the app pane. */
@@ -202,7 +202,7 @@ test('onboarding and the shared viewer, which have no panel', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Name your workspace' })).toBeVisible();
   await page.screenshot(shot('1840-none-onboarding-create'));
   await page.goto('/onboarding/join?token=inv_demo');
-  await expect(page.getByRole('heading', { name: 'Join a workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Join /, level: 1 })).toBeVisible();
   await page.screenshot(shot('1840-none-onboarding-join'));
   await page.goto('/shared/mock-share-token');
   await expect(page.getByText(/This is a read-only view/)).toBeVisible();

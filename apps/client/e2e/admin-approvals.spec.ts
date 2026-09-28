@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 // Admin → Approvals against the mock backend, which mirrors the server's
 // approval routes: seven rules at their defaults, the same refusals, member
@@ -21,10 +22,10 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/#admin/Approvals');
   const pane = app(page);
-  await expect(pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Approvals', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expectAdminPage(page, 'Approvals');
   await expect(pane.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
-  await expect(pane.getByText('Who approves business decisions and the actions that follow them. This is separate from the command safety checks Hermes agents ask for.')).toBeVisible();
-  await expect(pane.getByText('Changes apply to work already waiting as well as new work.')).toBeVisible();
+  // No sentence floats under the tabs; the one consequence shows beside Save.
+  await expect(pane.getByText(/already waiting/)).toHaveCount(0);
 
   const decisions = pane.getByRole('list', { name: 'Decisions' });
   const actions = pane.getByRole('list', { name: 'Actions after approval' });
@@ -39,7 +40,7 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(workflow.getByRole('listitem')).toHaveCount(4);
   await expect(workflow.getByRole('button')).toHaveCount(0);
   await expect(workflow.getByRole('listitem').filter({ hasText: 'Partner engagement record changes' })).toContainText('Reviewed by the Finance person on the handoff');
-  await expect(pane.getByText('Hermes chooses who reviews these. They cannot be changed here yet.')).toBeVisible();
+  await expect(pane.getByText('Set by Hermes.')).toBeVisible();
   await shoot(page, 'approvals-list');
 
   await payment.click();
@@ -54,6 +55,7 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(above.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
   await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
   await who.getByRole('combobox', { name: 'How many different people' }).selectOption('3');
+  await expect(above.getByRole('status')).toHaveText('Saving also applies to work already waiting.');
   // One Finance group: "One from each group" has nothing to choose between.
   await expect(who.getByRole('switch', { name: 'One from each group' })).toHaveCount(0);
   await expect(who.getByRole('switch', { name: 'Can the person who approved the request also do this?' })).toHaveAttribute('aria-checked', 'true');
@@ -75,7 +77,7 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(payment).toContainText('Finance · 2 different people · Default');
 
   // Roles and approvals read as one system.
-  await pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Roles', exact: true }).click();
+  await openAdminPage(page, 'Roles');
   await expect(pane.getByRole('list', { name: 'Roles' }).getByRole('button', { name: /^Finance/ })).toContainText('Approves Pay an approved invoice');
 });
 

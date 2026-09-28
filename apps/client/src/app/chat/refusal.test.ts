@@ -12,7 +12,7 @@ describe('refusalFor', () => {
   it('names the provider for a missing key, and the way to fix it', () => {
     const refusal = refusalFor(new RestError(400, 'no_key', 'Add a deepseek key in Settings to start'), { provider: 'nous_portal' });
     expect(refusal.text).toBe('Connect Nous Portal to start. Nothing was sent, and your draft is still here.');
-    expect(refusal.action).toEqual({ label: 'Admin → Model providers', target: 'provider-keys' });
+    expect(refusal.action).toEqual({ label: 'Admin → Models', target: 'provider-keys' });
     expect(refusal.actionable).toBe(true);
   });
 

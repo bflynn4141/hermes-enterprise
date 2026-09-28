@@ -196,7 +196,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
           Notification settings
         </MenuItem>
         {state.user.role === 'admin' && <MenuItem small icon="key" onClick={() => go(ADMIN('Provider keys'))}>
-          Model providers
+          Models
         </MenuItem>}
         <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
           Data and privacy

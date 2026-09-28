@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ApprovalEvidenceView, ApprovalView } from '@hermes/shared';
-import { Button } from '../ui/primitives.js';
+import { Button, EmptyState } from '../ui/primitives.js';
 
 type EvidenceLoader = (id: string) => Promise<ApprovalEvidenceView>;
 
@@ -16,7 +16,7 @@ export function StoredEvidence({ evidence }: { evidence: ApprovalEvidenceView })
   return <div className="approval-stored-evidence">
     <strong>What Hermes saved</strong>
     <dl>{evidence.facts.map((fact, index) => <div key={index}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
-    {evidence.facts.length === 0 && <p className="meta">Nothing else was saved about this source.</p>}
+    {evidence.facts.length === 0 && <EmptyState compact icon="context" title="Nothing else was saved about this source" />}
     {url && <a href={url} target="_blank" rel="noreferrer">Open original source</a>}
     {dates.map(([label, value]) => value && <p className="meta" key={label}>{label} · <time dateTime={value}>{new Date(value).toLocaleString()}</time></p>)}
   </div>;
@@ -58,7 +58,7 @@ export function ApprovalEvidence({ view, load }: { view: ApprovalView; load?: Ev
   return <details className="approval-disclosure">
     <summary>Sources <span>{view.payload.evidence.length === 0 ? 'None' : view.payload.evidence.length}</span></summary>
     <div className="approval-evidence-list">
-      {view.payload.evidence.length === 0 && <p className="meta">No sources came with this request.</p>}
+      {view.payload.evidence.length === 0 && <EmptyState compact icon="context" title="No sources came with this request" />}
       {view.payload.evidence.map((item) => <EvidenceReference key={item.id} item={item} binding={view.payload.resource_bindings.find((candidate) => candidate.id === item.id)} load={load} />)}
     </div>
   </details>;

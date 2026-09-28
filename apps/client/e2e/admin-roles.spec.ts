@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 // Admin → Roles against the mock backend. The mock mirrors the server: five
 // built-in roles, membership kept as role slugs on members, agents taken from
@@ -11,7 +12,7 @@ test('an Admin sees the built-in roles with who holds them and which agents work
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/?workflowActivation=success#admin/Roles');
   const pane = app(page);
-  await expect(pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Roles', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expectAdminPage(page, 'Roles');
   await expect(pane.getByRole('heading', { name: 'Roles', exact: true })).toBeVisible();
 
   const list = pane.getByRole('list', { name: 'Roles' });
@@ -84,7 +85,7 @@ test('an Admin creates a role, gives it to someone, and deletes it once it is em
 
   // Back through the app, not a reload: the mock's state lives in the page.
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
-  await pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Roles', exact: true }).click();
+  await openAdminPage(page, 'Roles');
   await pane.getByRole('list', { name: 'Roles' }).getByRole('button', { name: /^Vendor review/ }).click();
   await people.getByRole('checkbox', { name: 'Alex Rivera' }).uncheck();
   await people.getByRole('button', { name: 'Save' }).click();

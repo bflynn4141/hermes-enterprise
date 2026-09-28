@@ -20,8 +20,7 @@ import { checkCaps } from '../model/usage.js';
 
 /** The sentence every usage number is shipped with. Asserted by a test. */
 export const ESTIMATE_DISCLAIMER =
-  'Estimated, billed by your provider. These figures are our arithmetic over published prices; ' +
-  'your provider invoices your own key and is the authority.';
+  'Estimated from published prices. Your provider’s bill is final.';
 
 export type UsageRange = '7d' | '30d' | '90d' | 'today';
 

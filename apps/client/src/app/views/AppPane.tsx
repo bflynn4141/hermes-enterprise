@@ -83,7 +83,8 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
           </Button>
         ))}
       </header>
-      {!agentView && !requestView && <div className="pane-subheader">
+      {/* Admin and Settings name their page in the breadcrumb and navigate in the page itself. */}
+      {!agentView && !requestView && app.section !== 'admin' && app.section !== 'settings' && <div className="pane-subheader">
         <span className="truncate">{sub}</span>
         <span className="grow" />
       </div>}

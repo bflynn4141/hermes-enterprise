@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ADMIN, MAX_APPROVALS, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { AdminApprovalsWorkflow } from './AdminApprovalsWorkflow.js';
 import { roleHolders, sortRoles } from './AdminRoles.js';
 import { useWorkspaceLists } from './lists.js';
@@ -20,7 +20,6 @@ import {
   ADMIN_APPROVALS_VIEW,
   AMOUNT_PROBLEM,
   APPROVALS_LIVE,
-  APPROVALS_SCOPE,
   CURRENCY_PROBLEM,
   NO_APPROVER_MESSAGE,
   OTHER_CURRENCY_HINT,
@@ -76,8 +75,8 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     return <ApprovalRouteDetail key={selected.key} route={selected} roles={roles} onSaved={replace} />;
   }
   const { decisions, actions } = splitRoutes(routes);
-  const group = (title: string, description: string, rows: ApprovalRoute[]) => <section className="admin-approvals-group" aria-label={title}>
-    <header><h3>{title}</h3><p>{description}</p></header>
+  const group = (title: string, description: string | null, rows: ApprovalRoute[]) => <section className="admin-approvals-group" aria-label={title}>
+    <header><h3>{title}</h3>{description && <p>{description}</p>}</header>
     <ul className="admin-roles-list" aria-label={title}>
       {rows.map((route) => <li key={route.key}>
         <button type="button" className="admin-roles-row" onClick={() => nav({ ...ADMIN(ADMIN_APPROVALS_VIEW), id: route.key })}>
@@ -93,13 +92,9 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
     </ul>
   </section>;
   return <>
-    <header className="admin-detail-heading"><div>
-      <h2>Approvals</h2>
-      <p>{APPROVALS_SCOPE}</p>
-      <p>{APPROVALS_LIVE}</p>
-    </div></header>
-    {group('Decisions', 'Closing a request an agent prepared. One person decides unless you ask for more.', decisions)}
-    {group('Actions after approval', 'What happens once a request is approved. These can need more than one person.', actions)}
+    <AdminPageHeader title="Approvals" />
+    {group('Decisions', null, decisions)}
+    {group('Actions after approval', null, actions)}
     <AdminApprovalsWorkflow />
   </>;
 }
@@ -194,7 +189,7 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
       ? <Problem error={problem} />
       : alert
         ? <p role="alert">{alert}</p>
-        : <p role="status">{status || (route.is_default && !changed ? 'This is the default.' : '')}</p>}
+        : <p role="status">{status || (changed ? APPROVALS_LIVE : route.is_default ? 'This is the default.' : '')}</p>}
     <div className="admin-roles-actions">
       {!route.is_default && <Button disabled={busy} onClick={reset}>Reset to default</Button>}
       <Button primary disabled={!changed || invalid || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -208,7 +203,6 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
       <h2>{route.label}</h2>
       <p>{route.description}</p>
       {route.workflow_note && <p>{route.workflow_note}</p>}
-      <p>{APPROVALS_LIVE}</p>
     </div></header>
 
     <AdminSettingsCard

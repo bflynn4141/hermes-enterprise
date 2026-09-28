@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { AdminPageHeader } from './AdminDetailLayout.js';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   REQ,
@@ -187,10 +188,7 @@ export function AdminSharedIntelligence() {
   return (
     <div className="scroll admin-intelligence-scroll">
       <div className="app-body admin-intelligence">
-        <div className="admin-intelligence-title">
-          <div><h1 className="display-32">Shared Intelligence</h1><p>Rank the lessons members shared against the outcomes your team is working on. The ranking only suggests what to look at first; people decide what is reviewed and published.</p></div>
-          <Button onClick={() => setAddingGoal((value) => !value)}>{addingGoal ? 'Cancel' : 'Add goal'}</Button>
-        </div>
+        <AdminPageHeader title="Shared Intelligence" actions={<Button onClick={() => setAddingGoal((value) => !value)}>{addingGoal ? 'Cancel' : 'Add goal'}</Button>} />
 
         <AnimatePresence initial={false}>
           {addingGoal && <motion.form className="admin-goal-form" onSubmit={(event) => { event.preventDefault(); void addGoal(); }} initial={reduceMotion ? false : { opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}>
@@ -236,7 +234,7 @@ export function AdminSharedIntelligence() {
               <div className="admin-intelligence-card"><h3>Goal used for the priority</h3><strong>{selected.goal.title}</strong><p>{selected.goal.detail}</p><small>{selected.goal.team_name ?? 'Organization'}</small></div>
               <div className="admin-intelligence-card"><h3>Owner rationale</h3><p>{selected.proposal.rationale}</p><small>Shared by {selected.submitted_by.name} · {selected.proposal.triage_assessment ? `checked ${new Date(selected.proposal.triage_assessment.assessed_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'not checked'}</small></div>
               <div className="admin-intelligence-card"><h3>Approved evidence</h3>{selected.proposal.evidence.map((evidence) => <blockquote key={evidence.id}><small>{evidence.session_title} · {new Date(evidence.run_ended_at).toLocaleDateString()} · {evidence.source_message_role === 'user' ? 'written by a person' : 'written by the agent'}</small><p>{evidence.approved_excerpt}</p></blockquote>)}</div>
-              <div className="admin-intelligence-card"><h3>Library sources it was compared with</h3>{selected.library_comparisons.length === 0 ? <p className="meta">No Library source was available for these teams.</p> : selected.library_comparisons.map((comparison) => <div className="admin-intelligence-comparison" key={comparison.version_id}>{comparison.access === 'available' ? <><strong>{comparison.title}</strong><p>{comparison.summary}</p></> : <p>This source was withdrawn, so its text is no longer shown.</p>}</div>)}</div>
+              <div className="admin-intelligence-card"><h3>Library sources it was compared with</h3>{selected.library_comparisons.length === 0 ? <EmptyState compact icon="context" title="No Library source for these teams" /> : selected.library_comparisons.map((comparison) => <div className="admin-intelligence-comparison" key={comparison.version_id}>{comparison.access === 'available' ? <><strong>{comparison.title}</strong><p>{comparison.summary}</p></> : <p>This source was withdrawn, so its text is no longer shown.</p>}</div>)}</div>
               {selected.decision_note && <div className="admin-intelligence-card"><h3>Latest Admin decision note</h3><p>{selected.decision_note}</p></div>}
               <details className="admin-intelligence-disclosure"><summary>See how the priority was worked out</summary>{selected.proposal.triage_assessment?.axes ? <div className="admin-intelligence-signals">{Object.entries(selected.proposal.triage_assessment.axes).map(([axis, value]) => <span key={axis}><i>{AXIS_LABELS[axis as keyof typeof AXIS_LABELS]}</i><b>{value.score.toFixed(1)} / 3</b></span>)}</div> : <p>No priority was worked out, so it is listed without a rank.</p>}</details>
               <details className="admin-intelligence-disclosure"><summary>What Admins can see</summary><p>{ADMIN_BOUNDARY}</p></details>

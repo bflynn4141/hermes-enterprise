@@ -5,7 +5,7 @@ import { useId, type CSSProperties, type ReactElement } from 'react';
 
 type Draw = (gradient: string) => ReactElement;
 
-const GLASS: Record<string, Draw> = {
+const GLASS = {
   iris: g => <><path d="M32 9C38 9 42 17 38 24C45 20 53 24 53 31C53 38 45 42 38 38C42 45 38 53 31 53C24 53 20 45 24 38C17 42 9 38 9 31C9 24 17 20 24 24C20 17 24 9 32 9Z" fill={g} /><path d="M32 10C36 10 40 15 39 21L32 30 25 23C22 17 25 10 32 10Z" fill="#FFF" opacity=".72" /><path d="M33 32 48 26C55 34 46 42 39 38L34 49 28 38Z" fill="#9E9ABF" opacity=".38" /><circle cx="31" cy="31" r="6" fill="#26214C" /><circle cx="31" cy="30" r="5" fill="#181333" /></>,
   admission: g => <><path d="M32 6 52 14v15c0 13-9 22-20 29C21 51 12 42 12 29V14Z" fill={g} /><path d="m32 6 20 8-20 12-20-12Z" fill="#FFF" opacity=".7" /><path d="M32 26v32c11-7 20-16 20-29V14Z" fill="#8783AC" opacity=".36" /><path d="m23 31 6 6 13-14" fill="none" stroke="#39345F" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" /></>,
   agreement: g => <><path d="M14 7h25l12 12v39H14Z" fill={g} /><path d="M39 7v14h12Z" fill="#A19BBF" /><path d="M39 7 51 19H39Z" fill="#FFF" /><path d="M22 29h18M22 36h13" stroke="#777093" strokeWidth="3" strokeLinecap="round" /><path d="m21 48 5-5 2 6 5-5 7 3" stroke="#524B77" strokeWidth="2.8" fill="none" strokeLinecap="round" /></>,
@@ -17,11 +17,14 @@ const GLASS: Record<string, Draw> = {
   people: g => <><circle cx="25" cy="21" r="10" fill={g} /><path d="M7 56V45c0-10 8-15 18-15s18 5 18 15v11Z" fill={g} /><circle cx="46" cy="24" r="8" fill="#C3BEDB" /><path d="M43 38c8-3 16 3 16 11v7H47V45Z" fill={g} /><path d="M12 44c1-6 6-9 12-9" fill="none" stroke="#FFF" strokeWidth="2" opacity=".65" /></>,
   inbox: g => <><path d="M15 13h34l10 27v17H5V40Z" fill={g} /><path d="M15 13h34l8 24H40l-4 7h-8l-4-7H7Z" fill="#D2CDE7" /><path d="M5 40h19l4 7h8l4-7h19v17H5Z" fill={g} /><path d="M15 14h34" stroke="#FFF" strokeWidth="2" /></>,
   settings: g => <><path fill={g} fillRule="evenodd" d="m27 5 10 0 2 8 7 4 8-2 5 9-6 6v8l6 6-5 9-8-2-7 4-2 8H27l-2-8-7-4-8 2-5-9 6-6v-8l-6-6 5-9 8 2 7-4Zm5 17a12 12 0 1 0 0 24 12 12 0 0 0 0-24Z" /><path d="m27 5-2 8-7 4-8-2-5 9 6 6" fill="none" stroke="#FFF" strokeWidth="2" opacity=".75" /></>,
-};
+} satisfies Record<string, Draw>;
+
+/** The glass icons that exist; `EmptyState` takes only these. */
+export type GlassName = keyof typeof GLASS;
 
 export interface GlassProps { name: string; size?: number; className?: string; style?: CSSProperties; title?: string }
 export function Glass({ name, size = 24, className, style, title }: GlassProps) {
-  const id = useId(); const g = `url(#g${id})`; const draw = GLASS[name] ?? GLASS.context!;
+  const id = useId(); const g = `url(#g${id})`; const draw = (GLASS as Record<string, Draw>)[name] ?? GLASS.context;
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" className={className} style={{ flexShrink: 0, ...style }} aria-hidden={title ? undefined : 'true'} role={title ? 'img' : undefined}>
       {title && <title>{title}</title>}

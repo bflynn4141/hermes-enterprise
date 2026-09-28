@@ -16,63 +16,61 @@ export const SETTINGS_TABS = [
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
-/** Grouped Admin sidebar: one left rail, no stacked tab rows. */
+/**
+ * Admin: three sections, each a row of page tabs (docs/DESIGN.md, Admin). Page
+ * ids are stable route keys; labels are what people read. Pages that were
+ * folded into another one keep working through ADMIN_VIEW_ALIASES.
+ */
 export const ADMIN_SETTINGS_GROUPS = [
   {
-    label: 'Organization',
+    label: 'Workspace',
     items: [
-      { id: 'Organization', label: 'Organization' },
+      { id: 'Organization', label: 'General' },
       { id: 'Roles', label: 'Roles' },
       { id: 'Approvals', label: 'Approvals' },
-      { id: 'Data and privacy', label: 'Data & privacy' },
       { id: 'Usage', label: 'Usage' },
+      { id: 'Data and privacy', label: 'Data & privacy' },
     ],
   },
   {
     label: 'Agents',
     items: [
-      { id: 'All agents', label: 'All agents' },
-      { id: 'Agents', label: 'Agent defaults' },
-      { id: 'Provider keys', label: 'Model providers' },
-      { id: 'Runtime capacity', label: 'Agent capacity' },
+      { id: 'All agents', label: 'Agents' },
+      { id: 'Provider keys', label: 'Models' },
+      { id: 'Runtime capacity', label: 'Capacity' },
+      { id: 'intelligence', label: 'Shared Intelligence' },
     ],
   },
   {
     label: 'Connections',
     items: [
-      { id: 'Slack', label: 'Slack' },
-      { id: 'Email', label: 'Email' },
-      { id: 'Inboxes', label: 'Role inboxes' },
+      { id: 'Slack', label: 'Slack', brand: 'slack' },
+      { id: 'Email', label: 'Email', brand: 'gmail' },
     ],
-  },
-  {
-    label: 'Intelligence',
-    items: [{ id: 'intelligence', label: 'Shared Intelligence' }],
   },
 ] as const;
 
-/** Admin pages that were renamed; an old link still lands on the page it meant. */
+/** Admin pages that were renamed or folded into another; an old link still lands on the page it meant. */
 export const ADMIN_VIEW_ALIASES: Readonly<Record<string, string>> = {
   'Inbox rules': 'Approvals',
+  // Agent defaults: the default model moved to Models, the limits to Usage.
+  Agents: 'Provider keys',
+  // Role inboxes now sit on the Email page, above the sending account.
+  Inboxes: 'Email',
 };
 
+/** Every Admin page in rail order, flat. */
+export const ADMIN_PAGES: readonly { readonly id: string; readonly label: string }[] =
+  ADMIN_SETTINGS_GROUPS.flatMap((group): { id: string; label: string }[] => group.items.map((item) => ({ id: item.id, label: item.label })));
+/** The section a page belongs to; an unknown page falls in the first. */
+export const adminSectionOf = (id: string): (typeof ADMIN_SETTINGS_GROUPS)[number] =>
+  ADMIN_SETTINGS_GROUPS.find((group) => group.items.some((item) => item.id === id)) ?? ADMIN_SETTINGS_GROUPS[0];
 export const ADMIN_SETTINGS_VIEWS = ADMIN_SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.id));
 export type AdminSettingsView = (typeof ADMIN_SETTINGS_VIEWS)[number];
-export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
-  Organization: 'Organization',
-  Roles: 'Roles',
-  Approvals: 'Approvals',
-  'Data and privacy': 'Data & privacy',
-  Usage: 'Usage',
-  'All agents': 'All agents',
-  Agents: 'Agent defaults',
-  'Provider keys': 'Model providers',
-  'Runtime capacity': 'Agent capacity',
-  Slack: 'Slack',
-  Email: 'Email',
-  Inboxes: 'Role inboxes',
-  intelligence: 'Shared Intelligence',
-};
+export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = Object.fromEntries([
+  ...ADMIN_PAGES.map((page) => [page.id, page.label] as const),
+  ...Object.entries(ADMIN_VIEW_ALIASES).map(([from, to]) => [from, ADMIN_PAGES.find((page) => page.id === to)?.label ?? to] as const),
+]);
 
 /**
  * What an empty conversation offers. Each one fills the composer and nothing
@@ -95,7 +93,7 @@ export const EMPTY = {
    */
   noKey: 'Connect Nous Portal in Settings to start',
   /** Takes the provider's display name (`providerName`), never its slug (docs/DESIGN.md). */
-  keyRejected: (provider: string) => `Your ${provider} key stopped working. Check or replace it in Admin → Model providers`,
+  keyRejected: (provider: string) => `Your ${provider} key stopped working. Check or replace it in Admin → Models`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
   overview: (agent: string, automated = false) => automated

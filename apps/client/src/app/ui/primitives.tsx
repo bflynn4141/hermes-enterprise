@@ -21,7 +21,8 @@ import {
 } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { createPortal } from 'react-dom';
-import { Glass, Icon } from './icons.js';
+import { BrandIcon, type BrandName } from './brand-icons.js';
+import { Glass, Icon, type GlassName } from './icons.js';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   primary?: boolean;
@@ -84,6 +85,8 @@ export interface Tab {
   id: string;
   label: string;
   icon?: string;
+  /** A connected service's logo, for tabs that name one (Admin → Connections). */
+  brand?: BrandName;
 }
 
 export function Tabs({ tabs, value, onChange, strong, label }: { tabs: readonly Tab[]; value: string; onChange: (id: string) => void; strong?: boolean; label: string }) {
@@ -132,6 +135,7 @@ export function Tabs({ tabs, value, onChange, strong, label }: { tabs: readonly 
           onKeyDown={(event) => onKeyDown(event, index)}
         >
           {tab.icon && <Glass name={tab.icon} size={20} />}
+          {tab.brand && <BrandIcon name={tab.brand} size={16} />}
           {tab.label}
         </button>
       ))}
@@ -501,13 +505,26 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
   );
 }
 
-export function EmptyState({ icon = 'context', title, detail, action }: { icon?: string; title: string; detail?: ReactNode; action?: ReactNode }) {
+/** A short status label. `tone` is ok, warn or muted (the default). */
+export function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: 'ok' | 'warn' | 'muted' | string }) {
+  return <span className={`pill pill-${tone}`}>{children}</span>;
+}
+
+/**
+ * The one empty state (docs/DESIGN.md, Design system rules). A list, tab or
+ * section with nothing in it says so with an icon and a title, centered, and
+ * its one action sits below them, never above. `compact` is the same thing,
+ * smaller, for a list inside a card, a section or a popover.
+ */
+export function EmptyState({ icon = 'context', title, detail, action, compact = false }: { icon?: GlassName; title: string; detail?: ReactNode; action?: ReactNode; compact?: boolean }) {
   return (
-    <div className="empty-state">
-      <Glass name={icon} size={48} className="icon" />
-      <div style={{ color: 'var(--body)', fontSize: 14.4 }}>{title}</div>
-      {detail && <div className="meta">{detail}</div>}
-      {action}
+    <div className={`empty-state${compact ? ' compact' : ''}`}>
+      <Glass name={icon} size={compact ? 32 : 48} className="icon" />
+      <div className="empty-state-text">
+        <div className="empty-state-title">{title}</div>
+        {detail && <div className="meta">{detail}</div>}
+      </div>
+      {action && <div className="empty-state-action">{action}</div>}
     </div>
   );
 }

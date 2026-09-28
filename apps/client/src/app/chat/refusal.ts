@@ -39,7 +39,7 @@ export interface RefusalContext {
   readonly agentName?: string | null;
 }
 
-const PROVIDER_KEYS = { label: 'Admin → Model providers', target: 'provider-keys' } as const;
+const PROVIDER_KEYS = { label: 'Admin → Models', target: 'provider-keys' } as const;
 
 const KEPT = 'Nothing was sent, and your draft is still here.';
 

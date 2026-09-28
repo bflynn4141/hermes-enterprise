@@ -155,7 +155,7 @@ test('live · the main screens', async ({ browser }) => {
   // The three Settings tabs M5a wired: Usage after a real run, the caps card,
   // and the data-and-privacy page with the server's own retention facts on it.
   await page.getByRole('tab', { name: 'Usage' }).click();
-  await expect(page.getByText('Estimated, billed by your provider', { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Estimated from published prices', { exact: false })).toBeVisible({ timeout: 20_000 });
   await settle(page);
   await shot(page, '24-settings-usage');
 

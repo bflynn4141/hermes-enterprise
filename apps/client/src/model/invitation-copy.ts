@@ -11,7 +11,7 @@ export function invitationFailureMessage(error: unknown): string {
     return 'Could not record the invitation. Check your connection and try again.';
   }
   return error.reason === 'iris_capacity_unavailable'
-    ? 'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.'
+    ? 'There is no agent ready for a new member. Add one under Admin → Capacity, then try again.'
     : error.reason === 'member_setup_unavailable'
       ? 'Setting up new members is paused right now. Nothing was changed.'
     : error.reason === 'member_setup_role_unavailable'
@@ -80,7 +80,7 @@ export function invitationDeliveryMessage(invitation: InvitationEntity): string 
     : invitation.delivery_reason === 'workos_invitation_payload_invalid'
       ? 'The invitation email could not be sent. Resend it, or ask the person who runs Hermes for your company.'
       : invitation.delivery_reason === 'iris_capacity_reservation_missing'
-        ? 'The agent set aside for this person is no longer available. Add one under Admin → Agent capacity, then resend.'
+        ? 'The agent set aside for this person is no longer available. Add one under Admin → Capacity, then resend.'
         : invitation.delivery_reason === 'workos_invitation_delivery_not_configured'
           ? 'Invitation emails are not turned on yet. Ask the person who runs Hermes for your company.'
           : invitation.delivery_reason === 'workos_invitation_delivery_outcome_unknown'

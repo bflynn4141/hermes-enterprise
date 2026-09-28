@@ -11,6 +11,7 @@
 //     git stash pop && MOCK=1 pnpm --filter client build
 //     QA_LABEL=after  npx playwright test e2e/panel-sidebar.spec.ts
 import { expect, test } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 const label = process.env.QA_LABEL ?? 'after';
 
@@ -116,7 +117,7 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   const workspace = sidebar.locator('[data-workspace-trigger]');
   await workspace.click();
   await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
-  await expect(app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expectAdminPage(page, 'General');
   await workspace.click();
   await page.getByRole('button', { name: 'Invite team members', exact: true }).click();
   await expect(app.getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
@@ -141,8 +142,8 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   await page.getByRole('menuitem', { name: 'Notification settings', exact: true }).click();
   await expect(app.getByRole('tab', { name: 'Notifications', exact: true })).toHaveAttribute('aria-selected', 'true');
   await account.click();
-  await page.getByRole('menuitem', { name: 'Model providers', exact: true }).click();
-  await expect(app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('menuitem', { name: 'Models', exact: true }).click();
+  await expectAdminPage(page, 'Models');
   await account.click();
   await page.getByRole('menuitem', { name: 'Data and privacy', exact: true }).click();
   await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toHaveAttribute('aria-selected', 'true');

@@ -11,7 +11,7 @@ import { ADMIN, LIB, type AgentDirectory, type AgentDirectoryEntry, type Enterpr
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { catalogRows } from '../selectors.js';
 import { Button, EmptyState, MenuItem, Skeleton } from '../ui/primitives.js';
-import { AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { ApprovalSwitches } from './AgentPermissions.js';
 import { SkillAssignmentEditor, providerName } from './Workspace.js';
 import { needsSignIn, useStepUp } from './use-step-up.js';
@@ -118,7 +118,7 @@ export function AdminAgents({ agentId }: { agentId: string | null }) {
     />;
   }
   return <>
-    <header className="admin-detail-heading"><div><h2>Agents</h2><p>Every agent in this workspace, who it works for, and what it may do. You can change an agent’s name, role, model, skills and approvals. Its conversations stay with the people it works for.</p></div></header>
+    <AdminPageHeader title="Agents" />
     {directory.items.length === 0
       ? <EmptyState icon="iris" title="No agents yet" detail="An agent appears here when someone joins and finishes setup." />
       : <ul className="admin-agents-list" aria-label="Agents">
@@ -305,7 +305,7 @@ function SkillsCard({ agent, onChanged }: { agent: AgentDirectoryEntry; onChange
   >
     {!assignments && !loadError && <Skeleton rows={2} label="Loading skills" />}
     {loadError && <p>Could not load this agent’s skills.</p>}
-    {assignments?.length === 0 && <p>No skills assigned.</p>}
+    {assignments?.length === 0 && <EmptyState compact icon="skill" title="No skills assigned" />}
     {assignments?.map((assignment) => <div key={assignment.id} className="admin-agents-skill">
       <div className="admin-agents-skill-row">
         <div><span className="admin-agents-name">{assignment.name}</span><p className="meta">{[assignment.team?.name, assignment.state === 'active' ? 'Active' : 'Paused'].filter(Boolean).join(' · ')}</p></div>

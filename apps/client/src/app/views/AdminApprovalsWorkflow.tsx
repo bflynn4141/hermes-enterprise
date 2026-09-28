@@ -6,7 +6,7 @@ import { WORKFLOW_APPROVALS, type WorkflowApproval } from '@hermes/shared';
 import './admin-approvals.css';
 
 export const WORKFLOW_APPROVALS_TITLE = 'Built-in reviewers';
-export const WORKFLOW_APPROVALS_NOTE = 'Hermes chooses who reviews these. They cannot be changed here yet.';
+export const WORKFLOW_APPROVALS_NOTE = 'Set by Hermes.';
 
 /** "Reviewed by the new member". */
 export const workflowReviewerLine = (approval: Pick<WorkflowApproval, 'reviewer'>): string => `Reviewed by ${approval.reviewer}`;

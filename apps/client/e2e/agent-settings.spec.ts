@@ -24,7 +24,7 @@ test('confirmed context can be added, edited, revisited and removed', async ({ p
   await expect(page.getByText('Confirmed by Brian · Edited')).toBeVisible();
   await page.getByRole('button', { name: 'Remove', exact: true }).click();
   await page.getByRole('button', { name: 'Remove note', exact: true }).click();
-  await expect(page.getByText('No confirmed notes yet.')).toBeVisible();
+  await expect(page.getByText('No confirmed notes yet')).toBeVisible();
 });
 
 test('approval settings contain only supported actions and persist between tabs', async ({ page }) => {
@@ -63,7 +63,7 @@ test('a failed note write preserves input and does not add a note', async ({ pag
   await page.getByRole('button', { name: 'Save note', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Your text is still here');
   await expect(page.getByRole('textbox', { name: 'Context', exact: true })).toHaveValue('Draft context');
-  await expect(page.getByText('No confirmed notes yet.')).toBeVisible();
+  await expect(page.getByText('No confirmed notes yet')).toBeVisible();
 });
 
 test('members can inspect context and permissions but cannot change them', async ({ page }) => {
@@ -84,7 +84,7 @@ test('unsaved context survives leaving and returning to the tab', async ({ page 
   await openTab(page, 'Context');
   await expect(page.getByRole('textbox', { name: 'Title', exact: true })).toHaveValue('Unsaved title');
   await expect(page.getByRole('textbox', { name: 'Context', exact: true })).toHaveValue('Unsaved context');
-  await expect(page.getByText('No confirmed notes yet.')).toBeVisible();
+  await expect(page.getByText('No confirmed notes yet')).toBeVisible();
 });
 
 for (const decision of ['Approve once', 'Decline']) test(`pending action can ${decision} without changing the standing policy`, async ({ page }) => {

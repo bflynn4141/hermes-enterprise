@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectAdminPage, openAdminPage } from './admin-nav.js';
 
 type MockRequest = { path: string; method: string };
 
@@ -20,30 +21,34 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/#settings/Organization');
   const app = page.getByRole('region', { name: 'Application' });
-  const adminNav = app.getByRole('navigation', { name: 'Admin settings' });
 
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-  await expect(adminNav.getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expectAdminPage(page, 'General');
   await expect(page).toHaveURL(/#admin\/Organization$/);
-  await expect(adminNav.getByRole('button')).toHaveCount(13);
-  await expect(adminNav.getByRole('button', { name: 'Role inboxes', exact: true })).toBeVisible();
-  await expect(adminNav.getByText('Agents', { exact: true })).toBeVisible();
-  await expect(adminNav.getByText('Connections', { exact: true })).toBeVisible();
-  await expect(adminNav.getByText('Intelligence', { exact: true })).toBeVisible();
+  // Three sections, and the section's pages as tabs; no view switch.
+  const rail = app.getByRole('navigation', { name: 'Admin settings' });
+  const sections = (await rail.isVisible()) ? rail.getByRole('button') : app.getByRole('tablist', { name: 'Admin sections' }).getByRole('tab');
+  await expect(sections).toHaveText(['Workspace', 'Agents', 'Connections']);
+  await expect(app.getByRole('tablist', { name: 'Workspace pages' }).getByRole('tab')).toHaveText(['General', 'Roles', 'Approvals', 'Usage', 'Data & privacy']);
+  await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('admin-settings-desktop.png'), fullPage: true });
 
-  await app.getByRole('combobox', { name: 'Settings view' }).selectOption('user');
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
   await expect(app.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(app.getByRole('tab', { name: 'Notifications', exact: true })).toBeVisible();
   await expect(app.getByRole('tab', { name: 'Slack account', exact: true })).toBeVisible();
   await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toBeVisible();
   await expect(app.getByRole('tab', { name: 'Provider keys', exact: true })).toHaveCount(0);
-  await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveValue('user');
-  await app.getByRole('combobox', { name: 'Settings view' }).selectOption('admin');
-  await expect(adminNav.getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
-  await adminNav.getByRole('button', { name: 'Agent defaults', exact: true }).click();
-  await expect(adminNav.getByRole('button', { name: 'Agent defaults', exact: true })).toHaveAttribute('aria-current', 'page');
-  await expect(page).toHaveURL(/#admin\/Agents$/);
+  await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
+  await expectAdminPage(page, 'General');
+  await openAdminPage(page, 'Models');
+  await expectAdminPage(page, 'Models');
+  await expect(page).toHaveURL(/#admin\/Provider%20keys$/);
+  // The old Agent defaults and Role inboxes links land on the pages that absorbed them.
+  await page.evaluate(() => { window.location.hash = '#admin/Agents'; });
+  await expectAdminPage(page, 'Models');
+  await page.evaluate(() => { window.location.hash = '#admin/Inboxes'; });
+  await expectAdminPage(page, 'Email');
 });
 
 test('a Member direct or legacy Admin link falls back before privileged effects run', async ({ page }) => {
@@ -56,12 +61,11 @@ test('a Member direct or legacy Admin link falls back before privileged effects 
   await expect(page).toHaveURL(/#settings\/Notifications$/);
   await expect(page.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
-  await expect(app.getByText('User View', { exact: true })).toBeVisible();
-  await expect(app.getByRole('heading', { name: 'Agent capacity' })).toHaveCount(0);
+  await expect(app.getByRole('heading', { name: 'Capacity' })).toHaveCount(0);
 
   const account = page.getByRole('button', { name: 'Your account', exact: true });
   await account.click();
-  await expect(page.getByRole('menuitem', { name: 'Model providers', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: 'Models', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
   const composer = page.getByRole('region', { name: /conversation$/ }).getByRole('textbox');
@@ -115,14 +119,19 @@ test('Admin navigation stays compact at the narrow desktop floor', async ({ page
   await page.setViewportSize({ width: 900, height: 760 });
   await page.goto('/#admin/Organization');
   const app = page.getByRole('region', { name: 'Application' });
-  const adminNav = app.getByRole('navigation', { name: 'Admin settings' });
-  await expect(app.getByRole('combobox', { name: 'Admin section' })).toHaveCount(0);
-  await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveValue('admin');
-  await expect(app.getByRole('tablist', { name: 'Admin sections' })).toHaveCount(0);
-  await expect(adminNav).toBeVisible();
-  await expect(adminNav.getByRole('button', { name: 'Model providers', exact: true })).toBeVisible();
-  await adminNav.getByRole('button', { name: 'Model providers', exact: true }).click();
-  await expect(app.locator('.admin-settings-view').getByRole('heading', { name: 'Model providers', exact: false })).toBeVisible();
+  await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveCount(0);
+  // The side pane is too narrow for a rail: the sections become tabs, and the
+  // page starts under its own row of tabs.
+  await expect(app.getByRole('navigation', { name: 'Admin settings' })).toBeHidden();
+  const sections = app.getByRole('tablist', { name: 'Admin sections' });
+  await expect(sections).toBeVisible();
+  const pages = app.getByRole('tablist', { name: 'Workspace pages' });
+  const [sectionsBox, pagesBox, cardBox] = [await sections.boundingBox(), await pages.boundingBox(), await app.getByRole('region', { name: 'Workspace information' }).boundingBox()];
+  expect(pagesBox!.y - (sectionsBox!.y + sectionsBox!.height)).toBeLessThan(24);
+  expect(cardBox!.y - (pagesBox!.y + pagesBox!.height)).toBeLessThan(40);
+  await openAdminPage(page, 'Models');
+  await expectAdminPage(page, 'Models');
+  await expect(page).toHaveURL(/#admin\/Provider%20keys$/);
   await page.screenshot({ path: testInfo.outputPath('admin-settings-narrow.png'), fullPage: true });
   const overflow = await app.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
@@ -172,7 +181,7 @@ test('a failed notification preference save never shows Preference saved', async
 
 test('run limits save explicitly and distinguish zero from no limit', async ({ page }) => {
   await recordMockRequests(page);
-  await page.goto('/#admin/Agents');
+  await page.goto('/#admin/Usage');
   const app = page.getByRole('region', { name: 'Application' });
   const daily = app.getByRole('spinbutton', { name: 'Daily usage limit' });
   const concurrent = app.getByRole('spinbutton', { name: 'Tasks at the same time' });
@@ -197,12 +206,14 @@ for (const channel of ['Slack', 'Email']) {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/?${channel.toLowerCase()}=unconfigured#admin/${channel}`);
     const app = page.getByRole('region', { name: 'Application' });
-    await expect(app.getByRole('heading', { name: channel === 'Email' ? 'Sending from Gmail is not available yet' : 'Slack is not available yet' })).toBeVisible();
+    await expect(channel === 'Email'
+      ? app.getByText(/Gmail sending isn’t turned on|Sending from Gmail is not available/).first()
+      : app.getByRole('heading', { name: 'Slack is not available yet' })).toBeVisible();
     await expect(app.getByRole('button', { name: channel === 'Email' ? 'Connect Gmail' : 'Connect Slack' })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`${channel.toLowerCase()}-detail.png`), fullPage: true });
     await page.goto(`/?${channel.toLowerCase()}=unavailable#admin/${channel}`);
     await expect(app.getByRole('alert')).toContainText('could not be loaded');
-    await app.getByRole('button', { name: 'Retry', exact: true }).click();
+    await app.getByRole('button', { name: channel === 'Email' ? 'Try again' : 'Retry', exact: true }).click();
     await expect(app.getByRole('alert')).toContainText('could not be loaded');
   });
 }

@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ADMIN, type AttachmentDetail } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
-import { Button, Chip, IrisMark, MenuItem, Popover } from '../ui/primitives.js';
+import { Button, Chip, IrisMark, MenuItem, Popover, EmptyState } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey, LIST_KEYS } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
@@ -144,7 +144,7 @@ export function Composer({ session }: { session: SessionState }) {
   const activeStep = status?.steps.find((step) => step.state === 'active');
   const workingPhase = toolPhase ?? (activeStep ? readableStep(activeStep) : null);
   // A run that read a role-inbox email is retried from the email itself
-  // (automatically when the model was busy, or Try again in Role inboxes),
+  // (automatically when the model was busy, or Try again in Admin → Email),
   // never from here: a second retry path would read the email twice.
   const emailRun = Boolean(status && session.messages.some((message) => message.run_id === status.id && emailTurn(message)));
 
@@ -160,7 +160,7 @@ export function Composer({ session }: { session: SessionState }) {
                 ? `${readableWaitingLabel(status.waiting_label) ?? 'Waiting'} · Nothing sent`
                 : status.status === 'stopped'
                   ? 'Stopped · Completed work kept'
-                  : emailRun ? 'Couldn’t finish reading this email · Nothing was sent. It can be tried again from Role inboxes.' : `${runErrorSentence(status.error)} · Completed work kept`}
+                  : emailRun ? 'Couldn’t finish reading this email · Nothing was sent. It can be tried again from Admin → Email.' : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
           {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
@@ -431,7 +431,7 @@ function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; o
       const ready = file.extraction_status === 'ready' && file.status === 'ready' && file.sha256;
       return <button type="button" className="menu-item small" key={file.id} disabled={already || !ready || session.draft.attachments.length >= 5 || uploading} onClick={() => attachSource(file)}><Glass name="context" size={18} /><span className="mi-body"><span>{file.name}</span><span className="mi-sub">{already ? 'Selected' : ready ? 'Available to select' : file.extraction_status === 'failed' ? 'Processing failed' : 'Processing…'}</span></span></button>;
     })}</div>
-    {!loading && !error && files.length === 0 && <p className="meta">No stored sources yet. Upload a PDF, Markdown, or text file.</p>}
+    {!loading && !error && files.length === 0 && <EmptyState compact icon="context" title="No stored sources yet" detail="Upload a PDF, Markdown, or text file." />}
     <Button link onClick={() => { onClose(); nav({ section: 'agents', view: 'context' }); }}>Manage sources →</Button>
   </Popover>;
 }
