@@ -348,13 +348,29 @@ export function linkMismatch(text: string, href: string): boolean {
 
 interface Frame {
   readonly name: string;
+  /** A note Hermes wrote into stored output (an image it did not load): shown, never email text. */
+  readonly annotation?: boolean;
   /** The tag written for this element, or null when it was unwrapped. */
   readonly written: string | null;
   readonly suppressed: 'none' | 'hidden' | 'dropped';
   readonly link: { href: string | null; text: string } | null;
 }
 
-export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineImage[] = []): SanitizedEmail {
+/** Classes the sanitizer itself writes. Only honoured when re-cleaning stored output. */
+const HERMES_CLASSES = new Set(['hermes-image-blocked', 'hermes-link', 'hermes-link-destination']);
+
+export interface SanitizeOptions {
+  /**
+   * The input is this sanitizer's own stored output, re-cleaned for display
+   * (inbound-email/view.ts). Its own notes keep their classes, and an
+   * "Image not shown" note is not counted as email text, so re-cleaning a
+   * stored body yields exactly the text the model was given. Raw email never
+   * sets this: on a first pass every `class` is dropped.
+   */
+  readonly storedOutput?: boolean;
+}
+
+export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineImage[] = [], options: SanitizeOptions = {}): SanitizedEmail {
   const images = new Map(inlineImages.map((image) => [image.contentId.toLowerCase(), image]));
   const out: string[] = [];
   const text: string[] = [];
@@ -372,6 +388,7 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
     }
     return 'none';
   };
+  const inAnnotation = (): boolean => stack.some((frame) => frame.annotation === true);
   const openLink = (): Frame['link'] => {
     for (let index = stack.length - 1; index >= 0; index -= 1) {
       const link = stack[index]!.link;
@@ -423,6 +440,7 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
       }
       if (state === 'dropped') continue;
       write(escapeHtml(decoded));
+      if (inAnnotation()) continue;
       text.push(decoded);
       const link = openLink();
       if (link) link.text += decoded;
@@ -502,9 +520,12 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
       const style = attrs.has('style') ? safeStyle(attrs.get('style')!) : null;
       if (style) parts.push(`style="${escapeHtml(style)}"`);
       if (name === 'a') parts.push('class="hermes-link"');
+      const own = options.storedOutput && name === 'span' ? (attrs.get('class') ?? '').trim() : '';
+      if (HERMES_CLASSES.has(own)) parts.push(`class="${own}"`);
       write(`<${parts.join(' ')}>`);
     }
-    stack.push({ name, written, suppressed, link });
+    const annotation = Boolean(options.storedOutput && written && name === 'span' && (attrs.get('class') ?? '').trim() === 'hermes-image-blocked');
+    stack.push({ name, written, suppressed, link, ...(annotation ? { annotation } : {}) });
     if (token.selfClosing && !ALLOWED.has(name) && !RENAMED[name]) {
       // `<foo/>` in HTML is an open tag; only foreign elements self-close. We
       // treat it as closed so an unknown self-closed wrapper cannot swallow
