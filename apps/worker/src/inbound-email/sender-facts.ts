@@ -127,8 +127,16 @@ export function lookalikeOf(domain: string, knownDomains: Iterable<string>): str
  */
 const PAYMENT_CHANGE = /\b(new|updated?|changed?|change of|different)\b[^.\n]{0,60}\b(bank|banking|account|remittance|payment|wire|ach|iban|routing|sort code|swift)\b[^.\n]{0,40}\b(details?|information|info|number|instructions?|account)\b|\b(bank|banking|remittance|payment|wire) (details?|information|instructions?)\b[^.\n]{0,40}\b(have|has) (changed|been updated)\b|\biban\b|\brouting number\b|\bswift( code)?\b/iu;
 
+/** An account or routing number written out: the word, then at least six digits. */
+const ACCOUNT_NUMBER = /\b(account|acct|routing|aba|sort code)\b\s*(number|no\.?|#)?\s*[:#]?\s*\d[\d\s-]{5,}/iu;
+/** Money going somewhere, and a new or different account, in one sentence ("wire the deposit to our new account"). */
+const MONEY_MOVES = /\b(wire|transfer|send|pay|remit|deposit)\w*\b/iu;
+const OTHER_ACCOUNT = /\b(new|different|updated|changed|another|other)\s+(\w+\s+)?account\b/iu;
+
 export function mentionsPaymentChange(text: string): boolean {
-  return PAYMENT_CHANGE.test(text);
+  return PAYMENT_CHANGE.test(text)
+    || ACCOUNT_NUMBER.test(text)
+    || text.split(/[.!?\n]+/u).some((sentence) => MONEY_MOVES.test(sentence) && OTHER_ACCOUNT.test(sentence));
 }
 
 export interface SenderFactsInput {
