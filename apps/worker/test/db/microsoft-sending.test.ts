@@ -271,6 +271,8 @@ describe('Microsoft 365 sending account', () => {
       expect(await scoped(fx.workspaceId, 'SELECT status FROM outbound_email_accounts WHERE id=$1', [account.id])).toEqual([{ status: 'connected' }]);
       expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'queued' }]);
     });
+  });
+
   it('disconnecting deletes Hermes\'s access and puts unsent approved email back to waiting', async () => {
     const { fx, outbox } = await approvedPendingReply();
     await callback(await oauthState(fx, 'microsoft'));
