@@ -174,6 +174,21 @@ describe('workspace wallet root setup', () => {
     expect(await setupState(fx)).toBe('rejected');
   });
 
+  it('recovers a setup whose request died after Turnkey created the organization', async () => {
+    const fx = await seedWorkspace(); const turnkey = new FakeTurnkey(); const env = envFor(turnkey);
+    const started = await begin(env, fx);
+    await submit(env, fx, started.setup_id, attestation(started.challenge));
+    // Simulate the Worker dying between Turnkey's answer and recording it.
+    await asOwner(fx, "UPDATE wallet_root_setups SET state='submitting', provider_org_id=NULL, provider_root_user_id=NULL WHERE id=$1", [started.setup_id]);
+    await asOwner(fx, "UPDATE workspace_wallet_config SET status='creating_root', root_member_id=NULL, root_verified_at=NULL, provider_org_id=NULL WHERE workspace_id=$1", [fx.workspaceId]);
+    expect(await overview(env, fx)).toMatchObject({ status: 'in_progress' });
+    // Still inside its own request window: not ours to decide yet.
+    expect(await (await reconcile(env, fx)).json()).toMatchObject({ status: 'in_progress' });
+    await asOwner(fx, "UPDATE wallet_root_setups SET updated_at = now() - interval '5 minutes' WHERE id=$1", [started.setup_id]);
+    expect(await (await reconcile(env, fx)).json()).toMatchObject({ status: 'verified' });
+    expect(turnkey.orgs.size).toBe(1);
+  });
+
   it('never marks a sub-organization ready when anyone besides the passkey holder is root', async () => {
     const fx = await seedWorkspace(); const turnkey = new FakeTurnkey(); const env = envFor(turnkey);
     turnkey.mode = 'hermes_root';

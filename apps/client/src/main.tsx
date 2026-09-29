@@ -63,7 +63,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
     const backend = createMockBackend({
       agentless: params.get('agent') === 'none',
       wallets: params.get('wallets') === 'enabled' ? 'enabled' : params.get('wallets') === 'fail' ? 'fail' : params.get('wallets') === 'reauth' ? 'reauth' : undefined,
-      walletRoot: params.get('walletRoot') === 'ambiguous' ? 'ambiguous' : undefined,
+      walletRoot: params.get('walletRoot') === 'ambiguous' ? 'ambiguous' : params.get('walletRoot') === 'stalled' ? 'stalled' : undefined,
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       pendingAgentApproval: params.has('pendingAgentApproval'),
       recovery: recovery === 'working' || recovery === 'retryable' || recovery === 'retry_scheduled' || recovery === 'blocked' || recovery === 'stopped' || recovery === 'idle' ? recovery : undefined,

@@ -136,7 +136,7 @@ interface MockOptions {
    */
   wallets?: 'enabled' | 'fail' | 'reauth';
   /** `ambiguous`: Turnkey's answer to the owner-passkey setup is lost once, so the Admin must check setup. */
-  walletRoot?: 'ambiguous';
+  walletRoot?: 'ambiguous' | 'stalled';
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
@@ -1437,14 +1437,14 @@ export function createMockBackend(input: MockOptions = {}) {
       try { clientData = JSON.parse(atob((attestation?.client_data_json ?? '').replace(/-/g, '+').replace(/_/g, '/'))) as typeof clientData; } catch { /* checked below */ }
       if (clientData.type !== 'webauthn.create' || clientData.challenge !== walletChallenge.challenge) return fail(400, 'wallet_passkey_invalid', 'the passkey could not be verified for this request');
       walletChallenge = null;
-      walletRoot = options.walletRoot === 'ambiguous'
-        ? { ...walletRoot, status: 'needs_reconciliation' }
+      walletRoot = options.walletRoot === 'ambiguous' || options.walletRoot === 'stalled'
+        ? { ...walletRoot, status: options.walletRoot === 'stalled' ? 'in_progress' : 'needs_reconciliation' }
         : { status: 'verified', available: true, owner_name: members.find(member => member.user_id === viewerUserId)?.name ?? 'Workspace admin', verified_at: iso(0) };
       return json(walletRoot);
     }
     if (p('/wallets/root/reconcile') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
-      if (walletRoot.status === 'needs_reconciliation') walletRoot = { status: 'verified', available: true, owner_name: members.find(member => member.user_id === viewerUserId)?.name ?? 'Workspace admin', verified_at: iso(0) };
+      if (walletRoot.status === 'needs_reconciliation' || walletRoot.status === 'in_progress') walletRoot = { status: 'verified', available: true, owner_name: members.find(member => member.user_id === viewerUserId)?.name ?? 'Workspace admin', verified_at: iso(0) };
       return json(walletRoot);
     }
     if (p('/wallets/enrollment') && method === 'POST') {

@@ -102,3 +102,12 @@ test('members see the owner status but cannot set it up', async ({ page }) => {
   await page.goto('/?wallets=enabled&seat=member#admin/Wallets');
   await expect(page.getByRole('button', { name: 'Create owner passkey' })).toHaveCount(0);
 });
+
+test('a setup that stalls offers Check setup instead of waiting forever', async ({ page }, testInfo) => {
+  await withPasskey(page, testInfo, 'wallets=enabled&walletRoot=stalled');
+  const owner = page.getByRole('region', { name: 'Wallet owner', exact: true });
+  await owner.getByRole('button', { name: 'Create owner passkey', exact: true }).click();
+  await expect(owner.getByText('Setting up with Turnkey…', { exact: true })).toBeVisible();
+  await owner.getByRole('button', { name: 'Check setup', exact: true }).click();
+  await expect(owner.getByText('Owner verified', { exact: true })).toBeVisible();
+});

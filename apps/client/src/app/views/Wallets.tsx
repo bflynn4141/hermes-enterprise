@@ -110,7 +110,7 @@ function WalletOwnerCard({ wallets }: { wallets: ReturnType<typeof useWallets> }
   const manage = data.can_manage;
   const footer = wallets.ownerReauth ? <Button onClick={wallets.signIn}>Sign in again</Button>
     : manage && root.available && root.status === 'not_started' ? <Button disabled={busy} onClick={() => void wallets.setupOwner()}>{busy ? 'Waiting for your passkey…' : 'Create owner passkey'}</Button>
-    : manage && root.status === 'needs_reconciliation' ? <Button disabled={busy} onClick={() => void wallets.checkOwner()}>{busy ? 'Checking…' : 'Check setup'}</Button>
+    : manage && (root.status === 'needs_reconciliation' || root.status === 'in_progress') ? <Button disabled={busy} onClick={() => void wallets.checkOwner()}>{busy ? 'Checking…' : 'Check setup'}</Button>
     : undefined;
   return <AdminSettingsCard title="Wallet owner" description="The passkey that controls this workspace's wallets at Turnkey." footer={footer}>
     <p role="status">{root.status === 'not_started' && !root.available ? 'Owner setup is not configured for this deployment.' : OWNER_STATUS[root.status]}</p>
@@ -119,6 +119,7 @@ function WalletOwnerCard({ wallets }: { wallets: ReturnType<typeof useWallets> }
       {root.verified_at && <p className="meta">Verified with Turnkey on {new Date(root.verified_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}. Wallet addresses come next.</p>}
     </>}
     {root.status === 'not_started' && root.available && manage && <p className="meta">Your passkey becomes the only owner of this workspace's wallets. Hermes can't move money, add owners or change permissions without it. There's no email recovery, so keep it in a password manager you won't lose.</p>}
+    {root.status === 'in_progress' && <p className="meta">If this doesn't finish in a minute or two, Check setup finds out where it stopped.</p>}
     {root.status === 'needs_reconciliation' && <p className="meta">Turnkey didn't confirm the setup. Check setup finds out whether it finished; don't start over.</p>}
     {root.status === 'needs_attention' && <p className="meta">Turnkey reported an owner Hermes didn't expect, so wallets stay off. Contact support before continuing.</p>}
     {wallets.ownerFailure && <p role="alert">{wallets.ownerFailure}</p>}
