@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, InboundEmailListItem, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EmailSend, InboundEmailListItem, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -144,6 +144,8 @@ interface MockOptions {
    */
   turn?: 'completed' | 'proposes_request' | 'waiting';
   communicationDraft?: boolean;
+  /** The approved pilot invitation's send is interrupted, so a reviewer must settle it (Quest audit H1). */
+  uncertainSend?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
@@ -354,6 +356,8 @@ export function createMockBackend(input: MockOptions = {}) {
     at: iso,
   });
   const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
+  // Each approved email's deliveries, for the uncertain-send fixture only.
+  const emailSends = new Map<string, EmailSend[]>();
   const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
   if (options.partnerWorkflow && approvalScenario) {
     const requestId = APPROVAL_DEMO_REQUEST_IDS.record_change;
@@ -1688,8 +1692,57 @@ export function createMockBackend(input: MockOptions = {}) {
         if (!current) return fail(403, 'not_eligible', 'The current step belongs to another reviewer');
         const decision = body.decision === 'decline' ? 'decline' : body.decision === 'request_changes' ? 'request_changes' : 'approve';
         approvalResult(approval, decision, typeof body.note === 'string' ? body.note : null, idempotencyKey);
+        if (options.uncertainSend && id === APPROVAL_DEMO_REQUEST_IDS.communication && approval.status === 'approved' && approval.payload.approval_type === 'communication') {
+          // The first approval's send is interrupted; approving again after "It wasn't sent" delivers.
+          const sends = emailSends.get(id) ?? [];
+          const recipient = approval.payload.details.recipients[0]!;
+          const first = sends.length === 0;
+          sends.push({
+            id: mockUuid(2_400 + sends.length), authorization_revision: approval.payload.authorization.revision,
+            recipient_name: recipient.name, recipient_address: recipient.address ?? '', sender_address: approval.payload.details.sender.address,
+            state: first ? 'ambiguous' : 'sent', sent_at: first ? null : iso(2), settled: null,
+          });
+          emailSends.set(id, sends);
+          approval.effect = first
+            ? { ...approval.effect, status: 'failed', reason: 'The send was interrupted, so the approved email may or may not have been sent. Check the mailbox before sending it again.' }
+            : { ...approval.effect, status: 'executed', reason: 'The approved email was sent.' };
+        }
         syncApprovalRow();
         return json(approvalForViewer(approval));
+      }
+      if (rest === '/email-sends' && method === 'GET') {
+        const sends = emailSends.get(id) ?? [];
+        return json({ sends, can_settle: seat === 'admin' && sends.some((send) => send.state === 'ambiguous') });
+      }
+      const settleMatch = /^\/email-sends\/([^/]+)\/settlement$/u.exec(rest);
+      if (settleMatch && method === 'POST') {
+        const sends = emailSends.get(id) ?? [];
+        const send = sends.find((candidate) => candidate.id === settleMatch[1]);
+        if (!send || !approval || !row) return fail(404, 'unknown_email_send');
+        if (seat !== 'admin') return fail(403, 'email_send_settle_forbidden', 'Only a reviewer of this email or an Admin can settle its send.');
+        if (send.state !== 'ambiguous') return fail(409, 'email_send_not_uncertain', 'Only a send whose outcome is unknown can be settled.');
+        const outcome = body.outcome === 'sent' ? 'sent' : 'not_sent';
+        send.state = outcome === 'sent' ? 'sent' : 'cancelled';
+        send.settled = { outcome, by_name: viewerName, at: iso(1) };
+        if (outcome === 'sent') {
+          approval.effect = { ...approval.effect, status: 'executed', reason: 'A reviewer checked the mailbox and confirmed the approved email was sent.' };
+        } else {
+          // Reopen as the next revision: the same email, approved again before it goes out.
+          const nextRevision = approval.payload.authorization.revision + 1;
+          approval.payload = { ...approval.payload, authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + 2_400) } } as ApprovalView['payload'];
+          approval.status = 'pending';
+          approval.votes = [];
+          approval.finalized_at = null;
+          approval.steps = approval.payload.policy.steps.map((step, index) => ({
+            step_id: step.id, label: step.label, order: step.order, status: index === 0 ? 'current' : 'blocked',
+            approvals_recorded: 0, quorum: step.quorum,
+            current_reviewer_member_ids: index === 0 && step.reviewers[0]?.kind === 'member' ? [step.reviewers[0].member_id] : [],
+          }));
+          approval.effect = { ...approval.effect, status: 'waiting', reason: 'A reviewer confirmed the email was not sent. Approve it again to send it.' };
+          approval.work = { status: 'waiting', continuation_id: null, reason: null };
+        }
+        syncApprovalRow();
+        return json({ sends, can_settle: sends.some((candidate) => candidate.state === 'ambiguous') }, 201);
       }
       if (rest === '/approval/revisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');

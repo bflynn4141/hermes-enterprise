@@ -14,6 +14,7 @@ import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalE
 export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, approvalPrimaryAction, approvalIcon, approvalReviewerLabel, matchesReviewerFilter, approvalPreview } from '../approval-copy.js';
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
+import { EmailSends } from './EmailSends.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
 import { EmailCautions, EmailMessageView, EmailBriefView } from './EmailMessage.js';
 import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
@@ -658,6 +659,16 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           {!(view.payload.approval_type === 'communication' && view.payload.details.reply_to) && <ApprovalEvidence key={view.payload.authorization.revision} view={view} load={(id) => adapter.rest.getApprovalEvidence(state.workspace.id, request.id, id)} />}
           <details className="approval-disclosure"><summary>Who reviews this</summary><ReviewerSequence view={view} /></details>
           {resolved && <ResultState view={view} />}
+          {view.payload.approval_type === 'communication' && !view.payload.details.draft_only && (
+            <EmailSends
+              requestId={request.id}
+              version={`${view.payload.authorization.revision}:${view.status}:${view.effect.status}`}
+              onSettled={async () => {
+                setView(await adapter.rest.getApproval(state.workspace.id, request.id));
+                await syncRequest().catch(() => setError('Update saved. The Inbox could not refresh; reload to see its latest status.'));
+              }}
+            />
+          )}
           {view.payload.illustrative && <p className="approval-simulation-note">Illustrative scenario. Names, prices, sources and effects shown here are fictional; no external message, access grant, disclosure or system change occurs.</p>}
         </div>
       </div>

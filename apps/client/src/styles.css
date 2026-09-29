@@ -917,6 +917,16 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
 .approval-compare strong { font-size: 11.2px; font-weight: 500; }
 
 .approval-evidence, .approval-reviewers, .approval-result { display: flex; flex-direction: column; gap: 10px; }
+/* An approved email Hermes could not confirm was sent: a reviewer settles it. */
+.email-sends { display: flex; flex-direction: column; gap: 10px; }
+.email-sends .item { align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.email-sends .item-media { padding-top: 6px; }
+.email-sends .item-description { display: block; }
+.email-sends [role="alert"] { color: #E7C27D; }
+@media (max-width: 640px) {
+  .email-sends .item { flex-wrap: wrap; }
+  .email-sends .item-actions { width: 100%; justify-content: flex-end; }
+}
 .approval-evidence > div:not(.row) { display: flex; align-items: center; gap: 11px; min-height: 54px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .approval-evidence strong { font-size: 11.2px; font-weight: 500; }
 .approval-evidence small { color: var(--muted); font-size: 10px; line-height: 14px; }

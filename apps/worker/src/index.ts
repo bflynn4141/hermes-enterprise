@@ -133,6 +133,8 @@ import {
   createApprovalRoute,
   getApprovalRoute,
   getApprovalEvidenceRoute,
+  getEmailSendsRoute,
+  settleEmailSendRoute,
 } from './routes/approvals.js';
 import {
   createRequestNote,
@@ -479,6 +481,9 @@ app.get('/w/:ws/requests/:id/approval/evidence/:evidenceId', getApprovalEvidence
 app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
+// An approved email whose send is uncertain: a person checks the mailbox and settles it.
+app.get('/w/:ws/requests/:id/email-sends', getEmailSendsRoute);
+app.post('/w/:ws/requests/:id/email-sends/:sendId/settlement', settleEmailSendRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
 app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
