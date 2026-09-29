@@ -419,6 +419,12 @@ export function Dialog({ open, title, children, actions, onClose }: { open: bool
     initial?.focus();
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') latest.current();
+      if (event.key === 'Tab' && ref.current) {
+        const items = [...ref.current.querySelectorAll<HTMLElement>('a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex="0"]')].filter(item => item.getClientRects().length > 0);
+        const first = items[0], last = items.at(-1);
+        if (event.shiftKey && (document.activeElement === first || !ref.current.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !ref.current.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => {

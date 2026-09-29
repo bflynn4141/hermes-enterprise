@@ -12,6 +12,7 @@
 //   * an error carries the server's machine-readable `reason`, which is what
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
+  memberWalletAccessSchema, roleSpendingDraftSchema, type MemberWalletOperation, type MemberWalletStamp, type RoleSpendingDraftInput,
   walletOverviewSchema, walletRecordSchema, walletRootChallengeSchema, walletRootSchema, type WalletEnrollmentInput, type WalletRootSubmit,
   bootstrapSchema,
   contextNoteSchema,
@@ -456,6 +457,20 @@ export function createRest(options: RestOptions) {
     getDocument: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/documents/${id}`, documentEntitySchema),
     listDocuments: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
+    memberWalletAccess: (workspaceId: string, memberId: string) =>
+      request('GET', `${ws(workspaceId)}/members/${memberId}/wallet-access`, memberWalletAccessSchema),
+    proposeMemberWallet: (workspaceId: string, memberId: string, kind: MemberWalletOperation['kind']) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/proposals`, memberWalletAccessSchema, { kind }),
+    submitMemberWallet: (workspaceId: string, memberId: string, operationId: string, proposal_hash: string, stamp: MemberWalletStamp) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/submit`, memberWalletAccessSchema, { proposal_hash, stamp }),
+    cancelMemberWallet: (workspaceId: string, memberId: string, operationId: string) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/cancel`, memberWalletAccessSchema, {}),
+    reconcileMemberWallet: (workspaceId: string, memberId: string, operationId: string) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/reconcile`, memberWalletAccessSchema, {}),
+    getRoleSpendingDraft: (workspaceId: string, roleId: string) =>
+      request('GET', `${ws(workspaceId)}/roles/${roleId}/spending-policy`, roleSpendingDraftSchema),
+    putRoleSpendingDraft: (workspaceId: string, roleId: string, input: RoleSpendingDraftInput) =>
+      request('PUT', `${ws(workspaceId)}/roles/${roleId}/spending-policy`, roleSpendingDraftSchema, input),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
     runtimeDiscoveryGrants: (workspaceId: string) =>

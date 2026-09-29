@@ -1,3 +1,5 @@
+import { getRoleSpendingDraft, putRoleSpendingDraft } from './routes/role-spending.js';
+import { getMemberWalletAccess, proposeMemberWallet, submitMemberWalletOperation, cancelMemberWalletOperation, reconcileMemberWalletOperation } from './routes/member-wallets.js';
 import { listWallets, requestWalletEnrollment } from './routes/wallets.js';
 import { reconcileWalletRoot, startWalletRoot, submitWalletRoot } from './routes/wallet-root.js';
 // The Worker.
@@ -545,6 +547,11 @@ app.get('/w/:ws/skills', listSkills);
 app.get('/w/:ws/admin/agents', listAdminAgents);
 app.patch('/w/:ws/admin/agents/:agentId', patchAdminAgent);
 app.get('/w/:ws/skill-catalog', listSkillCatalog);
+app.get('/w/:ws/members/:id/wallet-access', getMemberWalletAccess);
+app.post('/w/:ws/members/:id/wallet-access/proposals', proposeMemberWallet);
+app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/submit', submitMemberWalletOperation);
+app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/cancel', cancelMemberWalletOperation);
+app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/reconcile', reconcileMemberWalletOperation);
 app.get('/w/:ws/wallets', listWallets);
 app.post('/w/:ws/wallets/enrollment', requestWalletEnrollment);
 app.post('/w/:ws/wallets/root/challenge', startWalletRoot);
@@ -552,6 +559,8 @@ app.post('/w/:ws/wallets/root', submitWalletRoot);
 app.post('/w/:ws/wallets/root/reconcile', reconcileWalletRoot);
 app.get('/w/:ws/roles', listWorkspaceRoles);
 app.post('/w/:ws/roles', createWorkspaceRole);
+app.get('/w/:ws/roles/:id/spending-policy', getRoleSpendingDraft);
+app.put('/w/:ws/roles/:id/spending-policy', putRoleSpendingDraft);
 app.patch('/w/:ws/roles/:id', patchWorkspaceRole);
 app.put('/w/:ws/roles/:id/members', putWorkspaceRoleMembers);
 app.delete('/w/:ws/roles/:id', deleteWorkspaceRole);

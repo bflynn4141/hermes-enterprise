@@ -49,6 +49,7 @@ import {
   rebindMemberProvisioningOperation,
   requestMemberProvisioningCancellation,
 } from '../member-provisioning/service.js';
+import { custodyConfigured, guardPaymentMemberChanges } from '../wallets/member-authority.js';
 import { MAX_ROLES_PER_MEMBER, type MemberRoleTemplate } from '@hermes/shared';
 import { grantRole, roleSlugs } from '../domain/roles.js';
 
@@ -154,6 +155,12 @@ export async function revokeAccess(
 ): Promise<string[]> {
   const { workspaceId, member, action } = options;
   const jobs: string[] = [];
+  // Shares a lock with owner setup and owner-operation claims. Identity-provider
+  // revocation still takes effect; it flags custody for recovery rather than
+  // pretending that deactivating an app membership revoked the provider root.
+  await tx.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [workspaceId]);
+  await tx.query(`UPDATE workspace_wallet_config SET status='needs_attention',updated_at=now()
+    WHERE workspace_id=$1 AND root_member_id=$2 AND status='root_verified'`, [workspaceId,member.id]);
 
   if (action === 'remove') {
     await tx.query(
@@ -1065,9 +1072,19 @@ export async function patchMember(c: Context<{ Bindings: Env }>): Promise<Respon
   const body = await inWorkspace(c, async (work) => {
     work.requireAdmin('changing a role');
     requireStepUp(work.session);
+    await custodyConfigured(work.tx, work.workspaceId);
     const member = await loadMember(work, memberId);
     if (member.user_id === work.userId) {
       throw new RouteError('nobody changes their own role', 'self_change', 409);
+    }
+
+    if (member.status === 'active') {
+      const { rows } = await work.tx.query<{ role: string; reviewer_roles: string[] }>(
+        'SELECT role,reviewer_roles FROM members WHERE workspace_id=$1 AND id=$2', [work.workspaceId,member.id]);
+      const before = rows[0]!;
+      const after = { role: input.role === 'admin' || input.role === 'member' ? input.role : before.role,
+        reviewer_roles: Array.isArray(input.reviewer_roles) ? [...new Set(input.reviewer_roles.filter(r => typeof r === 'string'))] : before.reviewer_roles };
+      await guardPaymentMemberChanges(work.tx, work.workspaceId, [{ before, after }]);
     }
 
     if (Array.isArray(input.reviewer_roles)) {
@@ -1103,6 +1120,7 @@ export async function patchMember(c: Context<{ Bindings: Env }>): Promise<Respon
 
     if ((input.role === 'admin' || input.role === 'member') && input.role !== member.role) {
       if (input.role === 'member') {
+        await guardWalletOwnerChange(work, member.id);
         // A demotion changes what they may do, so it runs the same revocation
         // transaction a removal does; the last-Admin trigger refuses it if this
         // was the only Admin left.
@@ -1167,6 +1185,15 @@ async function memberEntity(work: TenantWork, memberId: string): Promise<unknown
   });
 }
 
+/** App role controls cannot transfer custody of the customer's provider root. */
+async function guardWalletOwnerChange(work: TenantWork, memberId: string): Promise<void> {
+  await work.tx.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [work.workspaceId]);
+  const { rows } = await work.tx.query(`SELECT 1 FROM workspace_wallet_config c WHERE c.workspace_id=$1 AND (
+    c.root_member_id=$2 OR EXISTS (SELECT 1 FROM wallet_root_setups s WHERE s.workspace_id=c.workspace_id
+      AND s.member_id=$2 AND s.state IN ('submitting','ambiguous','created','verified','unverified')))` , [work.workspaceId,memberId]);
+  if (rows.length) throw new RouteError('transfer wallet ownership before removing or demoting this member', 'wallet_owner_transfer_required', 409);
+}
+
 /** DELETE /w/:ws/members/:id */
 export async function removeMember(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -1181,6 +1208,7 @@ export async function removeMember(c: Context<{ Bindings: Env }>): Promise<Respo
       throw new RouteError('nobody removes themselves', 'self_change', 409);
     }
     if (member.status !== 'active') return;
+    await guardWalletOwnerChange(work, member.id);
 
     work.jobs.push(
       ...(await revokeAccess(work.tx, {

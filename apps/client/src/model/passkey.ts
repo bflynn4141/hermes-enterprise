@@ -4,7 +4,7 @@
 // a passkey for the deployment's relying party and returns an attestation. The
 // private key never leaves the authenticator: Hermes forwards only the public
 // attestation to Turnkey, which makes this passkey the sub-organization's root.
-import type { WalletRootChallenge, WalletRootSubmit } from '@hermes/shared';
+import type { WalletRootChallenge, WalletRootSubmit, MemberWalletOperation, MemberWalletStamp } from '@hermes/shared';
 
 export class PasskeyError extends Error {
   constructor(readonly reason: 'unsupported' | 'cancelled' | 'failed') {
@@ -56,4 +56,23 @@ export async function createWorkspacePasskey(challenge: WalletRootChallenge): Pr
     attestation_object: toBase64url(response.attestationObject),
     transports,
   };
+}
+
+/** Signs exactly the server-reviewed operation; no client-generated policy bytes. */
+export async function signWorkspaceOperation(request: NonNullable<MemberWalletOperation['request']>): Promise<MemberWalletStamp> {
+  if (typeof window === 'undefined' || !window.PublicKeyCredential || !navigator.credentials?.get) throw new PasskeyError('unsupported');
+  let credential: Credential | null;
+  try {
+    credential = await navigator.credentials.get({ publicKey: {
+      challenge: fromBase64url(request.challenge), rpId: request.rp_id,
+      allowCredentials: [{ type: 'public-key', id: fromBase64url(request.credential_id) }],
+      userVerification: 'required', timeout: 120_000,
+    } });
+  } catch (error) {
+    throw new PasskeyError(error instanceof DOMException && error.name === 'NotAllowedError' ? 'cancelled' : 'failed');
+  }
+  if (!(credential instanceof PublicKeyCredential)) throw new PasskeyError('cancelled');
+  const response = credential.response as AuthenticatorAssertionResponse;
+  return { credentialId: toBase64url(credential.rawId), authenticatorData: toBase64url(response.authenticatorData),
+    clientDataJson: toBase64url(response.clientDataJSON), signature: toBase64url(response.signature) };
 }

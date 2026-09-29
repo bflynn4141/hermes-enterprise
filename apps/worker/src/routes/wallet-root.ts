@@ -77,6 +77,7 @@ const CONFIG_STATUS: Record<Finish['state'], string> = {
 /** Records a provider outcome. Runs as the system so a demoted or signed-out Admin cannot lose the result. */
 async function finish(env: Env, setup: Pick<SetupRow, 'id' | 'workspace_id' | 'member_id'>, from: string[], outcome: Finish): Promise<void> {
   await withWorkspaceTransaction(env, setup.workspace_id, async (tx: Tx) => {
+    await tx.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [setup.workspace_id]);
     const orgId = 'orgId' in outcome ? outcome.orgId : null;
     const rootUserId = 'rootUserId' in outcome ? outcome.rootUserId : null;
     const code = 'code' in outcome ? outcome.code.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 64) : null;
@@ -88,7 +89,9 @@ async function finish(env: Env, setup: Pick<SetupRow, 'id' | 'workspace_id' | 'm
       [setup.workspace_id, setup.id, outcome.state, orgId, rootUserId, outcome.activityId ?? null, code, from]);
     if (!updated.rowCount) return;
     await tx.query(
-      `UPDATE workspace_wallet_config SET status=$2, provider_org_id=COALESCE($3, provider_org_id),
+      `UPDATE workspace_wallet_config SET status=CASE WHEN $2='root_verified' AND NOT EXISTS (
+           SELECT 1 FROM members WHERE workspace_id=$1 AND id=$4::uuid AND status='active' AND role='admin'
+         ) THEN 'needs_attention' ELSE $2 END, provider_org_id=COALESCE($3, provider_org_id),
          root_member_id=CASE WHEN $2='root_verified' THEN $4::uuid ELSE root_member_id END,
          root_verified_at=CASE WHEN $2='root_verified' THEN now() ELSE root_verified_at END, updated_at=now()
        WHERE workspace_id=$1`,

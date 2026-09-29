@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentDirectoryEntry, MemberEntity, WalletEnrollmentInput, WalletOverview } from '@hermes/shared';
 import { useAdapter, useAppState } from '../store-context.js';
-import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
+import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import './wallets.css';
 import { useStepUp } from './use-step-up.js';
 import { AdminPageHeader, AdminSettingsCard } from './AdminDetailLayout.js';
@@ -104,15 +104,17 @@ const OWNER_STATUS: Record<WalletOverview['root']['status'], string> = {
 };
 
 function WalletOwnerCard({ wallets }: { wallets: ReturnType<typeof useWallets> }) {
+  const state = useAppState();
+  const [review, setReview] = useState(false);
   const { data, busy } = wallets;
   if (!data?.enabled) return null;
   const { root } = data;
   const manage = data.can_manage;
   const footer = wallets.ownerReauth ? <Button onClick={wallets.signIn}>Sign in again</Button>
-    : manage && root.available && root.status === 'not_started' ? <Button disabled={busy} onClick={() => void wallets.setupOwner()}>{busy ? 'Waiting for your passkey…' : 'Create owner passkey'}</Button>
+    : manage && root.available && root.status === 'not_started' ? <Button disabled={busy} onClick={() => setReview(true)}>{busy ? 'Waiting for your passkey…' : 'Create owner passkey'}</Button>
     : manage && (root.status === 'needs_reconciliation' || root.status === 'in_progress') ? <Button disabled={busy} onClick={() => void wallets.checkOwner()}>{busy ? 'Checking…' : 'Check setup'}</Button>
     : undefined;
-  return <AdminSettingsCard title="Wallet owner" description="The passkey that controls this workspace's wallets at Turnkey." footer={footer}>
+  return <><AdminSettingsCard title="Wallet owner" description="The passkey that controls this workspace's wallets at Turnkey." footer={footer}>
     <p role="status">{root.status === 'not_started' && !root.available ? 'Owner setup is not configured for this deployment.' : OWNER_STATUS[root.status]}</p>
     {root.status === 'verified' && <>
       <div className="kv"><span className="grow">Owner</span><span>{root.owner_name}</span></div>
@@ -123,7 +125,14 @@ function WalletOwnerCard({ wallets }: { wallets: ReturnType<typeof useWallets> }
     {root.status === 'needs_reconciliation' && <p className="meta">Turnkey didn't confirm the setup. Check setup finds out whether it finished; don't start over.</p>}
     {root.status === 'needs_attention' && <p className="meta">Turnkey reported an owner Hermes didn't expect, so wallets stay off. Contact support before continuing.</p>}
     {wallets.ownerFailure && <p role="alert">{wallets.ownerFailure}</p>}
-  </AdminSettingsCard>;
+  </AdminSettingsCard>
+    <Dialog open={review} title="Set up the wallet owner" onClose={() => { if (!busy) setReview(false); }} actions={<><Button disabled={busy} onClick={() => setReview(false)}>Cancel</Button><Button primary disabled={busy} onClick={() => { setReview(false); void wallets.setupOwner(); }}>Create passkey</Button></>}>
+      <div className="kv"><span className="grow">Workspace</span><span>{state.workspace.name}</span></div>
+      <div className="kv"><span className="grow">Owner</span><span>{state.user.name}</span></div>
+      <p>Your passkey will control this workspace’s wallets and approve changes to wallet permissions.</p>
+      <p className="meta">There is no email recovery. Save it in a password manager you can keep access to.</p>
+    </Dialog>
+  </>;
 }
 
 export function AdminWallets() {

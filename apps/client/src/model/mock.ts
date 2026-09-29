@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { ROLE_SPENDING_FREE_TIER, roleSpendingDraftInputSchema, type RoleSpendingDraft, type MemberWalletAccess, mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -112,6 +112,7 @@ interface MockOptions {
   runtimeCapacityStepUp?: boolean;
   /** Admin → Roles writes, and saving the handoff roles or turning it on, answer `reauth_required` until the step-up cookie is set. */
   roleWritesStepUp?: boolean;
+  roleSpendingConflictOnce?: boolean;
   /** Approval rule writes, member role writes and member removal answer `reauth_required` until the step-up cookie is set. */
   approvalWritesStepUp?: boolean;
   /** Admin → Agents writes (name, model, skills) answer `reauth_required` until the step-up cookie is set. */
@@ -1401,6 +1402,10 @@ export function createMockBackend(input: MockOptions = {}) {
   const walletRecords: import('@hermes/shared').WalletRecord[] = [];
   let walletRoot: import('@hermes/shared').WalletRoot = { status: 'not_started', available: true, owner_name: null, verified_at: null };
   let walletChallenge: { setup_id: string; challenge: string } | null = null;
+  let spendingConflictUsed = false;
+  const spendingDrafts = new Map<string, RoleSpendingDraft>();
+  const memberWallets = new Map<string, MemberWalletAccess>();
+  let ownerCredentialId: string | null = null;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://mock.local');
     const path = url.pathname;
@@ -1415,6 +1420,72 @@ export function createMockBackend(input: MockOptions = {}) {
     const match = (pattern: RegExp) => pattern.exec(path);
 
     if (seat !== 'admin' && path.startsWith(`/w/${WS}/admin/`)) return fail(403, 'admin_required');
+
+    const spendingMatch = match(new RegExp(`^/w/${WS}/roles/([^/]+)/spending-policy$`));
+    if (spendingMatch) {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const role = roles.find(item => item.id === spendingMatch[1]);
+      if (!role) return fail(404, 'not_found');
+      const current: RoleSpendingDraft = spendingDrafts.get(role.id) ?? { role_id: role.id, revision: 0, state: 'draft_only', enforcement: 'none', policy: null, updated_at: null, updated_by: null, provider_activation_available: false, free_tier: ROLE_SPENDING_FREE_TIER, activation_blockers: ['activation_not_implemented', 'signature_usage_unverified'] };
+      if (method === 'GET') return json(current);
+      if (method !== 'PUT') return fail(405, 'method_not_allowed');
+      if (options.roleWritesStepUp && (typeof document === 'undefined' || !document.cookie.includes('hermes_roles_stepup=1'))) return fail(401, 'reauth_required');
+      const parsed = roleSpendingDraftInputSchema.safeParse(body);
+      if (!parsed.success) return fail(422, 'invalid_body');
+      if (parsed.data.expected_revision !== current.revision) return fail(409, 'revision_conflict');
+      const saved: RoleSpendingDraft = { ...current, revision: current.revision + 1, policy: parsed.data.policy, updated_at: iso(0), updated_by: viewerUserId };
+      if (options.roleSpendingConflictOnce && !spendingConflictUsed) {
+        spendingConflictUsed = true;
+        spendingDrafts.set(role.id, { ...saved, policy: { ...saved.policy!, max_transfer_base_units: '75000000' } });
+        return fail(409, 'revision_conflict');
+      }
+      spendingDrafts.set(role.id, saved);
+      return json(saved);
+    }
+    const memberWalletMatch = match(new RegExp(`^/w/${WS}/members/([^/]+)/wallet-access(?:/(proposals)|/operations/([^/]+)/(submit|cancel|reconcile))?$`));
+    if (memberWalletMatch) {
+      const member = members.find(item => item.id === memberWalletMatch[1]);
+      if (!member || (seat !== 'admin' && member.user_id !== viewerUserId)) return fail(404, 'not_found');
+      const current: MemberWalletAccess = memberWallets.get(member.id) ?? {
+        member_id: member.id, wallet_status: 'not_created', address: null,
+        payment_review: { allowed: null, confirmed_at: null }, owner: null,
+        capability: { available: false, reason: 'owner_setup_required' },
+        payment_capability: { available: false, reason: 'member_authenticator_and_policy_required' },
+        operation: null, can_manage: seat === 'admin',
+      };
+      current.owner = walletRoot.status === 'verified' ? { member_id: MAYA_MEMBER, name: 'Maya Chen', is_current_user: seat === 'admin' } : null;
+      current.capability = { available: Boolean(options.wallets && current.owner), reason: !options.wallets ? 'wallets_disabled' : !current.owner ? 'owner_setup_required' : null };
+      memberWallets.set(member.id, current);
+      if (method === 'GET') return json(current);
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      if (options.wallets === 'reauth') return fail(401, 'reauth_required');
+      if (memberWalletMatch[2]) {
+        if (!current.capability.available) return fail(503, 'wallets_unavailable');
+        if (member.status !== 'active') return fail(409, 'member_changed');
+        if (body.kind !== 'create_wallet') return fail(409, 'payment_permission_unavailable');
+        if (current.wallet_status === 'ready' || ['awaiting_owner_review', 'submitting', 'outcome_unknown'].includes(current.operation?.status ?? '')) return json(current);
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        const hash = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        current.operation = { id: crypto.randomUUID(), kind: 'create_wallet', status: 'awaiting_owner_review', proposal_hash: hash, version: 1, expires_at: iso(10), created_at: iso(0), requested_by: viewerUserId, summary: `Create wallet for ${member.name}`, request: ownerCredentialId ? { body: JSON.stringify({ fixture: true, member_id: member.id }), challenge: btoa(hash).replace(/=+$/, ''), rp_id: window.location.hostname, credential_id: ownerCredentialId } : null };
+        current.wallet_status = 'awaiting_owner_review';
+        return json(current, 201);
+      }
+      const op = current.operation;
+      if (!op || op.id !== memberWalletMatch[3]) return fail(404, 'not_found');
+      if (memberWalletMatch[4] === 'cancel') { op.status = 'cancelled'; op.request = null; current.wallet_status = 'not_created'; return json(current); }
+      if (memberWalletMatch[4] === 'submit') {
+        if (body.proposal_hash !== op.proposal_hash || op.status !== 'awaiting_owner_review') return fail(409, 'proposal_changed');
+        const stamp = body.stamp as { clientDataJson?: string; credentialId?: string };
+        let signed: { challenge?: string; type?: string } = {};
+        try { signed = JSON.parse(atob((stamp.clientDataJson ?? '').replace(/-/g, '+').replace(/_/g, '/'))) as typeof signed; } catch { /* checked below */ }
+        if (signed.type !== 'webauthn.get' || signed.challenge !== op.request?.challenge || stamp.credentialId !== ownerCredentialId) return fail(400, 'invalid_stamp');
+        op.request = null;
+        if (options.walletRoot === 'ambiguous' || options.walletRoot === 'stalled') { op.status = 'outcome_unknown'; return json(current); }
+      }
+      op.status = 'completed'; op.request = null; current.wallet_status = 'ready';
+      current.address = '0x1234567890123456789012345678901234567890';
+      return json(current);
+    }
 
     if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id),
       root: options.wallets ? walletRoot : { status: 'not_started', available: false, owner_name: null, verified_at: null } });
@@ -1431,11 +1502,12 @@ export function createMockBackend(input: MockOptions = {}) {
     }
     if (p('/wallets/root') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
-      const attestation = body.attestation as { client_data_json?: string } | undefined;
+      const attestation = body.attestation as { client_data_json?: string; credential_id?: string } | undefined;
       if (!walletChallenge || body.setup_id !== walletChallenge.setup_id) return fail(400, 'wallet_setup_expired', 'the passkey request expired; start again');
       let clientData: { type?: string; challenge?: string } = {};
       try { clientData = JSON.parse(atob((attestation?.client_data_json ?? '').replace(/-/g, '+').replace(/_/g, '/'))) as typeof clientData; } catch { /* checked below */ }
       if (clientData.type !== 'webauthn.create' || clientData.challenge !== walletChallenge.challenge) return fail(400, 'wallet_passkey_invalid', 'the passkey could not be verified for this request');
+      ownerCredentialId = attestation?.credential_id ?? null;
       walletChallenge = null;
       walletRoot = options.walletRoot === 'ambiguous' || options.walletRoot === 'stalled'
         ? { ...walletRoot, status: options.walletRoot === 'stalled' ? 'in_progress' : 'needs_reconciliation' }
@@ -1893,7 +1965,7 @@ export function createMockBackend(input: MockOptions = {}) {
       const row = documents.find((d) => d.id === documentMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/members') && method === 'GET') return page(seat === 'admin' ? members : members.map((member) => ({ ...member, email: '' })));
+    if (p('/members') && method === 'GET') return page(seat === 'admin' ? members : members.map((member) => ({ ...member, user_id: member.user_id === viewerUserId ? viewerUserId : null, role: member.user_id === viewerUserId ? 'member' : member.role, email: '', reviewer_roles: [] })));
     const memberMatch = match(new RegExp(`^/w/${WS}/members/([^/]+)$`));
     if (memberMatch) {
       if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Member write fixture failed');
@@ -1923,7 +1995,7 @@ export function createMockBackend(input: MockOptions = {}) {
         const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
         if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
         if (row.user_id === viewerUserId) return fail(409, 'self_change', 'nobody removes themselves');
-        members.splice(index, 1);
+        row.status = 'inactive'; row.reviewer_roles = []; row.version += 1;
         return new Response(null, { status: 204 });
       }
     }
