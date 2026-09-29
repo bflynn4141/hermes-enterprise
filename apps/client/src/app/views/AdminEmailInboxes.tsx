@@ -104,7 +104,7 @@ export function useAgentAddress(agentId: string): string | null | undefined {
 }
 
 export function CopyAddress({ address, name }: { address: string; name?: string }) {
-  return <Snippet className="email-inbox-address" value={address} label={name ? `${name}’s address` : 'the address'} />;
+  return <Snippet compact className="email-inbox-address" value={address} label={name ? `${name}’s email address` : 'the email address'} copiedText="Copied email address" />;
 }
 
 /**
@@ -301,7 +301,8 @@ export function AdminEmailInboxes() {
               media={<span className="email-agent-mark"><Glass name={inbox.kind === 'agent' ? 'iris' : 'inbox'} size={24} /></span>}
               title={<><h4>{name}</h4>{active
                 ? <StatusDot tone="ok" label="Receiving" />
-                : <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />}</>}
+                : <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />}
+                <CopyAddress address={inbox.address} name={name} /></>}
               description={<>
                 <span className="email-agent-fact"><Icon name="users" size={14} />{inbox.kind === 'agent' ? reviewers(inbox) : `Read by ${inbox.agent.name}`}</span>
                 <span className="email-agent-fact"><Icon name="mail" size={14} />{inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</span>
@@ -315,7 +316,6 @@ export function AdminEmailInboxes() {
                 </Button>
               </>}
             />
-            <CopyAddress address={inbox.address} name={name} />
             <RecentMail inbox={inbox} />
           </li>;
         })}

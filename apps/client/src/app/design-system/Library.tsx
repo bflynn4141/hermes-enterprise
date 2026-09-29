@@ -74,8 +74,11 @@ export function DesignSystemLibrary() {
           </div>
         </Section>
 
-        <Section title="Snippet" rule="A value people copy, such as an address. The copy button becomes a check for a moment; nothing else on the page changes.">
-          <Snippet value="iris-677gsk@in.hermes.example" label="Iris’s address" />
+        <Section title="Snippet" rule="A value people copy, such as an address. The copy button becomes a check for a moment; nothing else on the page changes. When it is copied more than read, use compact: one small button beside what it belongs to, which opens to show the value on hover or focus and says what it copied.">
+          <div className="library-row">
+            <Snippet value="iris-677gsk@in.hermes.example" label="Iris’s address" />
+            <Snippet compact value="iris-677gsk@in.hermes.example" label="Iris’s email address" copiedText="Copied email address" />
+          </div>
         </Section>
 
         <Section title="Item" rule="One row: something to recognise it by, a title with one line under it, and at most two controls.">

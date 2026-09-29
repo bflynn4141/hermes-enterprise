@@ -13,7 +13,7 @@ test('agent email keeps checking for new mail until the page is hidden or closed
   await page.clock.install();
   await page.goto('/#admin/Inboxes');
   // Iris has its own address without anyone adding one (C100).
-  await expect(page.getByRole('list', { name: 'Agent email' }).getByText(/^iris-[a-z0-9]+@/u)).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Agent email' }).getByRole('button', { name: /^Copy Iris’s email address, iris-[a-z0-9]+@/u })).toBeVisible();
   await expect(page.getByText('No email yet').first()).toBeVisible();
   const reads = () => page.evaluate(() => {
     const paths = (window as unknown as { __emailReads: string[] }).__emailReads;

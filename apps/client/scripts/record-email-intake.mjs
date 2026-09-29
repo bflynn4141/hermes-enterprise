@@ -327,7 +327,7 @@ async function story(page, base, chapter) {
   await pause(page, 1_800);
   const address = (await app.locator('.email-inbox-address code').first().textContent())?.trim();
   if (!address) throw new Error('no inbox address on screen');
-  await moveTo(page, app.locator('.email-inbox-address code').first());
+  await moveTo(page, app.locator('.email-inbox-address').first());
   await say('A private forwarding address', 'Hermes creates a private address. The team forwards or copies partner email to it.');
   await pause(page, 3_200);
 

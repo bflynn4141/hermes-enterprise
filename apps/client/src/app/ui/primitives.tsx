@@ -536,8 +536,12 @@ export function StatusDot({ tone, label, hint }: { tone: StatusTone; label?: str
  * A value people copy, such as an email address (AI Elements' Snippet): the
  * value in monospace and a copy button that turns into a check for a moment.
  * `label` names the value for screen readers ("Iris's address").
+ *
+ * `compact` is the same thing folded into one small button, for a value that
+ * is copied more than read: a copy icon that opens to show the value under the
+ * pointer or keyboard focus, and says `copiedText` once copied.
  */
-export function Snippet({ value, label, className = '' }: { value: string; label: string; className?: string }) {
+export function Snippet({ value, label, className = '', compact = false, copiedText = 'Copied' }: { value: string; label: string; className?: string; compact?: boolean; copiedText?: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -545,17 +549,28 @@ export function Snippet({ value, label, className = '' }: { value: string; label
     void navigator.clipboard?.writeText(value).then(() => {
       setCopied(true);
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1600);
+      timer.current = setTimeout(() => setCopied(false), 1800);
     }, () => undefined);
   };
+  // An address breaks before its @ when it must, not mid-word.
+  const shown = value.includes('@') ? <>{value.slice(0, value.indexOf('@'))}<wbr />{value.slice(value.indexOf('@'))}</> : value;
+  if (compact) {
+    return (
+      <button type="button" className={`snippet-chip ${className}`} data-copied={copied || undefined} onClick={copy} aria-label={`Copy ${label}, ${value}`}>
+        <Icon name={copied ? 'check' : 'copy'} size={14} strokeWidth={1.8} />
+        <span className="snippet-chip-value"><code>{value}</code></span>
+        <span className="snippet-chip-done" aria-hidden="true">{copiedText}</span>
+        <span className="sr-only" role="status">{copied ? copiedText : ''}</span>
+      </button>
+    );
+  }
   return (
     <span className={`snippet ${className}`}>
-      {/* An address breaks before its @ when it must, not mid-word. */}
-      <code>{value.includes('@') ? <>{value.slice(0, value.indexOf('@'))}<wbr />{value.slice(value.indexOf('@'))}</> : value}</code>
+      <code>{shown}</code>
       <button type="button" className="snippet-copy" aria-label={copied ? 'Copied' : `Copy ${label}`} onClick={copy} data-copied={copied || undefined}>
         <Icon name={copied ? 'check' : 'copy'} size={15} strokeWidth={1.8} />
       </button>
-      <span className="sr-only" role="status">{copied ? 'Copied' : ''}</span>
+      <span className="sr-only" role="status">{copied ? copiedText : ''}</span>
     </span>
   );
 }

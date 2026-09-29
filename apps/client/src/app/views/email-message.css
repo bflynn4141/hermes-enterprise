@@ -64,10 +64,13 @@
 .email-inboxes-list > li { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(255,255,255,.015); transition: border-color 150ms ease-out; }
 .email-inboxes-list > li[data-state="paused"] { border-color: rgba(231,194,125,.28); }
 .email-agent-mark { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.04); }
+/* The name row never wraps, so the address opening beside it cannot move out from under the pointer. */
+.email-agent-head .item-title { flex-wrap: nowrap; }
+.email-agent-head .item-title > :not(.snippet-chip) { flex-shrink: 0; }
+.email-agent-head .snippet-chip { min-width: 0; flex-shrink: 1; }
 .email-agent-head h4 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 500; }
 .email-agent-fact { display: inline-flex; align-items: center; gap: 6px; }
 .email-agent-fact svg { opacity: .8; }
-.email-inbox-address { align-self: flex-start; }
 .email-inbox-facts { color: var(--muted); font-size: 13px; line-height: 1.6; }
 .email-inbox-tools { display: flex; align-items: center; gap: 10px; }
 .email-inbox-tools .search-field { flex: 1 1 auto; }
@@ -112,6 +115,8 @@ button.email-inbox-subject:focus-visible { outline: 2px solid var(--focus-line);
 @container app-pane (max-width: 560px) {
   .email-inboxes-list > li { padding: 14px 16px; }
   .email-agent-head { flex-wrap: wrap; }
+  /* The name block stays beside the mark however wide the opening address gets; only the actions wrap. */
+  .email-agent-head .item-content { flex-basis: 0; }
   .email-agent-head .item-actions { width: 100%; margin-left: 0; }
   .email-agent-head .item-actions .btn { flex: 1 1 auto; }
   /* Still one line: to-dos and statuses keep their marks and drop their words (kept for screen readers). */

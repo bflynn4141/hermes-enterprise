@@ -182,11 +182,10 @@ connectors, Merge Agent Handler, Paragon and Notion AI.
   one card per agent: its mark, name and a status dot (Receiving, or amber
   Paused), who reviews its mail and how many emails it has as two icon facts
   ("Partnerships reviews", "Owner reviews"), Pause, a red Replace address, and
-  the address as a Snippet. Recent email are rows with the sender's initials,
-  the subject, "2 to do" and "Check the sender" pills, and the state as a
-  status dot. Sentences appear only where someone must act (a failed read).
-  The Outreach account card is only for outreach from a Google or Microsoft
-  mailbox (C100).
+  the address as a compact copy button beside the name. Its email is a
+  searchable, sortable list of one-line rows (see Design system rules, long
+  lists). The Outreach account card is only for outreach from a Google or
+  Microsoft mailbox (C100).
 - **Organization connections and personal links stay distinct.** The Slack
   install and the Gmail sending account belong to the workspace; a person's
   Slack identity link is theirs.
@@ -222,6 +221,11 @@ primitive there when you add it to `ui/primitives.tsx`.
   `danger` for something wrong.
 - **A value people copy is a `Snippet`**: the value in monospace and a copy
   icon that becomes a check (AI Elements' Snippet), not a separate Copy button.
+  A value copied more than it is read, like an agent's address, is a
+  `Snippet compact`: one small copy button beside the name it belongs to,
+  which opens to show the value on hover or focus and then says "Copied email
+  address". The row around it must not wrap, so the opening value cannot move
+  the button out from under the pointer.
 - **A list that can grow to hundreds is one line per row, in fixed columns**
   so marks, status dots and times line up down the list. An email row is the
   sender's initials (name and address on hover, not a column), the subject

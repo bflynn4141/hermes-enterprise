@@ -32,6 +32,14 @@ test('an agent\'s email is searchable, sorted by priority and paged, one line pe
   await expect(page.getByText('No matching email')).toBeVisible();
 
   await page.getByRole('searchbox', { name: /Search Iris/ }).fill('');
+  // The address is a copy button beside the name: it opens on hover and says when it has copied.
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copy = page.getByRole('button', { name: /^Copy Iris’s email address, iris-/ });
+  await copy.hover();
+  await expect(copy.locator('.snippet-chip-value')).toHaveCSS('opacity', '1');
+  await copy.click();
+  await expect(copy.locator('.snippet-chip-done')).toHaveText('Copied email address');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^iris-[a-z0-9]+@/);
   await page.getByRole('button', { name: 'Show more' }).click();
   await expect(page.getByText('35 of 184')).toBeVisible();
 });
