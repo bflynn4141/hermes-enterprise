@@ -221,16 +221,21 @@ export async function disconnectOutboundEmail(c: Context<{ Bindings: Env }>): Pr
     requireStepUp(work.session);
     const account = await loadSendingAccount(work.tx, work.workspaceId);
     if (!account) return { status: 'disconnected' as const, waiting: 0 };
+    // Outbox rows first, then the account. A send job locks its outbox row and
+    // may then refresh the token under the account lock in its own
+    // transaction (#217); taking the locks in that same order means this
+    // waits for the send to finish instead of deadlocking across two
+    // transactions Postgres can't see as one.
+    const released = await work.tx.query(
+      `UPDATE outbound_email_outbox SET state='pending_connection', account_id=NULL, last_error=NULL
+        WHERE workspace_id=$1 AND account_id=$2 AND state='queued'`,
+      [work.workspaceId, account.id],
+    );
     await work.tx.query(
       `UPDATE outbound_email_accounts
           SET status='revoked', ciphertext=NULL, iv=NULL, wrapped_dek=NULL, wrap_iv=NULL,
               kek_version=NULL, token_expires_at=NULL, last_error='disconnected_by_admin'
         WHERE workspace_id=$1 AND id=$2`,
-      [work.workspaceId, account.id],
-    );
-    const released = await work.tx.query(
-      `UPDATE outbound_email_outbox SET state='pending_connection', account_id=NULL, last_error=NULL
-        WHERE workspace_id=$1 AND account_id=$2 AND state='queued'`,
       [work.workspaceId, account.id],
     );
     await work.tx.query(
