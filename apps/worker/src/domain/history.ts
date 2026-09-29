@@ -681,6 +681,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = requestRef;
       break;
 
+    case 'outbound_email.disconnected':
+      text = `${actor} disconnected the sending account`;
+      detail = 'Approved emails that had not gone out wait for a new one';
+      status = 'Disconnected';
+      ref = { section: 'admin', view: 'Email' };
+      break;
+
+    case 'gmail_evidence.disconnected':
+      text = `${actor} disconnected read-only Gmail`;
+      detail = 'Threads already saved to the Library stay';
+      status = 'Disconnected';
+      ref = { section: 'admin', view: 'Email' };
+      break;
+
     case 'outbound_email.simulated':
       text = `Practice send: ${subject}`;
       detail = 'This deployment doesn’t deliver email, so nothing left Hermes';

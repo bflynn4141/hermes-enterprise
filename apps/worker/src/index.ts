@@ -22,8 +22,9 @@ import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
-import { getOutboundEmailConnection, gmailOAuthCallback, microsoftOAuthCallback, startGmailOAuth, startMicrosoftOAuth } from './routes/outbound-email.js';
+import { disconnectOutboundEmail, getOutboundEmailConnection, gmailOAuthCallback, microsoftOAuthCallback, startGmailOAuth, startMicrosoftOAuth } from './routes/outbound-email.js';
 import {
+  disconnectGmailEvidence,
   getInboundEmailConnection,
   gmailEvidenceOAuthCallback,
   importGmailEvidenceThread,
@@ -392,6 +393,9 @@ app.post('/w/:ws/integrations/email/microsoft/oauth/start', startMicrosoftOAuth)
 // Every outside connection's state on one list, from Hermes's own records.
 app.get('/w/:ws/connections', getConnections);
 app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
+// An Admin disconnects a mailbox; Hermes deletes its stored access (docs/CONNECTORS.md).
+app.delete('/w/:ws/integrations/email/evidence', disconnectGmailEvidence);
+app.delete('/w/:ws/integrations/email', disconnectOutboundEmail);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
 // Role inboxes that receive forwarded mail (C98). Mail itself arrives through

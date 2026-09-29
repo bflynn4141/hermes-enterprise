@@ -4,7 +4,7 @@
 // and a status only when the status says something. The detail pages
 // (Email, Slack) stay where they are; each row opens its own.
 import { useEffect, useState } from 'react';
-import { ADMIN, CONNECTORS, type ConnectorKey, type ConnectorList, type ConnectorStatus } from '@hermes/shared';
+import { ADMIN, CONNECTORS, LIB, type ConnectorKey, type ConnectorList, type ConnectorStatus } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { BrandIcon, type BrandName } from '../ui/brand-icons.js';
 import { Button, EmptyState, Item, Pill, Skeleton, StatusDot } from '../ui/primitives.js';
@@ -84,7 +84,7 @@ export function AdminConnections() {
                 title={<><span>{definition.label}</span>{statusMark(connection)}</>}
                 description={description(connection)}
                 actions={action && list.can_manage
-                  ? <Button primary={action === 'Review'} onClick={() => nav(ADMIN(connection.detail_view))}>{action}</Button>
+                  ? <Button primary={action === 'Review'} onClick={() => nav(connection.detail_view === 'Library' ? LIB('connections') : ADMIN(connection.detail_view))}>{action}</Button>
                   : undefined}
               />
             </div>

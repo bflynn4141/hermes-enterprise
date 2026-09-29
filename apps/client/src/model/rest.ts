@@ -124,6 +124,8 @@ import {
   type SettleEmailSendInput,
   connectorListSchema,
   type ConnectorList,
+  mailboxDisconnectSchema,
+  type MailboxDisconnect,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -671,6 +673,8 @@ export function createRest(options: RestOptions) {
     rotateProviderKey: (workspaceId: string, id: string, key: string) =>
       request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
+    disconnectOutboundEmail: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/email`, mailboxDisconnectSchema) as Promise<MailboxDisconnect>,
+    disconnectGmailEvidence: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/email/evidence`, mailboxDisconnectSchema) as Promise<MailboxDisconnect>,
     connections: (workspaceId: string) => request('GET', `${ws(workspaceId)}/connections`, connectorListSchema) as Promise<ConnectorList>,
     slackConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/slack`, slackConnectionSchema),
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),

@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { outboundEmailConnectionSchema, outboundEmailOAuthStartSchema } from '@hermes/shared';
+import { mailboxDisconnectSchema, outboundEmailConnectionSchema, outboundEmailOAuthStartSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
@@ -203,4 +203,42 @@ export async function microsoftOAuthCallback(c: Context<{ Bindings: Env }>): Pro
     const token = await exchangeMicrosoftCode(config!, code, fetcher);
     return { token, address: await microsoftProfile(token.access_token, fetcher) };
   });
+}
+
+/**
+ * Disconnect the sending account (docs/CONNECTORS.md). Hermes deletes its
+ * stored access in this transaction. Approved emails that were only queued
+ * go back to waiting for a mailbox, which is where the OAuth callback picks
+ * them up if this address is connected again; a send already in progress
+ * finishes or becomes uncertain on its own. Nothing is called at Google or
+ * Microsoft: removing Hermes there is done in that account's settings.
+ */
+export async function disconnectOutboundEmail(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireCsrf(c);
+  const result = await inWorkspace(c, async (work) => {
+    work.requireAdmin('disconnecting the sending account');
+    requireStepUp(work.session);
+    const account = await loadSendingAccount(work.tx, work.workspaceId);
+    if (!account) return { status: 'disconnected' as const, waiting: 0 };
+    await work.tx.query(
+      `UPDATE outbound_email_accounts
+          SET status='revoked', ciphertext=NULL, iv=NULL, wrapped_dek=NULL, wrap_iv=NULL,
+              kek_version=NULL, token_expires_at=NULL, last_error='disconnected_by_admin'
+        WHERE workspace_id=$1 AND id=$2`,
+      [work.workspaceId, account.id],
+    );
+    const released = await work.tx.query(
+      `UPDATE outbound_email_outbox SET state='pending_connection', account_id=NULL, last_error=NULL
+        WHERE workspace_id=$1 AND account_id=$2 AND state='queued'`,
+      [work.workspaceId, account.id],
+    );
+    await work.tx.query(
+      `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
+       VALUES ($1,'user',$2,'outbound_email.disconnected')`,
+      [work.workspaceId, work.userId],
+    );
+    return { status: 'disconnected' as const, waiting: released.rowCount ?? 0 };
+  });
+  return c.json(mailboxDisconnectSchema.parse(result));
 }

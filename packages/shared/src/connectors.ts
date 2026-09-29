@@ -44,7 +44,7 @@ export const CONNECTORS: readonly ConnectorDefinition[] = [
     connect: 'admin_oauth',
     operations: [SEND_APPROVED_EMAIL],
     settle: 'person',
-    revoke: null,
+    revoke: 'local',
   },
   {
     key: 'microsoft_sending',
@@ -53,7 +53,7 @@ export const CONNECTORS: readonly ConnectorDefinition[] = [
     connect: 'admin_oauth',
     operations: [SEND_APPROVED_EMAIL],
     settle: 'person',
-    revoke: null,
+    revoke: 'local',
   },
   {
     key: 'agent_address',
@@ -88,7 +88,7 @@ export const CONNECTORS: readonly ConnectorDefinition[] = [
       { key: 'import_thread', kind: 'read', plain: 'Reads one email thread at a time, when a person imports it as evidence', gate: 'automatic' },
     ],
     settle: null,
-    revoke: null,
+    revoke: 'local',
   },
 ];
 
@@ -111,8 +111,8 @@ export const connectorStatusSchema = z.object({
   identity: z.string().max(320).nullable(),
   /** Approved work this connection is holding back. Admins only; 0 otherwise. */
   waiting: z.number().int().nonnegative(),
-  /** Where its own settings live in Admin. */
-  detail_view: z.enum(['Email', 'Slack']),
+  /** Where its own settings live: an Admin page, or Library → Connections for read-only Gmail. */
+  detail_view: z.enum(['Email', 'Slack', 'Library']),
 }).strict();
 export type ConnectorStatus = z.infer<typeof connectorStatusSchema>;
 
