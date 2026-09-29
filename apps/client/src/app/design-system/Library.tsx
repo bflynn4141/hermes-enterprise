@@ -4,7 +4,8 @@
 import { useState, type ReactNode } from 'react';
 import { BrandIcon } from '../ui/brand-icons.js';
 import { Glass, Icon } from '../ui/icons.js';
-import { Avatar, Button, EmptyState, Item, Pill, Snippet, StatusDot, Tabs } from '../ui/primitives.js';
+import { Avatar, Button, EmptyState, Item, Pill, SearchField, Snippet, StatusDot, Tabs, ToggleGroup } from '../ui/primitives.js';
+import { timeAgo } from '../ui/time.js';
 import './library.css';
 
 function Section({ title, rule, children }: { title: string; rule: string; children: ReactNode }) {
@@ -21,6 +22,9 @@ function Section({ title, rule, children }: { title: string; rule: string; child
 
 export function DesignSystemLibrary() {
   const [tab, setTab] = useState('email');
+  const [sort, setSort] = useState<'recent' | 'priority'>('recent');
+  const [search, setSearch] = useState('');
+  const now = Date.now();
   return (
     <div className="design-library">
       <main>
@@ -52,6 +56,7 @@ export function DesignSystemLibrary() {
           <div className="library-row">
             <StatusDot tone="ok" label="Receiving" />
             <StatusDot tone="ready" label="Ready for review" />
+            <StatusDot tone="ok" label="Reviewed" />
             <StatusDot tone="working" label="Reading" />
             <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />
             <StatusDot tone="problem" label="Couldn’t read it" />
@@ -87,6 +92,16 @@ export function DesignSystemLibrary() {
               description={<>Priya Raman<Pill tone="info" icon="check">2 to do</Pill></>}
               actions={<StatusDot tone="ready" label="Ready for review" />}
             />
+          </div>
+        </Section>
+
+        <Section title="Long lists" rule="A list that can grow to hundreds is one line per row, with a search box and at most a Recent / Priority toggle (ToggleGroup, not Tabs), and a Show more that says how many there are. Times are relative: Just now, 4m ago, 1d 1h 1m ago, then the date from a week on, with the exact time on hover.">
+          <div className="library-row library-tools">
+            <SearchField label="Search Iris’s email" value={search} onChange={setSearch} />
+            <ToggleGroup label="Sort email" value={sort} onChange={setSort} options={[['recent', 'Recent'], ['priority', 'Priority']]} />
+          </div>
+          <div className="library-row">
+            {[20_000, 4 * 60_000, 2 * 3_600_000 + 5 * 60_000, 25 * 3_600_000 + 60_000, 9 * 86_400_000].map((ms) => <Pill key={ms}>{timeAgo(new Date(now - ms).toISOString(), now)}</Pill>)}
           </div>
         </Section>
 

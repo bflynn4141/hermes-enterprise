@@ -778,6 +778,8 @@ export function createMockBackend(input: MockOptions = {}) {
   };
   const removedAssignments = new Set<string>();
   const EMAIL_INTAKE_DOMAIN = 'in.mock.hermes.test';
+  const SAMPLE_SENDERS = [['Priya Raman', 'priya@northwind.example'], ['Sam Lee', 'sam@acme.example'], ['Alex Kim', 'alex@globex.example'], ['Jordan Blake', 'jordan@initech.example'], ['Mei Tan', 'mei@umbrella.example']] as const;
+  const SAMPLE_SUBJECTS = ['Co-marketing plan for Q4', 'Webinar speaker confirmation', 'Referral agreement redlines', 'Partner portal access', 'Joint case study draft', 'Event sponsorship options', 'Renewal terms', 'Integration listing update'];
   // Sample mail for `?mail=sample`: one email in each state the list shows. Fixture senders on .example.
   const sampleMail = (): InboundEmailListItem[] => {
     const sender = (name: string, address: string, caution = false) => ({
@@ -787,13 +789,34 @@ export function createMockBackend(input: MockOptions = {}) {
       warnings: caution ? [{ code: 'lookalike_domain' as const, severity: 'caution' as const, detail: 'The domain looks like northwind.example but is not it.' }] : [],
     });
     const at = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
-    return [
+    const rows: InboundEmailListItem[] = [
       { id: mockUuid(1_700), received_at: at(4), subject: 'September partnership invoice + co-marketing call', sender: sender('Priya Raman', 'priya@northwind.example'), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null,
         brief: { summary: 'Northwind sent their September invoice and asked for a co-marketing call next week.', action_items: [{ text: 'Pay invoice NW-2026-09, net 30', owner: 'us' }, { text: 'Offer times for a call next week', owner: 'us' }] } },
       { id: mockUuid(1_701), received_at: at(2), subject: 'Re: September invoice - updated bank details', sender: sender('Priya Raman', 'priya@northwlnd.example', true), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
       { id: mockUuid(1_702), received_at: at(1), subject: 'Workshop dates for November', sender: sender('Sam Lee', 'sam@acme.example'), status: 'triaging', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
       { id: mockUuid(1_703), received_at: at(40), subject: 'Partner program question', sender: sender('Alex Kim', 'alex@globex.example'), status: 'failed', request_ids: [], can_retry: true, retrying: false, problem: 'provider_busy', brief: null },
+      // A month of older mail, so the list can be searched, sorted and paged at volume.
+      ...Array.from({ length: 180 }, (_, index): InboundEmailListItem => {
+        const [name, address] = SAMPLE_SENDERS[index % SAMPLE_SENDERS.length]!;
+        const reviewed = index % 3 !== 2;
+        return {
+          id: mockUuid(1_710 + index), received_at: at(90 + index * 233), subject: `${SAMPLE_SUBJECTS[index % SAMPLE_SUBJECTS.length]} #${180 - index}`,
+          sender: sender(name, address), status: reviewed ? 'suggested' : 'no_action', request_ids: [], can_retry: false, retrying: false, problem: null,
+          brief: null, awaiting_review: reviewed && index < 3,
+        };
+      }),
     ];
+    return rows.map((row, index) => index < 2 ? { ...row, awaiting_review: true } : row);
+  };
+  const listSampleMail = (query: URLSearchParams): { messages: InboundEmailListItem[]; total: number } => {
+    const q = (query.get('q') ?? '').trim().toLowerCase();
+    const rank = (row: InboundEmailListItem): number =>
+      row.awaiting_review && row.sender.warnings.some((warning) => warning.severity === 'caution') ? 0
+        : row.awaiting_review ? 1 : row.status === 'failed' ? 2 : row.status === 'received' || row.status === 'triaging' ? 3 : 4;
+    const rows = sampleMail()
+      .filter((row) => !q || [row.subject, row.sender.name ?? '', row.sender.address].some((text) => text.toLowerCase().includes(q)))
+      .sort((a, b) => (query.get('sort') === 'priority' ? rank(a) - rank(b) : 0) || b.received_at.localeCompare(a.received_at));
+    return { messages: rows.slice(0, Number(query.get('limit') ?? 25)), total: rows.length };
   };
   let emailInboxes: EmailInbox[] = [];
   const skillCatalog = [
@@ -2138,7 +2161,7 @@ export function createMockBackend(input: MockOptions = {}) {
     if (emailInboxMatch) {
       const inbox = emailInboxes.find((row) => row.id === emailInboxMatch[1]);
       if (!inbox) return fail(404, 'unknown_inbox');
-      if (emailInboxMatch[2] && method === 'GET') return json({ messages: options.mail === 'sample' && inbox.id === emailInboxes[0]?.id ? sampleMail() : [] });
+      if (emailInboxMatch[2] && method === 'GET') return json(options.mail === 'sample' && inbox.id === emailInboxes[0]?.id ? listSampleMail(url.searchParams) : { messages: [], total: 0 });
       if (seat !== 'admin') return fail(403, 'admin_required');
       if (method === 'PATCH') {
         const next = { ...inbox, status: body.status === 'paused' ? 'paused' as const : 'active' as const };

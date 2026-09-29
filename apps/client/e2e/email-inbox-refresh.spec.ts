@@ -17,7 +17,8 @@ test('agent email keeps checking for new mail until the page is hidden or closed
   await expect(page.getByText('No email yet').first()).toBeVisible();
   const reads = () => page.evaluate(() => {
     const paths = (window as unknown as { __emailReads: string[] }).__emailReads;
-    return { inboxes: paths.filter((path) => path.endsWith('/inboxes')).length, messages: paths.filter((path) => path.endsWith('/messages')).length };
+    const bare = paths.map((path) => path.split('?')[0]!);
+    return { inboxes: bare.filter((path) => path.endsWith('/inboxes')).length, messages: bare.filter((path) => path.endsWith('/messages')).length };
   });
   const before = await reads();
   // Settle each asynchronous read before advancing to the next interval.

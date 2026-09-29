@@ -513,7 +513,7 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
 
 /** A short status label. `tone` is ok, warn, info, danger or muted (the default); `icon` is a stroke icon before the words. */
 export function Pill({ children, tone = 'muted', icon }: { children: ReactNode; tone?: 'ok' | 'warn' | 'info' | 'danger' | 'muted' | string; icon?: string }) {
-  return <span className={`pill pill-${tone}`}>{icon && <Icon name={icon} size={12} strokeWidth={2} />}{children}</span>;
+  return <span className={`pill pill-${tone}`}>{icon && <Icon name={icon} size={12} strokeWidth={2} />}{icon ? <span className="pill-text">{children}</span> : children}</span>;
 }
 
 export type StatusTone = 'ok' | 'working' | 'ready' | 'warn' | 'problem' | 'muted';
@@ -528,6 +528,7 @@ export function StatusDot({ tone, label, hint }: { tone: StatusTone; label?: str
   return <span className="status-dot" data-tone={tone} title={hint}>
     <span className="status-dot-mark" aria-hidden="true" />
     {label ? <span className="status-dot-label">{label}</span> : <span className="sr-only">{hint ?? tone}</span>}
+    {label && hint && <span className="sr-only">. {hint}</span>}
   </span>;
 }
 
@@ -556,6 +557,29 @@ export function Snippet({ value, label, className = '' }: { value: string; label
       </button>
       <span className="sr-only" role="status">{copied ? 'Copied' : ''}</span>
     </span>
+  );
+}
+
+/**
+ * A few mutually exclusive options that change how a list is shown, such as
+ * Recent and Priority (shadcn's ToggleGroup). Not for moving between pages:
+ * that is `Tabs`.
+ */
+export function ToggleGroup<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: readonly (readonly [T, string])[]; onChange: (value: T) => void }) {
+  return (
+    <span className="toggle-group" role="group" aria-label={label}>
+      {options.map(([id, text]) => <button type="button" key={id} aria-pressed={value === id} onClick={() => onChange(id)}>{text}</button>)}
+    </span>
+  );
+}
+
+/** A search box with its icon; `label` is its accessible name and placeholder. */
+export function SearchField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="search-field">
+      <Icon name="search" size={15} />
+      <input type="search" placeholder={label} aria-label={label} value={value} maxLength={200} onChange={(event) => onChange(event.target.value)} />
+    </label>
   );
 }
 

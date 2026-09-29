@@ -69,19 +69,24 @@
 .email-agent-fact svg { opacity: .8; }
 .email-inbox-address { align-self: flex-start; }
 .email-inbox-facts { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.email-inbox-tools { display: flex; align-items: center; gap: 10px; }
+.email-inbox-tools .search-field { flex: 1 1 auto; }
 .email-inbox-messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
-.email-inbox-messages > li { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
-.email-inbox-messages > li:last-child { border-bottom: 0; padding-bottom: 0; }
+.email-inbox-messages > li { border-bottom: 1px solid var(--line); }
+.email-inbox-messages > li:last-child { border-bottom: 0; }
+/* One line per email, however many there are: the subject and sender give way first. */
+.email-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 92px; align-items: center; gap: 12px; min-height: 44px; padding: 6px 0; }
 .email-inbox-messages .avatar { font-size: 12px; background: #2a2764; color: var(--body); }
-.email-inbox-subject { all: unset; font-size: 14px; line-height: 21px; color: var(--body); overflow-wrap: anywhere; text-align: left; }
+.email-row-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.email-inbox-subject { all: unset; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 21px; color: var(--body); text-align: left; }
 button.email-inbox-subject { cursor: pointer; }
 button.email-inbox-subject:hover { text-decoration: underline; text-underline-offset: 3px; }
 button.email-inbox-subject:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 2px; border-radius: 3px; }
-.email-inbox-sender { overflow-wrap: anywhere; }
-.email-inbox-message-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; }
-.email-inbox-message-side time { color: var(--muted); font-size: 12.5px; line-height: 18px; }
-.email-inbox-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-left: 46px; color: var(--muted); font-size: 13px; line-height: 1.5; }
-.email-inbox-messages .problem { margin: 0 0 0 46px; color: var(--danger-ink); font-size: 13px; }
+.email-inbox-sender { flex: 0 10 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.email-row-marks { display: flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+.email-row time { color: var(--muted); font-size: 12.5px; line-height: 18px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.email-inbox-messages .problem { margin: 0 0 8px 38px; color: var(--danger-ink); font-size: 13px; }
+.email-inbox-more { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
 .email-inbox-confirm code { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .email-inboxes-list > li { transition: none; } }
 
@@ -90,9 +95,12 @@ button.email-inbox-subject:focus-visible { outline: 2px solid var(--focus-line);
   .email-agent-head { flex-wrap: wrap; }
   .email-agent-head .item-actions { width: 100%; margin-left: 0; }
   .email-agent-head .item-actions .btn { flex: 1 1 auto; }
-  .email-inbox-messages .item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 6px 14px; }
-  .email-inbox-messages .item-actions { grid-column: 2; margin-left: 0; }
-  .email-inbox-message-side { flex-direction: row-reverse; align-items: center; gap: 12px; }
-  .email-inbox-note { margin-left: 0; flex-wrap: wrap; }
+  /* Still one line: the sender, the pills' words and the status word give way to their marks. */
+  .email-row { grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; }
+  .email-inbox-sender { display: none; }
+  .email-row-marks .pill { padding: 0 7px; }
+  .email-row-marks :is(.pill-text, .status-dot-label) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .email-inbox-tools { flex-wrap: wrap; }
+
   .email-plain { padding: 16px; }
 }

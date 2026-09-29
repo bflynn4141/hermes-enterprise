@@ -23,11 +23,13 @@ import {
   emailInboxListSchema,
   emailInboxSchema,
   inboundEmailListItemSchema,
+  inboundEmailListQuerySchema,
   inboundEmailListSchema,
   inboundEmailViewSchema,
   taskPayloadSchema,
   type EmailInbox,
   type InboundEmailListItem,
+  type InboundEmailListQuery,
 } from '@hermes/shared';
 import { z } from 'zod';
 import type { Env } from '../env.js';
@@ -239,24 +241,59 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
   return c.body(null, 204);
 }
 
-/** Recent messages as list rows; `where` filters `m` with $1 = workspace and $2 = the id it names. */
-async function listItems(work: TenantWork, where: 'inbox' | 'message', id: string): Promise<InboundEmailListItem[]> {
+/** A suggestion from `m` still waits for someone's decision. */
+const AWAITING_REVIEW_SQL = `EXISTS (SELECT 1 FROM requests q
+    WHERE q.workspace_id = m.workspace_id AND q.id = ANY(m.request_ids) AND q.status = 'pending')`;
+const FLAGGED_SQL = `EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(m.sender_facts->'warnings', '[]'::jsonb)) w
+    WHERE w->>'severity' = 'caution')`;
+/** `priority` order: a flagged review, other reviews, a failed read, work in progress, the rest. */
+const PRIORITY_RANK_SQL = `CASE
+    WHEN ${AWAITING_REVIEW_SQL} AND ${FLAGGED_SQL} THEN 0
+    WHEN ${AWAITING_REVIEW_SQL} THEN 1
+    WHEN (${DERIVED_EMAIL_STATUS_SQL}) = 'failed' THEN 2
+    WHEN (${DERIVED_EMAIL_STATUS_SQL}) IN ('received', 'triaging') THEN 3
+    ELSE 4
+  END`;
+
+/** `q` as an ILIKE pattern that matches it literally anywhere, or null for no search. */
+const searchPattern = (q: string | undefined): string | null =>
+  q ? `%${q.replace(/[\\%_]/gu, (char) => `\\${char}`)}%` : null;
+
+/**
+ * Messages as list rows. `where` filters `m` with $1 = workspace and $2 = the
+ * id it names; `query` searches, sorts and pages an inbox's list.
+ */
+async function listItems(
+  work: TenantWork,
+  where: 'inbox' | 'message',
+  id: string,
+  query: InboundEmailListQuery = { sort: 'recent', limit: 100 },
+): Promise<{ items: InboundEmailListItem[]; total: number }> {
+  const filter = `m.workspace_id=$1 AND ${where === 'inbox' ? 'm.inbox_id' : 'm.id'}=$2
+        AND ($3::text IS NULL OR m.subject ILIKE $3 OR m.sender_facts->>'name' ILIKE $3 OR m.sender_facts->>'address' ILIKE $3)`;
+  const params = [work.workspaceId, id, searchPattern(query.q)];
   const rows = await work.tx.query<{
     id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; brief: unknown;
-    can_retry: boolean; retrying: boolean; problem: string | null;
+    can_retry: boolean; retrying: boolean; problem: string | null; awaiting_review: boolean;
   }>(
     `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, m.brief, ${DERIVED_EMAIL_STATUS_SQL} AS status,
             ${EMAIL_RETRYABLE_SQL} AS can_retry,
             (m.status = 'received' AND m.triage_attempt > 1 AND NOT ${EMAIL_RETRYABLE_SQL}) AS retrying,
-            ${EMAIL_PROBLEM_SQL} AS problem
+            ${EMAIL_PROBLEM_SQL} AS problem,
+            ${AWAITING_REVIEW_SQL} AS awaiting_review
        FROM inbound_email_messages m
        JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
        LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
-      WHERE m.workspace_id=$1 AND ${where === 'inbox' ? 'm.inbox_id' : 'm.id'}=$2
-      ORDER BY m.received_at DESC LIMIT 100`,
-    [work.workspaceId, id],
+      WHERE ${filter}
+      ORDER BY ${query.sort === 'priority' ? `${PRIORITY_RANK_SQL}, ` : ''}m.received_at DESC, m.id DESC
+      LIMIT $4`,
+    [...params, query.limit],
   );
-  return rows.rows.map((row) => inboundEmailListItemSchema.parse({
+  const counted = rows.rows.length < query.limit ? null : await work.tx.query<{ total: number }>(
+    `SELECT count(*)::int AS total FROM inbound_email_messages m WHERE ${filter}`,
+    params,
+  );
+  const items = rows.rows.map((row) => inboundEmailListItemSchema.parse({
     id: row.id,
     received_at: row.received_at.toISOString(),
     subject: row.subject,
@@ -267,14 +304,20 @@ async function listItems(work: TenantWork, where: 'inbox' | 'message', id: strin
     can_retry: row.can_retry,
     retrying: row.retrying,
     problem: row.problem,
+    awaiting_review: row.awaiting_review,
   }));
+  return { items, total: counted?.rows[0]?.total ?? items.length };
 }
 
 export async function listInboxMessages(c: Context<{ Bindings: Env }>): Promise<Response> {
   const inboxId = pathUuid(c, 'id');
+  const parsed = inboundEmailListQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) throw new RouteError('the list query is invalid', 'bad_query', 400);
+  const query = { ...parsed.data, q: parsed.data.q || undefined };
   const body = await inWorkspace(c, async (work) => {
     if (!(await mayReadInbox(work, inboxId))) throw new RouteError('no such inbox', 'unknown_inbox', 404);
-    return { messages: await listItems(work, 'inbox', inboxId) };
+    const { items, total } = await listItems(work, 'inbox', inboxId, query);
+    return { messages: items, total };
   });
   c.header('Cache-Control', 'no-store');
   return c.json(inboundEmailListSchema.parse(body));
@@ -296,7 +339,7 @@ export async function retryInboundEmail(c: Context<{ Bindings: Env }>): Promise<
     await consumeRate(work.tx, work.userId, work.workspaceId, { action: 'email.retry', limit: 10, windowSeconds: 60 });
     const jobId = await retryEmailTriage(work.tx, work.workspaceId, messageId, work.userId);
     if (jobId) work.jobs.push(jobId);
-    const [row] = await listItems(work, 'message', messageId);
+    const [row] = (await listItems(work, 'message', messageId)).items;
     return row!;
   });
   c.header('Cache-Control', 'no-store');

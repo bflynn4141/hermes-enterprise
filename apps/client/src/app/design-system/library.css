@@ -12,3 +12,4 @@
 .library-mark { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.04); }
 .library-fact { display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 560px) { .design-library main { padding: 32px 16px 64px; } }
+.library-tools .search-field { flex: 1 1 260px; }

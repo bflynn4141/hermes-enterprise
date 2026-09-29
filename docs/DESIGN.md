@@ -64,6 +64,7 @@ One vocabulary for the Inbox list, Admin → Role inboxes and the email chat:
 | Stored, not read yet | Waiting for Iris |
 | Agent reading | Reading |
 | A reply or hand-off is waiting for people | Ready for review (Inbox rows: "Reply ready") |
+| Someone decided the reply or hand-off | Reviewed (green) |
 | Agent decided nothing is needed | No reply suggested |
 | Waiting for an automatic retry | Trying again soon |
 | Could not be read | Couldn't read it, with the reason and Try again |
@@ -221,6 +222,17 @@ primitive there when you add it to `ui/primitives.tsx`.
   `danger` for something wrong.
 - **A value people copy is a `Snippet`**: the value in monospace and a copy
   icon that becomes a check (AI Elements' Snippet), not a separate Copy button.
+- **A list that can grow to hundreds is one line per row.** The subject and
+  sender give way (ellipsis, full text on hover) before the marks, status and
+  time do; on a phone the sender hides and pills and status become their
+  icons, with the words kept for screen readers. Past five rows it gets a
+  `SearchField` and a `ToggleGroup` of Recent and Priority, nothing more;
+  pages load 10 and then 25 at a time behind "Show more", which says "10 of
+  184". Priority means what waits for a person first: a flagged sender's
+  review, other reviews, a failed read, then work in progress, then the rest.
+- **Times in lists are relative** (`timeAgo`): "Just now", "4m ago",
+  "1d 1h 1m ago", leaving out zero units, then the date from a week on; the
+  exact time is the tooltip.
 - **A list row is an `Item`**: media to recognise it by, a title and one line,
   and at most two controls (shadcn's Item, Geist's Entity). Prefer icons with
   a word ("Owner reviews", "4 emails") over a sentence of facts.

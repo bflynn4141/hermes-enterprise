@@ -340,4 +340,60 @@ describe('every agent has its own email address (C100)', () => {
     expect(retried.status, await retried.clone().text()).toBeLessThan(300);
     expect(await triage(fx, third, 2)).toBeTruthy();
   });
+  it('searches, sorts by what needs a person, and pages an agent\'s email', async () => {
+    const fx = await seedAgent();
+    Object.assign(env, { AGENT_EMAIL_DAILY_READS: '50' });
+    try {
+      const finish = (runId: string, status = 'completed') => scoped(fx.workspaceId, `UPDATE runs SET status=$2, ended_at=now() WHERE id=$1`, [runId, status]);
+      const from = async (subject: string, sender: string, dmarc: 'pass' | 'fail' = 'pass') => {
+        const stored = await receiveInboundEmail(env, { to: fx.address, raw: rawEmail({ to: fx.address, from: sender, subject, html: '<p>Hello.</p>', dmarc }) });
+        if (stored.status !== 'stored') throw new Error('not stored');
+        return stored.messageId;
+      };
+      // Oldest first: a review, a failed read, a quiet one, a flagged review, a read in progress.
+      const review = await from('Invoice NW-9', 'Priya Raman <priya@northwind.example>');
+      let run = await triage(fx, review);
+      await suggestReply(fx, run);
+      await finish(run);
+      const failed = await from('Partner program question', 'Alex Kim <alex@globex.example>');
+      await finish(await triage(fx, failed), 'error');
+      const quiet = await from('Newsletter', 'news@acme.example');
+      await finish(await triage(fx, quiet));
+      const flagged = await from('Updated bank details', 'Priya Raman <priya@northwlnd.example>', 'fail');
+      run = await triage(fx, flagged);
+      await suggestReply(fx, run);
+      await finish(run);
+      const reading = await from('Beta 100%_done', 'Sam Lee <sam@acme.example>');
+      await triage(fx, reading);
+
+      const list = async (query = '') => {
+        const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}/messages${query}`);
+        expect(response.status, await response.clone().text()).toBe(200);
+        return inboundEmailListSchema.parse(await response.json());
+      };
+      const recent = await list();
+      expect(recent.messages.map((message) => message.id)).toEqual([reading, flagged, quiet, failed, review]);
+      expect(recent.total).toBe(5);
+      expect(recent.messages.find((message) => message.id === review)?.awaiting_review).toBe(true);
+      expect(recent.messages.find((message) => message.id === quiet)?.awaiting_review).toBe(false);
+
+      const priority = await list('?sort=priority');
+      expect(priority.messages.map((message) => message.id)).toEqual([flagged, review, failed, reading, quiet]);
+
+      // Search is literal (a % or _ is not a wildcard) and matches the subject, sender name or address.
+      expect((await list(`?q=${encodeURIComponent('100%_d')}`)).messages.map((message) => message.id)).toEqual([reading]);
+      expect((await list('?q=100x')).messages).toEqual([]);
+      expect((await list('?q=globex')).messages.map((message) => message.id)).toEqual([failed]);
+      expect((await list('?q=priya+raman')).messages.map((message) => message.id)).toEqual([flagged, review]);
+
+      const page = await list('?limit=2');
+      expect(page.messages.map((message) => message.id)).toEqual([reading, flagged]);
+      expect(page.total).toBe(5);
+
+      const bad = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}/messages?sort=oldest`);
+      expect(bad.status).toBe(400);
+    } finally {
+      Object.assign(env, { AGENT_EMAIL_DAILY_READS: '2' });
+    }
+  });
 });

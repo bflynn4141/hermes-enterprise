@@ -599,6 +599,20 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .snippet-copy:hover { color: var(--body); background: rgba(255,255,255,.06); }
 .snippet-copy:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 1px; }
 .snippet-copy[data-copied] { color: var(--ok); }
+/* ToggleGroup: Recent / Priority and similar list options. */
+.toggle-group { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(21,16,71,.52); flex-shrink: 0; }
+.toggle-group button { min-height: 30px; padding: 4px 11px; border-radius: 6px; color: var(--muted); font-size: 12.5px; line-height: 18px; white-space: nowrap; transition: color 150ms ease-out, background-color 150ms ease-out; }
+.toggle-group button:hover { color: var(--body); }
+.toggle-group button[aria-pressed="true"] { color: var(--body); background: var(--selected); }
+.toggle-group button:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 1px; }
+/* SearchField: a search box with its icon. */
+.search-field { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03); color: var(--muted); }
+.search-field:focus-within { border-color: var(--focus-line); box-shadow: var(--focus-halo); }
+.search-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--body); font: inherit; font-size: 13.5px; }
+.search-field input::placeholder { color: var(--muted); }
+.search-field input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.search-field input::-webkit-search-cancel-button { filter: invert(.8); }
+@media (prefers-reduced-motion: reduce) { .toggle-group button { transition: none; } }
 /* Item (shadcn): media, a title with one line, and at most two controls. */
 .item { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .item-media { display: inline-grid; place-items: center; flex-shrink: 0; }
