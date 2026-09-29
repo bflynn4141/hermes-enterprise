@@ -40,7 +40,16 @@ const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
 export const workspaceWalletConfig = pgTable('workspace_wallet_config', {
   workspaceId: uuid('workspace_id').primaryKey(), chainId: integer('chain_id').notNull().default(8453),
   asset: text('asset').notNull().default('USDC'), status: text('status').notNull().default('awaiting_owner_enrollment'),
-  createdAt: now('created_at'),
+  providerOrgId: text('provider_org_id'), rootMemberId: uuid('root_member_id'), rootVerifiedAt: ts('root_verified_at'),
+  createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+// One passkey-rooted sub-organization attempt; provider ids are recorded only from Turnkey responses.
+export const walletRootSetups = pgTable('wallet_root_setups', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), memberId: uuid('member_id').notNull(),
+  challenge: text('challenge').notNull(), state: text('state').notNull().default('challenged'), suborgName: text('suborg_name').notNull(),
+  credentialId: text('credential_id'), providerOrgId: text('provider_org_id'), providerRootUserId: text('provider_root_user_id'),
+  providerActivityId: text('provider_activity_id'), failureCode: text('failure_code'), expiresAt: ts('expires_at').notNull(),
+  createdAt: now('created_at'), updatedAt: now('updated_at'),
 });
 export const walletPrincipals = pgTable('wallet_principals', {
   id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
@@ -2474,6 +2483,7 @@ export const ALL_TABLES = {
   wallet_principals: walletPrincipals,
   wallet_enrollment_operations: walletEnrollmentOperations,
   wallet_accounts: walletAccounts,
+  wallet_root_setups: walletRootSetups,
   workspace_roles: workspaceRoles,
   enterprise_teams: enterpriseTeams,
   enterprise_team_agents: enterpriseTeamAgents,

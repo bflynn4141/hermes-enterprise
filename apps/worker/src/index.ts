@@ -1,4 +1,5 @@
 import { listWallets, requestWalletEnrollment } from './routes/wallets.js';
+import { reconcileWalletRoot, startWalletRoot, submitWalletRoot } from './routes/wallet-root.js';
 // The Worker.
 //
 // One origin serves both the API and the client bundle, which is what lets the
@@ -546,6 +547,9 @@ app.patch('/w/:ws/admin/agents/:agentId', patchAdminAgent);
 app.get('/w/:ws/skill-catalog', listSkillCatalog);
 app.get('/w/:ws/wallets', listWallets);
 app.post('/w/:ws/wallets/enrollment', requestWalletEnrollment);
+app.post('/w/:ws/wallets/root/challenge', startWalletRoot);
+app.post('/w/:ws/wallets/root', submitWalletRoot);
+app.post('/w/:ws/wallets/root/reconcile', reconcileWalletRoot);
 app.get('/w/:ws/roles', listWorkspaceRoles);
 app.post('/w/:ws/roles', createWorkspaceRole);
 app.patch('/w/:ws/roles/:id', patchWorkspaceRole);

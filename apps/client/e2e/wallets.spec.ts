@@ -1,4 +1,17 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
+
+/** Passkeys need a domain, not an IP, so these tests open the mock app on localhost with a virtual authenticator. */
+async function withPasskey(page: Page, testInfo: TestInfo, query: string) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', { options: {
+    protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
+  } });
+  const base = new URL(String(testInfo.project.use.baseURL));
+  base.hostname = 'localhost';
+  await page.goto(new URL(`/?${query}#admin/Wallets`, base).toString());
+  return { credentials: async () => (await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials };
+}
 
 test('wallet enrollment is a saved request, never a connected wallet or payment', async ({ page }, testInfo) => {
   await page.goto('/?wallets=enabled#admin/Wallets');
@@ -52,4 +65,40 @@ test('a stale sign-in offers the existing identity confirmation flow', async ({ 
   await expect(card.getByRole('alert')).toContainText('recent sign-in');
   await expect(card.getByRole('button', { name: 'Sign in again' })).toBeVisible();
   await expect(card.getByText('Not set up', { exact: true })).toBeVisible();
+});
+
+
+test('an Admin makes their passkey the wallet owner', async ({ page }, testInfo) => {
+  const passkey = await withPasskey(page, testInfo, 'wallets=enabled');
+  const owner = page.getByRole('region', { name: 'Wallet owner', exact: true });
+  await expect(owner.getByText('No owner yet', { exact: true })).toBeVisible();
+  await expect(owner.getByText(/no email recovery/)).toBeVisible();
+  await owner.screenshot({ path: testInfo.outputPath('wallet-owner-before.png') });
+  await owner.getByRole('button', { name: 'Create owner passkey', exact: true }).click();
+  await expect(owner.getByText('Owner verified', { exact: true })).toBeVisible();
+  await expect(owner.getByText('Maya Chen', { exact: true })).toBeVisible();
+  await expect(owner.getByText(/Verified with Turnkey on/)).toBeVisible();
+  await expect(owner.getByRole('button', { name: 'Create owner passkey' })).toHaveCount(0);
+  expect(await passkey.credentials()).toHaveLength(1);
+  await expect(page.getByText('The wallet owner is verified; wallet addresses come next.')).toBeVisible();
+  await owner.screenshot({ path: testInfo.outputPath('wallet-owner-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(owner.getByText('Owner verified', { exact: true })).toBeVisible();
+  await owner.screenshot({ path: testInfo.outputPath('wallet-owner-narrow.png') });
+});
+
+test('an unconfirmed owner setup is checked, never started over', async ({ page }, testInfo) => {
+  await withPasskey(page, testInfo, 'wallets=enabled&walletRoot=ambiguous');
+  const owner = page.getByRole('region', { name: 'Wallet owner', exact: true });
+  await owner.getByRole('button', { name: 'Create owner passkey', exact: true }).click();
+  await expect(owner.getByText('Setup not confirmed', { exact: true })).toBeVisible();
+  await expect(owner.getByText(/don't start over/)).toBeVisible();
+  await expect(owner.getByRole('button', { name: 'Create owner passkey' })).toHaveCount(0);
+  await owner.getByRole('button', { name: 'Check setup', exact: true }).click();
+  await expect(owner.getByText('Owner verified', { exact: true })).toBeVisible();
+});
+
+test('members see the owner status but cannot set it up', async ({ page }) => {
+  await page.goto('/?wallets=enabled&seat=member#admin/Wallets');
+  await expect(page.getByRole('button', { name: 'Create owner passkey' })).toHaveCount(0);
 });

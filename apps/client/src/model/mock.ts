@@ -135,6 +135,8 @@ interface MockOptions {
    * then `/?reply=markdown`.
    */
   wallets?: 'enabled' | 'fail' | 'reauth';
+  /** `ambiguous`: Turnkey's answer to the owner-passkey setup is lost once, so the Admin must check setup. */
+  walletRoot?: 'ambiguous';
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
@@ -1397,6 +1399,8 @@ export function createMockBackend(input: MockOptions = {}) {
   const fail = (status: number, reason: string, message = reason) => json({ error: message, reason }, status);
 
   const walletRecords: import('@hermes/shared').WalletRecord[] = [];
+  let walletRoot: import('@hermes/shared').WalletRoot = { status: 'not_started', available: true, owner_name: null, verified_at: null };
+  let walletChallenge: { setup_id: string; challenge: string } | null = null;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://mock.local');
     const path = url.pathname;
@@ -1412,7 +1416,37 @@ export function createMockBackend(input: MockOptions = {}) {
 
     if (seat !== 'admin' && path.startsWith(`/w/${WS}/admin/`)) return fail(403, 'admin_required');
 
-    if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id) });
+    if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id),
+      root: options.wallets ? walletRoot : { status: 'not_started', available: false, owner_name: null, verified_at: null } });
+    // Owner passkey setup (C101). Reasons and messages match the Worker's.
+    if (p('/wallets/root/challenge') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      if (!options.wallets) return fail(503, 'wallets_unavailable', 'wallet setup is not enabled');
+      if (options.wallets === 'reauth') return fail(401, 'reauth_required');
+      if (walletRoot.status !== 'not_started') return fail(409, 'wallet_root_exists', 'this workspace already has a wallet owner or a setup in progress');
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const challenge = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      walletChallenge = { setup_id: mockUuid(8800), challenge };
+      return json({ ...walletChallenge, rp_id: typeof window === 'undefined' ? 'localhost' : window.location.hostname, user_handle: challenge, user_name: 'Sample workspace wallets', expires_at: iso(5) }, 201);
+    }
+    if (p('/wallets/root') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const attestation = body.attestation as { client_data_json?: string } | undefined;
+      if (!walletChallenge || body.setup_id !== walletChallenge.setup_id) return fail(400, 'wallet_setup_expired', 'the passkey request expired; start again');
+      let clientData: { type?: string; challenge?: string } = {};
+      try { clientData = JSON.parse(atob((attestation?.client_data_json ?? '').replace(/-/g, '+').replace(/_/g, '/'))) as typeof clientData; } catch { /* checked below */ }
+      if (clientData.type !== 'webauthn.create' || clientData.challenge !== walletChallenge.challenge) return fail(400, 'wallet_passkey_invalid', 'the passkey could not be verified for this request');
+      walletChallenge = null;
+      walletRoot = options.walletRoot === 'ambiguous'
+        ? { ...walletRoot, status: 'needs_reconciliation' }
+        : { status: 'verified', available: true, owner_name: members.find(member => member.user_id === viewerUserId)?.name ?? 'Workspace admin', verified_at: iso(0) };
+      return json(walletRoot);
+    }
+    if (p('/wallets/root/reconcile') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      if (walletRoot.status === 'needs_reconciliation') walletRoot = { status: 'verified', available: true, owner_name: members.find(member => member.user_id === viewerUserId)?.name ?? 'Workspace admin', verified_at: iso(0) };
+      return json(walletRoot);
+    }
     if (p('/wallets/enrollment') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
       if (!options.wallets) return fail(503, 'wallets_unavailable');

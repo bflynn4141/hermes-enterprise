@@ -3,6 +3,7 @@ import { walletEnrollmentInputSchema, walletOverviewSchema, walletRecordSchema }
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, jsonBody, RouteError, type TenantWork } from './tenant.js';
+import { rootOverview } from './wallet-root.js';
 
 // Provider custody is intentionally absent: recording intent is not creating a
 // wallet, and an application Admin is not a Turnkey root owner.
@@ -30,8 +31,10 @@ export async function listWallets(c: Context<{ Bindings: Env }>): Promise<Respon
   const result = await inWorkspace(c, async (work) => {
     const enabled = c.env.TURNKEY_WALLETS_ENABLED === '1';
     const items = enabled ? await records(work) : [];
+    const root = enabled ? await rootOverview(work.tx, c.env, work.workspaceId)
+      : { status: 'not_started' as const, available: false, owner_name: null, verified_at: null };
     return { enabled, chain_id: 8453, asset: 'USDC', can_manage: work.role === 'admin',
-      setup_status: items.length ? 'awaiting_owner_enrollment' : 'not_configured', items };
+      setup_status: items.length ? 'awaiting_owner_enrollment' : 'not_configured', items, root };
   });
   c.header('Cache-Control', 'no-store');
   return c.json(walletOverviewSchema.parse(result));

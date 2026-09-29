@@ -2080,3 +2080,12 @@ passkey approval of the exact pending Turnkey activity. Member wallets ship in t
 first version. The first provider test uses Base Sepolia USDC transfers read
 through an uploaded ABI, and this enrollment increment merges only after that
 test's first live run passes.
+
+**Built September 28, 2026 (evening): the wallet owner.** An Admin's passkey
+becomes the only root of the workspace's Turnkey sub-organization, created by
+the parent organization with recovery channels disabled and verified by
+read-back before the UI says so. Why: custody has to be customer-held from the
+first provider object onward, and Hermes can prove it because the parent can
+read but never write a sub-organization. Uncertain creates are reconciled by
+unique name rather than retried, so a timeout cannot produce a second
+organization. See [Workspace wallets](../WALLETS.md#wallet-owner-setup).
