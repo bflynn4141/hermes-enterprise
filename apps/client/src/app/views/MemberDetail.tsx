@@ -128,7 +128,7 @@ function MemberDetailContent({ id }: { id: string }) {
       {!active ? <EmptyState compact icon="people" title="Workspace access removed" /> : approvals.length ? approvals.map(route => <details className="member-permission" key={route.key}><summary><span>{route.label}</span><span className="meta">Eligible to review</span></summary><p className="meta">{ruleSummary(route, roleNameMap(roles))}{route.workflow_note ? ` · ${route.workflow_note}` : ''}</p></details>) : <EmptyState compact icon="settings" title="No approvals assigned by these roles" />}
       <div className="member-setting-row"><span className="grow">Payment access</span><Button link onClick={() => go('wallet')}>View wallet access →</Button></div>
       {self && <p className="meta member-self-note">Another Admin changes your own roles.</p>}
-      <Popover open={rolePicker} onClose={closeRoles} anchorRef={anchor} label="Edit roles" width={400} portal className="member-role-picker">
+      <Popover open={rolePicker} onClose={closeRoles} anchorRef={anchor} label="Edit roles" width={400} portal fitViewport className="member-role-picker">
         <div onKeyDown={keepFocus}>
           <div className="member-picker-heading"><h2>Edit roles</h2><label><span className="sr-only">Search roles</span><input type="search" placeholder="Search roles…" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
           <fieldset className="member-picker-options"><legend className="sr-only">Responsibilities</legend>

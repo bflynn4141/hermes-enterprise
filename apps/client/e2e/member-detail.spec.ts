@@ -1,6 +1,23 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const app = (page: Page) => page.getByRole('region', { name: 'Application' });
+
+test('role picker keeps Save visible after the consequence grows in a short desktop window', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await openMember(page);
+  await app(page).getByRole('tab', { name: 'Roles & permissions' }).click();
+  await app(page).getByRole('button', { name: 'Edit roles', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Edit roles', exact: true });
+  await picker.getByRole('checkbox', { name: 'Access reviewer' }).check();
+  await expect(picker.getByRole('button', { name: 'Save roles' })).toBeInViewport();
+  const box = await picker.boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(720);
+  await picker.getByRole('button', { name: 'Save roles' }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(app(page).getByRole('button', { name: 'Access reviewer', exact: true })).toBeVisible();
+});
 async function openMember(page: Page, name = 'Alex Rivera') {
   await page.getByRole('button', { name: 'Members', exact: true }).click();
   await app(page).getByRole('listitem').filter({ hasText: name }).getByRole('button', { name: 'Manage' }).click();

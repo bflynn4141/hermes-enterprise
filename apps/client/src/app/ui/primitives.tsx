@@ -276,9 +276,11 @@ export interface PopoverProps {
   above?: boolean;
   /** Render into document.body at a fixed position from the anchor, so a clipping ancestor (the sidebar) cannot cut it off. */
   portal?: boolean;
+  /** Keep a portal's actions visible when the panel grows or the window is short. */
+  fitViewport?: boolean;
 }
 
-export function Popover({ open, onClose, anchorRef, children, align = 'right', width, className = '', label, offset = 8, above = false, portal = false }: PopoverProps) {
+export function Popover({ open, onClose, anchorRef, children, align = 'right', width, className = '', label, offset = 8, above = false, portal = false, fitViewport = false }: PopoverProps) {
   const panel = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
   // Portal mode: fixed coordinates measured from the anchor, refreshed on resize and scroll.
@@ -295,17 +297,22 @@ export function Popover({ open, onClose, anchorRef, children, align = 'right', w
       if (align === 'right') pos.right = Math.max(8, window.innerWidth - rect.right);
       else pos.left = Math.max(8, rect.left);
       if (above) pos.bottom = Math.max(8, window.innerHeight - rect.top + offset);
-      else pos.top = rect.bottom + offset;
+      else pos.top = fitViewport
+        ? Math.max(16, Math.min(rect.bottom + offset, window.innerHeight - (panel.current?.offsetHeight ?? 0) - 16))
+        : rect.bottom + offset;
       setFixedPos(pos);
     };
     measure();
     window.addEventListener('resize', measure);
     window.addEventListener('scroll', measure, true);
+    const observer = fitViewport ? new ResizeObserver(measure) : null;
+    if (panel.current) observer?.observe(panel.current);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
     };
-  }, [open, portal, above, align, offset, width, anchorRef]);
+  }, [open, portal, above, align, offset, width, anchorRef, fitViewport]);
   const latest = useRef({ onClose, anchorRef });
   latest.current = { onClose, anchorRef };
   useEffect(() => {
