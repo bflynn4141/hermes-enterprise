@@ -127,6 +127,7 @@ import {
   stopRun,
 } from './routes/turns.js';
 import { createDecision } from './routes/decisions.js';
+import { getConnections } from './routes/connections.js';
 import {
   createApprovalDecision,
   createApprovalRevision,
@@ -388,6 +389,8 @@ app.delete('/w/:ws/integrations/slack', disconnectSlack);
 app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
 app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
 app.post('/w/:ws/integrations/email/microsoft/oauth/start', startMicrosoftOAuth);
+// Every outside connection's state on one list, from Hermes's own records.
+app.get('/w/:ws/connections', getConnections);
 app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
