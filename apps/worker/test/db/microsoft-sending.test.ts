@@ -15,7 +15,7 @@ import { asUser, callWithWaitUntil, makeEnv } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { signGmailOAuthState } from '../../src/outbound-email/gmail-security.js';
 import { resolveSendingAccessToken, storeSendingAccount } from '../../src/outbound-email/gmail-store.js';
-import { connectorListSchema, outboundEmailConnectionSchema } from '@hermes/shared';
+import { connectorListSchema, mailboxDisconnectSchema, outboundEmailConnectionSchema } from '@hermes/shared';
 import { sha256Hex } from '../../src/integrations/slack/security.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
 import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
@@ -271,6 +271,36 @@ describe('Microsoft 365 sending account', () => {
       expect(await scoped(fx.workspaceId, 'SELECT status FROM outbound_email_accounts WHERE id=$1', [account.id])).toEqual([{ status: 'connected' }]);
       expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'queued' }]);
     });
+  it('disconnecting deletes Hermes\'s access and puts unsent approved email back to waiting', async () => {
+    const { fx, outbox } = await approvedPendingReply();
+    await callback(await oauthState(fx, 'microsoft'));
+    // One approved email is still queued when an Admin disconnects.
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='queued', sent_at=NULL, provider_message_id=NULL WHERE id=$1`, [outbox.id]);
+
+    const refused = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/integrations/email`, { method: 'DELETE' });
+    expect(refused.status).toBe(403);
+
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email`, { method: 'DELETE' });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(mailboxDisconnectSchema.parse(await response.json())).toEqual({ status: 'disconnected', waiting: 1 });
+
+    expect(await scoped(fx.workspaceId, 'SELECT status, ciphertext, wrapped_dek FROM outbound_email_accounts WHERE workspace_id=$1', [fx.workspaceId]))
+      .toEqual([{ status: 'revoked', ciphertext: null, wrapped_dek: null }]);
+    expect(await scoped(fx.workspaceId, 'SELECT state, account_id FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
+      .toEqual([{ state: 'pending_connection', account_id: null }]);
+    expect(await scoped(fx.workspaceId, `SELECT count(*)::int AS n FROM events WHERE workspace_id=$1 AND kind='outbound_email.disconnected'`, [fx.workspaceId]))
+      .toEqual([{ n: 1 }]);
+
+    const status = outboundEmailConnectionSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email`)).json());
+    expect(status).toMatchObject({ status: 'disconnected', address: null, provider: null });
+    const list = connectorListSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/connections`)).json());
+    expect(list.connections.find((connection) => connection.key === 'microsoft_sending')).toMatchObject({ state: 'not_connected' });
+
+    // Connecting the same address again picks the waiting email back up and sends it.
+    sent.length = 0;
+    await callback(await oauthState(fx, 'microsoft'));
+    expect(sent).toHaveLength(1);
+    expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'sent' }]);
   });
 
   it('refuses a state issued for Google, so one provider cannot finish the other\'s sign-in', async () => {

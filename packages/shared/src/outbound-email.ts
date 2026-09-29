@@ -61,3 +61,15 @@ export const settleEmailSendInputSchema = z.object({
   idempotency_key: z.string().min(8).max(200),
 }).strict();
 export type SettleEmailSendInput = z.infer<typeof settleEmailSendInputSchema>;
+
+/**
+ * After an Admin disconnects a mailbox (docs/CONNECTORS.md). Hermes deletes
+ * its stored access; `waiting` approved emails had not gone out and now wait
+ * for a sending account again. Removing Hermes from the Google or Microsoft
+ * account itself is done in that account's own security settings.
+ */
+export const mailboxDisconnectSchema = z.object({
+  status: z.literal('disconnected'),
+  waiting: z.number().int().nonnegative(),
+}).strict();
+export type MailboxDisconnect = z.infer<typeof mailboxDisconnectSchema>;

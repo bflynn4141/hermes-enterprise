@@ -120,7 +120,7 @@ async function slackStatus(tx: Tx, env: Env, viewer: Viewer): Promise<ConnectorS
 }
 
 async function gmailEvidenceStatus(tx: Tx, env: Env, viewer: Viewer): Promise<ConnectorStatus> {
-  const base = { key: 'gmail_evidence' as const, identity: null, waiting: 0, detail_view: 'Email' as const };
+  const base = { key: 'gmail_evidence' as const, identity: null, waiting: 0, detail_view: 'Library' as const };
   if (!gmailEvidenceConfig(env)) return { ...base, state: 'not_configured', reason: 'This deployment has no app registered for it.' };
   const account = await loadGmailEvidenceAccount(tx, viewer.workspaceId);
   if (!account || account.status === 'revoked') return { ...base, state: 'not_connected', reason: null };

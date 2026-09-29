@@ -218,6 +218,9 @@ export const EVENT_KINDS = [
   // A person checked the mailbox and settled an uncertain send.
   'outbound_email.settled_sent',
   'outbound_email.settled_not_sent',
+  // An Admin disconnected a mailbox (docs/CONNECTORS.md).
+  'outbound_email.disconnected',
+  'gmail_evidence.disconnected',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
