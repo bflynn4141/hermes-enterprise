@@ -434,7 +434,7 @@ export function RuntimeCapacityTab() {
               <span className="meta">Created {displayDate(grant.created_at)}{grant.status === 'prepared' ? ` · Expires ${displayDate(grant.expires_at)}` : ''}</span>
             </div>
             {canRevoke(grant) && (
-              <Button small disabled={busy !== null} onClick={() => setRevokeTarget(grant)}>
+              <Button danger small disabled={busy !== null} onClick={() => setRevokeTarget(grant)}>
                 {busy === `revoke:${grant.id}` ? 'Removing…' : 'Remove'}
               </Button>
             )}
@@ -449,7 +449,7 @@ export function RuntimeCapacityTab() {
         actions={(
           <>
             <Button onClick={() => setRevokeTarget(null)} disabled={busy !== null}>Cancel</Button>
-            <Button primary onClick={() => void revoke()} disabled={busy !== null}>{busy?.startsWith('revoke:') ? 'Removing…' : 'Remove'}</Button>
+            <Button danger primary onClick={() => void revoke()} disabled={busy !== null}>{busy?.startsWith('revoke:') ? 'Removing…' : 'Remove'}</Button>
           </>
         )}
       >

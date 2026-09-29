@@ -170,17 +170,22 @@ connectors, Merge Agent Handler, Paragon and Notion AI.
   Iconify logos set) in its tab and on its card, so it is recognisable before
   it is read.
 - **Status only when it says something.** No badge for "Not connected"; the
-  Connect button says it. A healthy connection is a quiet green "Connected"
-  beside the title. Only a connection that needs someone gets a pill: "Needs
+  Connect button says it. A healthy connection is a green `StatusDot`
+  "Connected" beside the title. Only a connection that needs someone gets a pill: "Needs
   attention". Never a status row repeating the title.
 - **Name the account agents act as.** A connected card shows which account
   (Sends from, the Slack workspace) without opening anything.
 - **Say what stops before disconnecting.** The confirmation names what stops
   working; earlier work stays.
-- **Agents have their own email; nobody adds an inbox.** Admin → Email lists
-  each agent's address with Copy, Pause and New address, and says who reviews
-  its mail ("Partnerships reviews", "Its owner reviews"). The Outreach account
-  card is only for outreach from a Google or Microsoft mailbox (C100).
+- **Agents have their own email; nobody adds an inbox.** Admin → Email shows
+  one card per agent: its mark, name and a status dot (Receiving, or amber
+  Paused), who reviews its mail and how many emails it has as two icon facts
+  ("Partnerships reviews", "Owner reviews"), Pause, a red Replace address, and
+  the address as a Snippet. Recent email are rows with the sender's initials,
+  the subject, "2 to do" and "Check the sender" pills, and the state as a
+  status dot. Sentences appear only where someone must act (a failed read).
+  The Outreach account card is only for outreach from a Google or Microsoft
+  mailbox (C100).
 - **Organization connections and personal links stay distinct.** The Slack
   install and the Gmail sending account belong to the workspace; a person's
   Slack identity link is theirs.
@@ -194,7 +199,31 @@ so an expired token shows here before an approved action fails.
 
 These hold across the app. `apps/client/src/app/design-system.test.ts` checks
 the ones a pattern can catch, in `pnpm check:quick`, and names the primitive to
-use when it fails.
+use when it fails. The mock build shows every primitive in its states at
+`?ui=library` (`apps/client/src/app/design-system/Library.tsx`); add a new
+primitive there when you add it to `ui/primitives.tsx`.
+
+- **Destructive actions are red.** A button that deletes, removes,
+  disconnects, revokes or replaces is `<Button danger>`; the confirmation that
+  carries it out is `danger primary` (solid red), labelled with the same verb
+  and noun ("Replace address", never "Confirm"), and focus starts on the safe
+  choice. The dialog says what stops working and ends "This can't be undone."
+  when it can't. From Vercel Geist's error button and shadcn's destructive
+  variant. Checked: any `Button` whose words include Delete, Remove,
+  Disconnect, Revoke or Replace address must carry `danger`.
+- **A state is a `StatusDot`.** A coloured dot and its word: green healthy
+  (Connected, Receiving), accent waiting for a person (Ready for review), amber
+  paused or needs a look, red failed, grey quiet. Only work in progress pulses,
+  and not under reduced motion (Geist's StatusDot, AI Elements' Tool states).
+  A one-sentence reason goes in `hint`, shown on hover, not beside it.
+- **Pills are one or two words about a record**, with an optional icon: `info`
+  for counts ("2 to do"), `warn` for something to check ("Check the sender"),
+  `danger` for something wrong.
+- **A value people copy is a `Snippet`**: the value in monospace and a copy
+  icon that becomes a check (AI Elements' Snippet), not a separate Copy button.
+- **A list row is an `Item`**: media to recognise it by, a title and one line,
+  and at most two controls (shadcn's Item, Geist's Entity). Prefer icons with
+  a word ("Owner reviews", "4 emails") over a sentence of facts.
 
 - **Navigation between views is `Tabs`.** A page with sibling views shows them
   as a tab row (`Tabs strong` for a page's top level, as on the Agent page). A
@@ -225,7 +254,10 @@ use when it fails.
 
 Email surfaces reuse the app's existing transitions: row state changes
 cross-fade (150 ms), panels open without spatial travel under
-`prefers-reduced-motion`. No new animation system.
+`prefers-reduced-motion`. No new animation system. A `StatusDot` changes
+colour over 150 ms and pulses only while work is in progress; a `Snippet`'s
+copy icon swaps to a check for 1.6 s. Reduced motion keeps both as instant
+changes.
 
 ## Research summary
 
@@ -246,3 +278,19 @@ cross-fade (150 ms), panels open without spatial travel under
   reply").
 - No tool we found documents what it says when its AI fails to draft; the
   "Couldn't read it · Try again" wording is ours.
+
+Agent UI components (reviewed September 28, 2026, for the Admin → Email
+cleanup):
+
+- Vercel AI Elements (elements.ai-sdk.dev): Tool shows its state as a small
+  badge with an icon, coloured by meaning (Running pulses, Completed green,
+  Error red, Awaiting Approval amber); Snippet copies a value with an icon that
+  turns into a check; Confirmation shows only the part that matches the
+  approval state.
+- Vercel Geist (vercel.com/geist): StatusDot pairs a dot with its word and
+  animates only while building; Button has an error type for destructive
+  actions, labelled verb plus noun; Entity rows keep one or two controls and
+  move the rest to a menu; a destructive modal focuses Cancel first.
+- shadcn/ui (ui.shadcn.com): Button and Badge have a destructive variant;
+  Item is media, title, description and actions; AlertDialog's action takes
+  the destructive variant.

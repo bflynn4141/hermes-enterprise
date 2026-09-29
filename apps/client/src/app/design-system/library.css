@@ -1,0 +1,14 @@
+/* The design-system library page (mock build, `?ui=library`). */
+.design-library { height: 100%; overflow-y: auto; background: var(--app); color: var(--body); font-size: 14px; line-height: 1.6; }
+.design-library main { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; display: flex; flex-direction: column; gap: 40px; }
+.design-library h1 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 500; }
+.library-lede { margin: -28px 0 0; color: var(--muted); }
+.library-section { display: flex; flex-direction: column; gap: 16px; padding-top: 24px; border-top: 1px solid var(--line); }
+.library-section header h2 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 500; }
+.library-section header p { margin: 6px 0 0; max-width: 68ch; color: var(--muted); font-size: 14px; }
+.library-specimens { display: flex; flex-direction: column; gap: 14px; }
+.library-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+.library-card { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(255,255,255,.015); }
+.library-mark { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.04); }
+.library-fact { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 560px) { .design-library main { padding: 32px 16px 64px; } }

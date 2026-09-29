@@ -322,11 +322,11 @@ function SkillsCard({ agent, onChanged }: { agent: AgentDirectoryEntry; onChange
           ? <div className="admin-roles-actions">
             <span className="meta admin-agents-confirm">Remove {assignment.name}?</span>
             <Button disabled={busy} onClick={() => setConfirming(null)}>Keep</Button>
-            <Button primary disabled={busy} onClick={() => remove(assignment)}>{busy ? 'Removing…' : 'Remove'}</Button>
+            <Button danger primary disabled={busy} onClick={() => remove(assignment)}>{busy ? 'Removing…' : 'Remove'}</Button>
           </div>
           : <div className="admin-roles-actions">
             <Button aria-expanded={configuring === assignment.id} onClick={() => setConfiguring(configuring === assignment.id ? null : assignment.id)}>{configuring === assignment.id ? 'Close' : 'Configure'}</Button>
-            <Button disabled={busy} onClick={() => { setProblem(null); setStatus(''); setConfirming(assignment.id); }}>Remove</Button>
+            <Button danger disabled={busy} onClick={() => { setProblem(null); setStatus(''); setConfirming(assignment.id); }}>Remove</Button>
           </div>}
       </div>
       {configuring === assignment.id && <SkillAssignmentEditor key={`${assignment.id}:${assignment.revision}`} assignment={assignment} onCancel={() => setConfiguring(null)} onSave={async (patch) => {
