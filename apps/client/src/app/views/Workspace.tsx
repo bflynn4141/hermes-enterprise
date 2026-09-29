@@ -10,6 +10,7 @@
 // (decision C46) — `RecordsTable` is a database surface and a membership list
 // is not one.
 import { BrandIcon } from '../ui/brand-icons.js';
+import { AdminConnections } from './AdminConnections.js';
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
@@ -1182,6 +1183,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'Roles' && <AdminRoles roleId={id} />}
       {selected === 'Approvals' && <AdminApprovals routeKey={id} />}
       {selected === 'All agents' && <AdminAgents agentId={id} />}
+      {selected === 'All connections' && <AdminConnections />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailPage />}
       {selected === 'Provider keys' && <div className="admin-detail-page"><ProviderKeysTab /><ModelDefaults /></div>}

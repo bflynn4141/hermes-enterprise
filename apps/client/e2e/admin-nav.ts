@@ -9,7 +9,7 @@ const app = (page: Page) => page.getByRole('region', { name: 'Application' });
 const SECTIONS: Readonly<Record<string, readonly string[]>> = {
   Workspace: ['General', 'Roles', 'Approvals', 'Usage', 'Data & privacy'],
   Agents: ['Agents', 'Models', 'Capacity', 'Shared Intelligence'],
-  Connections: ['Slack', 'Email'],
+  Connections: ['Overview', 'Slack', 'Email'],
 };
 
 export const adminSectionOf = (label: string): string =>

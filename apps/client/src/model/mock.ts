@@ -164,6 +164,8 @@ interface MockOptions {
   memberSetupFinance?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
+  /** The connected sending account's token was refused, so Connections shows Needs attention. */
+  connectionTrouble?: boolean;
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
   /** `microsoft`: connected, with a Microsoft 365 sending account (C99). */
   email?: 'disconnected' | 'connected' | 'microsoft' | 'unconfigured' | 'unavailable';
@@ -2637,6 +2639,42 @@ export function createMockBackend(input: MockOptions = {}) {
     if (p('/cloud/connection') && method === 'GET') {
       // Fixture-only: the mock never authorizes a real Cloud organization.
       return json({ status: 'not_connected', organization_name: null, automatic_setup_ready: false, available: false });
+    }
+    if (path === `/w/${WS}/connections` && method === 'GET') {
+      // The Worker's list, from the same fixture state the Email and Slack pages read.
+      const admin = seat === 'admin';
+      const emailAvailable = options.email !== 'unconfigured' && options.email !== 'unavailable';
+      const sending = (provider: 'gmail' | 'microsoft') => {
+        const key = provider === 'gmail' ? 'gmail_sending' as const : 'microsoft_sending' as const;
+        if (!emailAvailable) return { key, state: 'not_configured' as const, reason: 'This deployment has no app registered for it.', identity: null, waiting: 0, detail_view: 'Email' as const };
+        if (!emailConnected || emailProvider !== provider) {
+          const other = emailConnected ? `${emailProvider === 'gmail' ? 'Gmail' : 'Microsoft 365'} is the sending account.` : null;
+          return { key, state: 'not_connected' as const, reason: other, identity: null, waiting: 0, detail_view: 'Email' as const };
+        }
+        const trouble = options.connectionTrouble === true;
+        return {
+          key,
+          state: trouble ? 'needs_attention' as const : 'connected' as const,
+          reason: trouble ? 'The provider stopped accepting Hermes’s access. Reconnect the account.' : null,
+          identity: admin ? (provider === 'microsoft' ? 'partners@contoso.example' : 'iris-partners@example.com') : null,
+          waiting: admin ? 2 : 0,
+          detail_view: 'Email' as const,
+        };
+      };
+      const activeInboxes = emailInboxes.filter((inbox) => inbox.kind === 'agent' && inbox.status === 'active').length;
+      const slackAvailable = options.slack !== 'unconfigured' && options.slack !== 'unavailable';
+      return json({
+        connections: [
+          sending('gmail'),
+          sending('microsoft'),
+          { key: 'agent_address', state: activeInboxes > 0 ? 'connected' : 'not_connected', reason: activeInboxes > 0 ? null : 'No agent has an address yet. An agent gets one once someone owns it.', identity: admin ? `@${EMAIL_INTAKE_DOMAIN}` : null, waiting: 0, detail_view: 'Email' },
+          slackAvailable
+            ? { key: 'slack', state: slackConnected ? 'connected' : 'not_connected', reason: null, identity: admin && slackConnected ? 'Fixture workspace' : null, waiting: 0, detail_view: 'Slack' }
+            : { key: 'slack', state: 'not_configured', reason: 'This deployment has no Slack app registered.', identity: null, waiting: 0, detail_view: 'Slack' },
+          { key: 'gmail_evidence', state: 'not_configured', reason: 'This deployment has no app registered for it.', identity: null, waiting: 0, detail_view: 'Email' },
+        ],
+        can_manage: admin,
+      });
     }
     if (path.startsWith(`/w/${WS}/integrations/slack`)) {
       if (method === 'POST' && path.endsWith('/oauth/start')) {

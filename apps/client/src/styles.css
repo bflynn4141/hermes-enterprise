@@ -919,6 +919,19 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
 .approval-evidence, .approval-reviewers, .approval-result { display: flex; flex-direction: column; gap: 10px; }
 /* An approved email Hermes could not confirm was sent: a reviewer settles it. */
 .email-sends { display: flex; flex-direction: column; gap: 10px; }
+/* Admin → Connections → Overview: one row per outside connection. */
+.admin-connections { display: flex; flex-direction: column; }
+.admin-connection { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.admin-connection .item { align-items: flex-start; }
+.admin-connection .item-media { padding-top: 2px; }
+.admin-connection .item-description { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.admin-connection-standing { color: var(--body); }
+.admin-connection[data-state="not_configured"] .item-title,
+.admin-connection[data-state="not_configured"] .admin-connection-standing { color: var(--muted); }
+@media (max-width: 640px) {
+  .admin-connection .item { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 10px; }
+  .admin-connection .item-actions { grid-column: 2; margin-left: 0; }
+}
 .email-sends .item { align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .email-sends .item-media { padding-top: 6px; }
 .email-sends .item-description { display: block; }
