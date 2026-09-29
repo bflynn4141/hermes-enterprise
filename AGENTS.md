@@ -56,7 +56,9 @@ directories.
 1. Locate the owning module and the decision or invariant behind it.
 2. Reproduce behavior with the narrowest useful test.
 3. Make the smallest coherent change at the correct boundary.
-4. Run `pnpm check:quick` before broader checks.
+4. Run `dagger call check` for containerized quick checks and build (see
+   [Dagger checks](docs/DAGGER.md)); `pnpm check:quick` remains the host-native
+   alternative. Use `dagger call quick` during iteration.
 5. Run the suites that match the risk:
 
 ```sh

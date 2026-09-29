@@ -550,3 +550,20 @@ a test, and the tests are collected in `apps/worker/test/db/server-findings.test
 what the integration hit?".
 
 ---
+
+
+## O14 — Dagger for the local contributor loop (2026-09-28)
+
+Run the existing quick checks and build through a pinned Dagger 0.21.9 module
+and digest-pinned Node 26 image. Agents get the same container toolchain and
+cached package installation across worktrees. Keep checks credential-free and
+exclude local secrets/generated state before importing source. Use the stable
+module format rather than coupling this side project to the 1.0 beta.
+
+This is additive: keep the existing Actions required checks and exact-commit
+deployment gate. Database tests retain their verified disposable-container
+ownership contract; do not impersonate GitHub Actions inside Dagger. Full CI
+migration and database sharding are separate decisions. The September audit
+found database execution, not dependency installation, dominated CI latency,
+so this first increment claims reproducibility and local convenience, not a
+measured speedup or cost saving. See [Dagger checks](../DAGGER.md).
