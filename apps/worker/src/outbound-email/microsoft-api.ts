@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { GmailApiError, type GmailTokenBundle } from './gmail-api.js';
+import { GmailApiError, type GmailTokenBundle, oauthErrorCode } from './gmail-api.js';
 import { MICROSOFT_SCOPES, MICROSOFT_SEND_SCOPE, microsoftTokenUrl, type MicrosoftConfig } from './microsoft-config.js';
 
 // Microsoft Graph for the sending account (C99). The token bundle and error
@@ -27,7 +27,10 @@ async function tokenRequest(config: MicrosoftConfig, body: URLSearchParams, fetc
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
   });
-  if (!response.ok) throw new GmailApiError('microsoft_oauth_exchange_failed', response.status, response.status >= 500 || response.status === 429);
+  if (!response.ok) {
+    const code = await oauthErrorCode(response);
+    throw new GmailApiError('microsoft_oauth_exchange_failed', response.status, response.status >= 500 || response.status === 429, code === 'invalid_grant');
+  }
   return tokenSchema.parse(await response.json());
 }
 

@@ -2,7 +2,7 @@ import { effectExecutorMode, simulationReference } from '../domain/effects.js';
 import type { Env } from '../env.js';
 import { publishEvents, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
 import { GmailApiError, rawGmailMessage, sendGmailMessage } from './gmail-api.js';
-import { resolveSendingAccessToken } from './gmail-store.js';
+import { resolveSendingAccessToken, SendingAccountUnavailable } from './gmail-store.js';
 import { gmailFetcher } from './gmail-config.js';
 import { sendMicrosoftMessage } from './microsoft-api.js';
 import { microsoftFetcher } from './microsoft-config.js';
@@ -149,9 +149,22 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     if (!row.account_id) return null;
     // A refresh commits on its own connection: the provider may already have
     // retired the old refresh token if this claim rolls back.
-    const resolved = await resolveSendingAccessToken(
-      tx, env, row.account_id, (fn) => withWorkspaceTransaction(env, job.workspace_id, fn),
-    );
+    let resolved: Awaited<ReturnType<typeof resolveSendingAccessToken>>;
+    try {
+      resolved = await resolveSendingAccessToken(
+        tx, env, row.account_id, (fn) => withWorkspaceTransaction(env, job.workspace_id, fn),
+      );
+    } catch (error) {
+      if (!(error instanceof SendingAccountUnavailable)) throw error;
+      // Disconnected, or its provider refused the grant: nothing was sent.
+      // The email waits for a mailbox like any approved email without one,
+      // and connecting this address again sends it (routes/outbound-email.ts).
+      await tx.query(
+        `UPDATE outbound_email_outbox SET state='pending_connection',account_id=NULL,last_error=$2 WHERE id=$1`,
+        [row.id, error.code],
+      );
+      return null;
+    }
     if (resolved.account.address !== row.sender_address) {
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
       return null;

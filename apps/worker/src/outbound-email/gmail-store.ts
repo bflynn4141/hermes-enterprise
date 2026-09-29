@@ -3,7 +3,7 @@ import type { Env } from '../env.js';
 import { openSecret, sealSecret, type StoredEnvelope } from '../keys/envelope.js';
 import { refreshRotatingToken, type OwnTransaction } from '../keys/token-refresh.js';
 import { gmailConfig, gmailFetcher } from './gmail-config.js';
-import { refreshGmailToken, type GmailTokenBundle } from './gmail-api.js';
+import { GmailApiError, refreshGmailToken, type GmailTokenBundle } from './gmail-api.js';
 import { microsoftConfig, microsoftFetcher } from './microsoft-config.js';
 import { refreshMicrosoftToken } from './microsoft-api.js';
 
@@ -132,8 +132,20 @@ async function loadConnectedAccount(tx: Tx, accountId: string, lock: boolean): P
     [accountId],
   );
   const account = result.rows[0];
-  if (!account || account.status !== 'connected') throw new Error('gmail_account_not_connected');
+  if (!account || account.status !== 'connected') throw new SendingAccountUnavailable('gmail_account_not_connected');
   return account;
+}
+
+/**
+ * The sending account can't send until a person reconnects it: it was
+ * disconnected, or its provider refused the stored grant. Approved email
+ * that needs it waits for a mailbox instead of retrying (docs/CONNECTORS.md).
+ */
+export class SendingAccountUnavailable extends Error {
+  constructor(readonly code: 'gmail_account_not_connected' | 'refresh_grant_revoked') {
+    super(code);
+    this.name = 'SendingAccountUnavailable';
+  }
 }
 
 const fresh = (token: GmailTokenBundle): boolean => Date.parse(token.expires_at) > Date.now() + 5 * 60_000;
@@ -169,6 +181,29 @@ export async function resolveSendingAccessToken(
   const token = await openToken(env, account);
   if (fresh(token)) return { token: token.access_token, account };
   const exchange = refresherFor(env, account.provider);
+  try {
+    return await refreshSendingToken(env, account, accountId, own, exchange);
+  } catch (error) {
+    if (!(error instanceof GmailApiError && error.grantRevoked)) throw error;
+    // The provider will never honour this grant again. Say so on the account,
+    // in its own transaction so the caller's rollback can't undo it, and never
+    // over a disconnect that already marked it revoked.
+    await own((quarantine) => quarantine.query(
+      `UPDATE outbound_email_accounts SET status='error', last_error='refresh_grant_revoked'
+        WHERE workspace_id=app_workspace_id() AND id=$1 AND status='connected'`,
+      [accountId],
+    ));
+    throw new SendingAccountUnavailable('refresh_grant_revoked');
+  }
+}
+
+function refreshSendingToken(
+  env: Env,
+  account: GmailAccountRow,
+  accountId: string,
+  own: OwnTransaction,
+  exchange: (current: GmailTokenBundle) => Promise<GmailTokenBundle>,
+): Promise<{ token: string; account: GmailAccountRow }> {
   return refreshRotatingToken<OpenedAccount, { token: string; account: GmailAccountRow }>(own, {
     lock: async (locked) => {
       const current = await loadConnectedAccount(locked, accountId, true);

@@ -18,11 +18,14 @@ import { resolveSendingAccessToken, storeSendingAccount } from '../../src/outbou
 import { connectorListSchema, mailboxDisconnectSchema, outboundEmailConnectionSchema } from '@hermes/shared';
 import { sha256Hex } from '../../src/integrations/slack/security.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
+import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
 
 const DOMAIN = 'in.hermes.test';
 const sent: Request[] = [];
 const tokenRequests: URLSearchParams[] = [];
 let senderAddress = '';
+/** How the next token refresh answers: normally, a revoked grant, or a misconfigured app. */
+let refreshAnswer: 'ok' | 'invalid_grant' | 'invalid_client' = 'ok';
 const env: Env = makeEnv({
   KEK_V1: Buffer.alloc(32, 31).toString('base64'),
   MICROSOFT_MAIL_ENABLED: '1',
@@ -34,6 +37,9 @@ const env: Env = makeEnv({
     if (url.hostname === 'login.microsoftonline.com') {
       const form = new URLSearchParams(await request.text());
       tokenRequests.push(form);
+      if (form.get('grant_type') === 'refresh_token' && refreshAnswer !== 'ok') {
+        return Response.json({ error: refreshAnswer, error_description: 'fixture' }, { status: 400 });
+      }
       return Response.json(form.get('grant_type') === 'refresh_token'
         ? { access_token: 'access-2', refresh_token: 'refresh-2', expires_in: 3600, scope: 'Mail.Send User.Read', token_type: 'Bearer' }
         : { access_token: 'access', refresh_token: 'refresh', expires_in: 3600, scope: 'https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read openid email', token_type: 'Bearer' });
@@ -218,6 +224,53 @@ describe('Microsoft 365 sending account', () => {
     const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email`);
     const view = outboundEmailConnectionSchema.parse(await response.json());
     expect(view).toMatchObject({ configured: true, status: 'connected', provider: 'microsoft', providers: { gmail: false, microsoft: true }, address: senderAddress });
+  });
+
+  describe('a refresh the provider refuses', () => {
+    /** A queued approved email on a connected account whose access token has expired. */
+    async function queuedOnExpiredAccount() {
+      const { fx, outbox } = await approvedPendingReply();
+      const account = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => storeSendingAccount(tx, env, {
+        workspaceId: fx.workspaceId, connectedBy: fx.adminId, address: senderAddress, provider: 'microsoft',
+        token: { access_token: 'old', refresh_token: 'refresh-1', expires_at: new Date(Date.now() - 1000).toISOString(), scope: 'Mail.Send', token_type: 'Bearer' },
+      }));
+      await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='queued', account_id=$2 WHERE id=$1`, [outbox.id, account.id]);
+      const run = () => runOutboundEmailSendJob(env, { id: randomUUID(), workspace_id: fx.workspaceId, kind: 'outbound_email_send', payload: { outbox_id: outbox.id } } as unknown as Job);
+      return { fx, outbox, account, run };
+    }
+
+    it('marks the account for reconnecting and parks the email, sending nothing', async () => {
+      const { fx, outbox, account, run } = await queuedOnExpiredAccount();
+      sent.length = 0;
+      refreshAnswer = 'invalid_grant';
+      try { await run(); } finally { refreshAnswer = 'ok'; }
+      expect(sent).toHaveLength(0);
+      expect(await scoped(fx.workspaceId, 'SELECT status, last_error FROM outbound_email_accounts WHERE id=$1', [account.id]))
+        .toEqual([{ status: 'error', last_error: 'refresh_grant_revoked' }]);
+      expect(await scoped(fx.workspaceId, 'SELECT state, account_id, last_error FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
+        .toEqual([{ state: 'pending_connection', account_id: null, last_error: 'refresh_grant_revoked' }]);
+
+      // Admins see it, on the Email page and the Connections overview.
+      const status = outboundEmailConnectionSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email`)).json());
+      expect(status.status).toBe('error');
+      const list = connectorListSchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/connections`)).json());
+      expect(list.connections.find((connection) => connection.key === 'microsoft_sending')).toMatchObject({ state: 'needs_attention' });
+
+      // Reconnecting the address sends the parked email once.
+      await callback(await oauthState(fx, 'microsoft'));
+      expect(sent).toHaveLength(1);
+      expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'sent' }]);
+    });
+
+    it('leaves the account alone when the failure isn\'t about the grant', async () => {
+      const { fx, outbox, account, run } = await queuedOnExpiredAccount();
+      sent.length = 0;
+      refreshAnswer = 'invalid_client';
+      try { await expect(run()).rejects.toThrow(); } finally { refreshAnswer = 'ok'; }
+      expect(sent).toHaveLength(0);
+      expect(await scoped(fx.workspaceId, 'SELECT status FROM outbound_email_accounts WHERE id=$1', [account.id])).toEqual([{ status: 'connected' }]);
+      expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'queued' }]);
+    });
   });
 
   it('disconnecting deletes Hermes\'s access and puts unsent approved email back to waiting', async () => {
