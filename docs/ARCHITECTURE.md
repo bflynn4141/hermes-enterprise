@@ -72,7 +72,7 @@ runtime graph.
 | --- | --- |
 | WorkOS and local fake authentication, workspace creation, invitations, membership, step-up, and revocation | A hosted deployment needs configured WorkOS credentials and webhook or poller settings |
 | Private sessions, the official Hermes run loop, streaming, Stop, Guide, Queue, Retry, recovery, traces, and model selection | A hosted run needs verified Hermes capacity and a connected Nous Portal account |
-| Guarded requests, decisions, immutable evidence, receipts, history, role handoffs, and draft documents | Outreach, payment, access grants, and signatures remain recorded effects for a person to execute; this repository does not execute them. Outside production, Execute records a `simulated` outcome instead ([Effect simulation](EFFECT-SIMULATION.md)) |
+| Guarded requests, decisions, immutable evidence, receipts, history, role handoffs, and draft documents | Payment, access grants, and signatures remain recorded effects for a person to execute; this repository does not execute them. Approved email is the exception: it really sends where a deployment enables it (drafts only in production today). Outside production, Execute records a `simulated` outcome instead ([Effect simulation](EFFECT-SIMULATION.md)) |
 | Upload validation, extraction, R2 storage, HTML rendering, retention hooks, and subject erasure | PDF rendering is unavailable under workerd, so documents expose the HTML render and an explicit PDF status |
 | Durable event delivery through outbox rows, jobs, queues, Workflows, cron, and hibernating WebSockets | Optional external services fail without changing canonical product state |
 | Local scripted-provider development, mock browser tests, disposable live-stack tests, staging, and production configuration | Mock and scripted flows are clearly separated from live model behavior |
@@ -928,8 +928,14 @@ separates current references from dated delivery evidence.
 4. **Counts are derived.** `v_inbox_count`, `v_pending_grants`,
    `v_created_documents`, `v_decision_count` and `v_session_status` are views.
    There is no counter to drift.
-5. **No real outreach, payment or signature code.** Not now, not later, not
-   behind a flag.
+5. **No outside effect except through an approved outbox or effect record
+   with a recorded outcome.** Payment, signature and access-grant executors do
+   not exist. Email is the one real executor: the approved-email outbox sends
+   the exact approved revision through Gmail, Microsoft 365 or Cloudflare Email
+   Service when the deployment enables it, and records `sent`, `failed` or
+   `ambiguous`. An interrupted send becomes `ambiguous` and is never retried
+   automatically. Production keeps email to drafts today (see the README's
+   environment table).
 
 ## Stack
 

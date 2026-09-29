@@ -145,13 +145,30 @@ exact admission, privacy, and handoff rules.
 
 ### What people still handle
 
-The demo stops after a person records a decision. It never sends outreach,
-transfers funds, grants access, or signs documents. The app records any intended
-follow-up as a separate effect, and an authorized person completes that action
-outside the demo. On the hosted demo, pressing Execute on one of those effects
-records an invented outcome labelled Simulated; nothing is sent, paid, granted,
-or signed, and production never offers it. See
+Hermes never transfers funds, grants access, or signs documents. It records
+those follow-ups as separate effects, and an authorized person completes them
+outside the app. On the hosted demo, pressing Execute on one of those effects
+records an invented outcome labelled Simulated; nothing is paid, granted, or
+signed, and production never offers it. See
 [Effect simulation](docs/EFFECT-SIMULATION.md).
+
+Email is the one exception, and only where a deployment turns it on. A reply an
+agent suggests, or partner outreach, can really be sent after the right people
+approve its exact text. It goes out through a connected Gmail or Microsoft 365
+account, or from the agent's own address through Cloudflare Email Service, and
+every send records whether the provider confirmed it. If Hermes can't tell
+whether a send went out, it marks it uncertain and asks a person to check,
+instead of trying again.
+
+| Environment | Approved replies | Partner outreach | Other effects |
+| --- | --- | --- | --- |
+| Production | Drafts only | Drafts only | Unavailable |
+| Staging | Sent, only to the workspace's active members | Drafts only | Simulated |
+| Local development | Sent through a stub | Drafts only | Simulated |
+
+The switches are `EMAIL_REPLY_MODE`, `PARTNER_OUTREACH_EMAIL_MODE`,
+`AGENT_EMAIL_RECIPIENT_MODE` and `EFFECT_EXECUTOR_MODE` in
+`apps/worker/wrangler.jsonc`. See [Email intake](docs/EMAIL-INTAKE.md).
 
 Approval saves HTML documents as unsigned, unsent drafts. See
 [Architecture](docs/ARCHITECTURE.md#what-is-implemented-and-intentionally-limited) for the full
