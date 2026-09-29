@@ -63,11 +63,13 @@ export function AdminWallets() {
   const state = useAppState();
   const [agents, setAgents] = useState<AgentDirectoryEntry[]>([]);
   const [agentError, setAgentError] = useState(false);
+  const [agentsLoading, setAgentsLoading] = useState(true);
   useEffect(() => {
     if (!wallets.data?.enabled || !wallets.data.can_manage) { setAgents([]); return; }
     let live = true;
+    setAgentsLoading(true);
     setAgentError(false);
-    void adapter.rest.adminAgents(state.workspace.id).then(result => { if (live) setAgents(result.items); }).catch(() => { if (live) setAgentError(true); });
+    void adapter.rest.adminAgents(state.workspace.id).then(result => { if (live) setAgents(result.items); }).catch(() => { if (live) setAgentError(true); }).finally(() => { if (live) setAgentsLoading(false); });
     return () => { live = false; };
   }, [adapter, state.workspace.id, wallets.data?.enabled, wallets.data?.can_manage]);
   const { data, error, busy, request, load } = wallets;
@@ -87,7 +89,7 @@ export function AdminWallets() {
       {error && <p role="alert">{error}</p>}
     </AdminSettingsCard>
     {data?.enabled && data.can_manage && <AdminSettingsCard title="Agent wallets" description="Request a separate wallet for each agent; owner enrollment is required before an address is available.">
-      {agentError ? <p role="alert">Agents could not be loaded. Reopen this page to try again.</p> : agents.length === 0 ? <EmptyState icon="people" title="No agents available" /> : agents.map(agent => {
+      {agentsLoading ? <Skeleton rows={2} label="Loading agents" /> : agentError ? <p role="alert">Agents could not be loaded. Reopen this page to try again.</p> : agents.length === 0 ? <EmptyState compact icon="people" title="No agents available" /> : agents.map(agent => {
         const record = data.items.find(item => item.kind === 'agent' && item.agent_id === agent.id);
         return <div className="wallet-agent-row" key={agent.id}>
           <div><strong>{agent.name}</strong>{agent.owner ? <p className="meta">Owner · {agent.owner.name}</p> : <p className="meta">Assign an owner before requesting a wallet.</p>}<p className="meta">{record ? 'Needs owner setup' : 'Not set up'}</p></div>
