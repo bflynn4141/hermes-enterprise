@@ -30,6 +30,9 @@ One Turnkey suborganization will represent a workspace. Workspace, member, and
 agent wallets remain distinct. Customer recovery owners will control the root
 quorum; changing someone's Hermes Admin role must not grant root custody.
 Hermes sign-in and a saved enrollment request do not establish signing authority.
+Every agent payment will need a member with the finance role to approve the exact
+pending Turnkey request with their passkey; an approval recorded only in Hermes
+never releases a signature. Members get their own wallets in the first version.
 
 Before signing becomes available, implementation must bind verified provider
 identities and addresses to these records, verify the customer root ceremony,

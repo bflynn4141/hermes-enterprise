@@ -2072,3 +2072,11 @@ unverified. It does not redefine enrollment as custody or approval as payment.
 See [Workspace wallets](../WALLETS.md) for the shipped boundary and
 [the implementation plan](../plans/2026-09-28-turnkey-workspace-wallets.md) for
 the remaining work.
+
+**Decided September 28, 2026 (evening).** Every agent payment needs a member with
+the finance role, and Turnkey enforces it: the agent wallet's policy consensus
+requires the agent and a finance member, and the Inbox approval is that member's
+passkey approval of the exact pending Turnkey activity. Member wallets ship in the
+first version. The first provider test uses Base Sepolia USDC transfers read
+through an uploaded ABI, and this enrollment increment merges only after that
+test's first live run passes.

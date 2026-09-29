@@ -1,6 +1,6 @@
 # Turnkey workspace wallets — implementation plan
 
-September 28, 2026. Owner: Hermes Tech Lead. Status: first application increment in implementation. Durable enrollment requests, Admin/member UI, and pure mainnet transfer-intent validation; no hosted Turnkey proof, real wallet provisioning, Inbox transfer approval integration, signing, or broadcast yet.
+September 28, 2026. Owner: the Claude Desktop session **Organization member wallet addresses**; Brian moved this workstream from the Hermes Tech Lead the same evening. Status: first application increment in PR208, held until the first live Turnkey test passes. Durable enrollment requests, Admin/member UI, and pure mainnet transfer-intent validation; no hosted Turnkey proof, real wallet provisioning, Inbox transfer approval integration, signing, or broadcast yet.
 
 ## Outcome and decisions
 
@@ -32,7 +32,9 @@ Missing at the initial review: customer enrollment and passkey registration; map
 4. WorkOS sign-in establishes application identity, not Turnkey signing authority. Bind a verified passkey enrollment challenge to workspace, user, nonce, expiry and allowed origin. Root credentials never reach Hermes or an agent runtime. Validate recovery and passkey origin configuration before storing value.
 5. Agent request credentials stay in an encrypted signing service and never enter runtime prompts, tools, logs or traces. Such credentials still confer signing power even though Turnkey holds wallet private keys. Separate parent provisioning identity, workspace onboarding identity and agent signing identities.
 6. Default to customer-authorized onboarding. Do not grant Hermes broad CREATE_USER rights until live tests prove that it cannot create a user with privileged tags or replacement credentials. API parameter presence is not proof those fields are expressible in a policy.
-7. Hermes manages business approvals. Turnkey enforces a smaller independent boundary: exact wallet/principal, chain, asset/function/recipient, amount and fee limits, plus provider co-approval where required. An Admin changing an application role does not instantly change provider authority.
+7. Hermes manages business approvals. Turnkey enforces a smaller independent boundary: exact wallet/principal, chain, asset/function/recipient, amount and fee limits. An Admin changing an application role does not instantly change provider authority.
+8. **Every agent payment needs a human, enforced by Turnkey (Brian, September 28).** An agent wallet's payment policy has a consensus of the agent *and* a member holding the finance role. The agent's signing request waits in Turnkey (`CONSENSUS_NEEDED`); the Inbox **Approve** is that member's passkey approval of the exact pending activity (`approveActivity` with its fingerprint). Approvals recorded only in Hermes, by Hermes's service identity, or by members without the role release nothing. Hermes approval routing still decides who is asked and how many approvals are needed; Turnkey guarantees no agent payment is signed without a qualifying human.
+9. **Member wallets are in the first version (Brian, September 28).** Each member has their own wallet bound to them by a per-member policy, alongside agent wallets and the workspace wallet.
 
 ## Ordered implementation
 
@@ -40,16 +42,16 @@ Missing at the initial review: customer enrollment and passkey registration; map
 
 Reuse `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/turnkey-spike` rather than making another competing wallet experiment.
 
-Local changes completed in this task:
+The spike now tests the product's shape (September 28 evening):
 
-- Implemented the missing native-ETH test policy with wallet, chain, transaction type, recipient, calldata, value and gas restrictions; narrowed the Partnerships policy too.
-- Network/authentication/rate-limit/invalid-policy errors are inconclusive failures, not passing denials. Explicit rejected provider activities need a receipt identifier.
-- Tagged-user escalation checks must deny; they no longer automatically count as successful probes.
-- Positive signing checks parse the returned transaction, compare the requested fields and recover the expected signer. Signed bytes are not printed or broadcast.
-- Live execution requires an explicit environment opt-in. Disabled the unsafe keep option that abandoned the only ephemeral root key; cleanup runs in a finally block.
-- Six offline tests and TypeScript check pass. Originals preserved in the lead's `outputs/turnkey-review-originals`.
+- Base Sepolia USDC `transfer`, read through an uploaded ABI: wallet, chain, token contract, `function_name == 'transfer'`, allowlisted `contract_call_args['to']`, capped `contract_call_args['value']`, zero ETH value, gas and `max_fee_per_gas` limits. USDC `approve` and plain ETH are expected to be refused.
+- Agent payments: pending until approved; Hermes's approval and a non-finance member's approval do not release it; a finance member's approval does, and the signed bytes and signer are verified against the request. Admin grant and revocation of the finance role change who can approve.
+- Member wallets: each member signs only their own wallet within a member cap; the agent, Hermes and other members are refused.
+- Hermes escalation: writing a policy, editing a tag, signing, and creating a user already tagged finance are all expected to be refused.
+- Fixed two defects in the earlier hardening. `@turnkey/sdk-server` returns rejected and consensus-needed activities as data rather than throwing, so outcomes now come from the returned activity's id and status; thrown errors are always inconclusive and print only class and code. The fee limit used `gas_price`, which does not bound EIP-1559 transactions; it now uses `max_fee_per_gas`.
+- Kept: explicit `TURNKEY_RUN_TEST_SPIKE=1` opt-in, no `--keep`, cleanup in `finally`, signed bytes never logged or broadcast. Four policies, inside the lower-tier limit. TypeScript check and six offline tests pass.
 
-Remaining before trusting the experiment: real account/access, controlled disposable organization, durable cleanup/recovery handling for ambiguous create/delete outcomes, documented provider rejection shapes, validation of the empty-calldata representation and policy evaluation behavior. The experiment deliberately tests a broad onboarding permission for escalation; that permission is NOT approved for the product. No provider calls were made here. Native transaction policy tests do not prove ERC-20 limits.
+Remaining before trusting the experiment: Brian's Turnkey account and API key, then a first live run. That run must settle three things before PR208 merges: whether Hermes's user-create permission can mint a finance-tagged user (this decides Hermes-driven versus Admin-passkey onboarding), whether `contract_call_args` addresses compare as lowercase hex, and how Turnkey reports policy refusals. The onboarding permission in the spike is a probe, NOT approved for the product.
 
 ### 1. Wallet enrollment and addresses
 
@@ -69,7 +71,7 @@ Start with one narrow action: Base mainnet USDC transfer to an explicitly allowe
 
 Prepare a canonical immutable intent binding workspace, source principal/account, chain, token contract, recipient, integer base-unit amount, call data, nonce, gas/fee ceiling, expiry, simulation result, policy version and approval revision. Decode the contract call: transaction native value is often zero for USDC and cannot bound the token amount. Amount math uses integers, never floating point.
 
-Show asset/amount, recipient, source wallet, network, fee ceiling, purpose and evidence in the Inbox. A changed recipient, amount, calldata, chain or authority invalidates approval. Fee/nonce refreshes must remain within the explicitly approved envelope or request fresh approval. Existing requester/self-review/role routing rules remain authoritative; do not reduce them to make a single-owner demo pass.
+Show asset/amount, recipient, source wallet, network, fee ceiling, purpose and evidence in the Inbox. For agent payments the Inbox approval is the finance member's passkey approval of the pending Turnkey activity, so the exact transaction is submitted to Turnkey when the approval request is created, and the approval screen shows the decoded bytes Turnkey will sign. A changed recipient, amount, calldata, chain or authority invalidates approval. Fee/nonce refreshes must remain within the explicitly approved envelope or request fresh approval. Existing requester/self-review/role routing rules remain authoritative; do not reduce them to make a single-owner demo pass.
 
 ### 3. Governed signing and execution
 
@@ -77,7 +79,7 @@ Implement a dedicated wallet operation ledger; do not turn the generic simulated
 
 States: prepared → awaiting_approval → approved → signing → signed → submitting → submitted → confirmed, with expired/rejected/cancelled/failed/ambiguous branches. Signing is not payment; submission is not confirmation.
 
-Claim an operation under a short transaction, check current member/agent permissions, approved revision/hash, expiry and provider policy version, then release DB locks before calling Turnkey. Persist provider activity IDs and reconcile uncertain outcomes before any retry. Reserve nonces per wallet/chain. Re-broadcast the identical signed transaction where safe; never automatically produce a replacement payment after an unknown outcome. Store sensitive signed bytes outside user-visible logs and agent context with tightly scoped access.
+Store the pending Turnkey activity id and fingerprint on the operation, and record which member's passkey approved it. The operation stays awaiting_approval until Turnkey reports the activity COMPLETED; a Hermes-side approval alone never advances it. Claim an operation under a short transaction, check current member/agent permissions, approved revision/hash, expiry and provider policy version, then release DB locks before calling Turnkey. Persist provider activity IDs and reconcile uncertain outcomes before any retry. Reserve nonces per wallet/chain. Re-broadcast the identical signed transaction where safe; never automatically produce a replacement payment after an unknown outcome. Store sensitive signed bytes outside user-visible logs and agent context with tightly scoped access.
 
 Before broadcast, verify the signed payload matches the approved envelope and recover its signer. Recheck revocation/suspension. Track transaction hash, chain receipt, failure and confirmations/reorganizations. A human-facing signed result must not be labelled paid.
 
@@ -106,7 +108,7 @@ Deploy behind disabled provider/signing/broadcast flags. Existing email, member 
 
 Turnkey currently documents 100 users and 100 wallets per suborganization, 10 tags, no nested suborganizations, and five policies on lower tiers versus up to250 on Enterprise. Humans, agents and services all consume capacity. A 50-human workspace with an agent per person plus a service identity exceeds100 users. One-suborg-per-workspace is a bounded initial model, not support for indefinite scale.
 
-Measure generated policy count and onboarding capacity before promising a seat count. Seek vendor-confirmed limits or evaluate multiple sibling security domains for larger customers; do not silently change isolation or buy Enterprise. A small pilot can fit lower-tier limits, so “Enterprise is immediately required” is too strong. Signing can incur provider fees even with no blockchain broadcast; verify remaining allowance before live experiments.
+With member wallets in v1, each workspace needs one policy per member wallet plus one per agent payment policy (the agent's identity is in its consensus). Two members and one agent fit the five-policy lower tier; a larger pilot needs Enterprise (250). Measure generated policy count and onboarding capacity before promising a seat count. Seek vendor-confirmed limits or evaluate multiple sibling security domains for larger customers; do not silently change isolation or buy Enterprise. A small pilot can fit lower-tier limits, so “Enterprise is immediately required” is too strong. Signing can incur provider fees even with no blockchain broadcast; verify remaining allowance before live experiments.
 
 ## Sources and remaining blockers
 
