@@ -9,7 +9,17 @@ test('an agent\'s email is searchable, sorted by priority and paged, one line pe
   await expect(page.getByText('10 of 184')).toBeVisible();
   const heights = await page.locator('.email-row').evaluateAll((rows) => new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height))).size);
   expect(heights).toBe(1);
-  await expect(list.getByRole('listitem').first().locator('time')).toHaveText(/^(Just now|\d+m ago)$/);
+  await expect(list.getByRole('listitem').first().locator('.time-full')).toHaveText(/^(Just now|\d+m ago)$/);
+  // Status dots and times line up down the list.
+  const columns = await page.locator('.email-row').evaluateAll((rows) => rows.map((row) => [
+    Math.round(row.querySelector('.email-row-status .status-dot-mark')!.getBoundingClientRect().left),
+    Math.round(row.querySelector('time')!.getBoundingClientRect().right),
+  ].join()));
+  expect(new Set(columns).size).toBe(1);
+
+  // A failed read is its own Try again.
+  await page.getByRole('button', { name: /^Couldn’t read it\. Try again: Partner program question$/ }).hover();
+  await expect(page.locator('.email-status-action .when-active').first()).toHaveCSS('opacity', '1');
 
   await page.getByRole('button', { name: 'Priority' }).click();
   await expect(list.getByRole('listitem').first()).toContainText('Check the sender');

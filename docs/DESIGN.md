@@ -69,7 +69,7 @@ One vocabulary for the Inbox list, Admin → Role inboxes and the email chat:
 | Waiting for an automatic retry | Trying again soon |
 | Could not be read | Couldn't read it, with the reason and Try again |
 | Arrived while the inbox was paused | Inbox paused |
-| A flagged sender, on any row | Check the sender |
+| A flagged sender, on any row | Check the sender (in a list, it replaces Ready for review as the status, in amber) |
 
 The agent's name is used where it is known ("Iris"); otherwise "the agent".
 
@@ -222,10 +222,15 @@ primitive there when you add it to `ui/primitives.tsx`.
   `danger` for something wrong.
 - **A value people copy is a `Snippet`**: the value in monospace and a copy
   icon that becomes a check (AI Elements' Snippet), not a separate Copy button.
-- **A list that can grow to hundreds is one line per row.** The subject and
-  sender give way (ellipsis, full text on hover) before the marks, status and
-  time do; on a phone the sender hides and pills and status become their
-  icons, with the words kept for screen readers. Past five rows it gets a
+- **A list that can grow to hundreds is one line per row, in fixed columns**
+  so marks, status dots and times line up down the list. An email row is the
+  sender's initials (name and address on hover, not a column), the subject
+  (ellipsis, full text on hover), to-dos, status and time. A status someone
+  can act on is the action itself: "Couldn't read it" turns into "Try again"
+  in the same space on hover or focus, with the reason as its tooltip (touch
+  screens show the action). On a phone, to-dos and statuses become their
+  icons, times their largest unit ("20h ago"), with the words kept for
+  screen readers. Past five rows it gets a
   `SearchField` and a `ToggleGroup` of Recent and Priority, nothing more;
   pages load 10 and then 25 at a time behind "Show more", which says "10 of
   184". Priority means what waits for a person first: a flagged sender's

@@ -74,17 +74,36 @@
 .email-inbox-messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
 .email-inbox-messages > li { border-bottom: 1px solid var(--line); }
 .email-inbox-messages > li:last-child { border-bottom: 0; }
-/* One line per email, however many there are: the subject and sender give way first. */
-.email-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 92px; align-items: center; gap: 12px; min-height: 44px; padding: 6px 0; }
+/* One line per email in fixed columns, so dots, words and times line up
+   down the list: sender, subject, to-dos, status, time. */
+.email-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 84px 164px 96px; align-items: center; gap: 14px; min-height: 44px; padding: 6px 8px; margin: 0 -8px; border-radius: 8px; transition: background-color 120ms ease-out; }
+.email-row:hover { background: rgba(255,255,255,.03); }
+.email-row-sender { display: inline-flex; cursor: default; }
 .email-inbox-messages .avatar { font-size: 12px; background: #2a2764; color: var(--body); }
-.email-row-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.email-inbox-subject { all: unset; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 21px; color: var(--body); text-align: left; }
+.email-row-main { min-width: 0; display: flex; }
+.email-inbox-subject { all: unset; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 21px; color: var(--body); text-align: left; }
 button.email-inbox-subject { cursor: pointer; }
 button.email-inbox-subject:hover { text-decoration: underline; text-underline-offset: 3px; }
 button.email-inbox-subject:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 2px; border-radius: 3px; }
-.email-inbox-sender { flex: 0 10 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
-.email-row-marks { display: flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+.email-row-todo { display: flex; justify-content: flex-start; }
+.email-row-status { display: flex; min-width: 0; }
+.email-row .time-short { display: none; }
 .email-row time { color: var(--muted); font-size: 12.5px; line-height: 18px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The retry status: one cell, two faces stacked, so nothing moves when it turns into its action. */
+.email-status-action { all: unset; display: inline-grid; cursor: pointer; border-radius: 6px; }
+.email-status-action > span { grid-area: 1 / 1; display: inline-flex; align-items: center; transition: opacity 150ms ease-out; }
+.email-status-action .when-active { gap: 6px; padding: 0 8px; margin-left: -8px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 13px; line-height: 24px; color: var(--body); opacity: 0; }
+.email-status-action:is(:hover, :focus-visible) .when-idle { opacity: 0; }
+.email-status-action:is(:hover, :focus-visible) .when-active { opacity: 1; }
+.email-status-action:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 2px; }
+.email-status-action:disabled { cursor: default; }
+.email-status-action:disabled .when-active { opacity: 0; }
+.email-status-action:disabled .when-idle { opacity: 1; }
+@media (hover: none) {
+  .email-status-action .when-idle { opacity: 0; }
+  .email-status-action .when-active { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .email-row, .email-status-action > span { transition: none; } }
 .email-inbox-messages .problem { margin: 0 0 8px 38px; color: var(--danger-ink); font-size: 13px; }
 .email-inbox-more { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
 .email-inbox-confirm code { overflow-wrap: anywhere; }
@@ -95,11 +114,13 @@ button.email-inbox-subject:focus-visible { outline: 2px solid var(--focus-line);
   .email-agent-head { flex-wrap: wrap; }
   .email-agent-head .item-actions { width: 100%; margin-left: 0; }
   .email-agent-head .item-actions .btn { flex: 1 1 auto; }
-  /* Still one line: the sender, the pills' words and the status word give way to their marks. */
-  .email-row { grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; }
-  .email-inbox-sender { display: none; }
-  .email-row-marks .pill { padding: 0 7px; }
-  .email-row-marks :is(.pill-text, .status-dot-label) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* Still one line: to-dos and statuses keep their marks and drop their words (kept for screen readers). */
+  .email-row { grid-template-columns: 26px minmax(0, 1fr) 30px 28px 56px; gap: 8px; }
+  .email-row .time-full { display: none; }
+  .email-row .time-short { display: inline; }
+  .email-row-todo .pill { padding: 0 7px; }
+  .email-row :is(.pill-text, .status-dot-label) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .email-status-action .when-active { font-size: 0; gap: 0; padding: 0 5px; }
   .email-inbox-tools { flex-wrap: wrap; }
 
   .email-plain { padding: 16px; }

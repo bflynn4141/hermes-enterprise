@@ -107,6 +107,25 @@ export function CopyAddress({ address, name }: { address: string; name?: string 
   return <Snippet className="email-inbox-address" value={address} label={name ? `${name}’s address` : 'the address'} />;
 }
 
+/**
+ * A status a person can act on, as the status itself: "Couldn't read it"
+ * becomes "Try again" under the pointer or keyboard focus, in the same space,
+ * and says why on hover. Touch screens, which have no hover, show the action.
+ */
+function RetryStatus({ message, tone, text, note, subject, busy, disabled, onRetry }: {
+  message: InboundEmailListItem; tone: StatusTone; text: string; note: string | null; subject: string;
+  busy: boolean; disabled: boolean; onRetry: () => void;
+}) {
+  const action = message.problem === 'daily_limit' ? 'Read it now' : 'Try again';
+  return (
+    <button type="button" className="email-status-action" disabled={disabled} title={note ?? undefined}
+      aria-label={`${text}. ${action}: ${subject}`} onClick={onRetry}>
+      <span className="when-idle"><StatusDot tone={tone} label={busy ? 'Asking…' : text} /></span>
+      <span className="when-active" aria-hidden="true"><Icon name="replace" size={14} strokeWidth={1.8} />{action}</span>
+    </button>
+  );
+}
+
 /** Waits `ms` after the last change before passing a value on, so typing does not send a request per key. */
 function useSettled<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -182,22 +201,26 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
           const toDo = message.brief?.action_items.filter((item) => item.owner === 'us').length ?? 0;
           return <li key={message.id} data-tone={stateWords.tone}>
             <div className="email-row">
-              <Avatar person={{ name: sender }} size={26} />
+              <span className="email-row-sender" title={`${sender} <${message.sender.address}>`}><Avatar person={{ name: sender }} size={26} /></span>
               <span className="email-row-main">
                 {requestId
                   ? <button type="button" className="email-inbox-subject" title={subject} onClick={() => nav(REQ(requestId))}>{subject}</button>
                   : <span className="email-inbox-subject" title={subject}>{subject}</span>}
-                <span className="email-inbox-sender" title={message.sender.address}>{sender}</span>
+                <span className="sr-only">, from {sender}</span>
               </span>
-              <span className="email-row-marks">
-                {toDo > 0 && <Pill tone="info" icon="check">{toDo} to do</Pill>}
-                {flagged && <Pill tone="warn" icon="shield">Check the sender</Pill>}
-                <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} hint={stateWords.note ?? undefined} />
-                {message.can_retry && <Button small disabled={retrying !== null} aria-label={`${message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}: ${subject}`} onClick={() => void retry(message)}>
-                  {retrying === message.id ? 'Asking…' : message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}
-                </Button>}
+              <span className="email-row-todo">{toDo > 0 && <Pill tone="info" icon="check">{toDo} to do</Pill>}</span>
+              <span className="email-row-status">
+                {message.can_retry
+                  ? <RetryStatus message={message} tone={DOT_TONE[stateWords.tone]} text={stateWords.text} note={stateWords.note} subject={subject}
+                    busy={retrying === message.id} disabled={retrying !== null} onRetry={() => void retry(message)} />
+                  : flagged && message.status === 'suggested' && message.awaiting_review !== false
+                  ? <StatusDot tone="warn" label="Check the sender" hint={`Ready for review. ${message.sender.warnings.find((warning) => warning.severity === 'caution')?.detail ?? ''}`.trim()} />
+                  : <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} hint={stateWords.note ?? undefined} />}
               </span>
-              <time dateTime={message.received_at} title={fullTime(message.received_at)}>{timeAgo(message.received_at)}</time>
+              <time dateTime={message.received_at} title={fullTime(message.received_at)}>
+                <span className="time-full">{timeAgo(message.received_at)}</span>
+                <span className="time-short" aria-hidden="true">{timeAgo(message.received_at, Date.now(), { compact: true })}</span>
+              </time>
             </div>
             {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
           </li>;

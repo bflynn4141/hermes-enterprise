@@ -14,6 +14,8 @@ describe('timeAgo', () => {
     expect(timeAgo(before(DAY), now)).toBe('1d ago');
     expect(timeAgo(before(DAY + HOUR + MIN), now)).toBe('1d 1h 1m ago');
     expect(timeAgo(before(6 * DAY + 23 * HOUR), now)).toBe('6d 23h ago');
+    expect(timeAgo(before(DAY + HOUR + MIN), now, { compact: true })).toBe('1d ago');
+    expect(timeAgo(before(20 * HOUR + 55 * MIN), now, { compact: true })).toBe('20h ago');
   });
 
   it('names the date from a week on, and a future time reads as now', () => {
