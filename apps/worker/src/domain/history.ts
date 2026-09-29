@@ -660,6 +660,13 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = requestRef;
       break;
 
+    case 'outbound_email.ambiguous':
+      text = `${capitalize(subject)} may or may not have been sent`;
+      detail = 'The send was interrupted. Check the mailbox before sending it again';
+      status = 'Needs attention';
+      ref = requestRef;
+      break;
+
     case 'outbound_email.simulated':
       text = `Practice send: ${subject}`;
       detail = 'This deployment doesn’t deliver email, so nothing left Hermes';

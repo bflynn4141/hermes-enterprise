@@ -233,6 +233,36 @@ describe('every agent has its own email address (C100)', () => {
     expect(sent).toHaveLength(0);
   });
 
+  // A send the Worker started and never finished recording: the provider may
+  // already have it. A revived job must not send it a second time (H1).
+  it('marks a send left half-finished as uncertain, and never sends it again', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='sending' WHERE id=$1`, [outbox.id]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+    expect(await scoped(fx.workspaceId, 'SELECT state, last_error FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
+      .toEqual([{ state: 'ambiguous', last_error: 'send_interrupted_outcome_unknown' }]);
+    const [effect] = await scoped<{ effect_status: string; effect_reason: string }>(fx.workspaceId,
+      'SELECT effect_status, effect_reason FROM approval_requests WHERE request_id=$1', [requestId]);
+    expect(effect).toMatchObject({ effect_status: 'failed' });
+    expect(effect!.effect_reason).toMatch(/may or may not have been sent/u);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('sends once when the provider accepted but the result was never recorded', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { outbox } = await approvedReply(fx);
+    expect(sent).toHaveLength(1);
+    // The Worker died after Cloudflare accepted the message and before `sent` was written.
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='sending', provider_message_id=NULL, sent_at=NULL WHERE id=$1`, [outbox.id]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(1);
+  });
+
   it('keeps a throttled send queued for the job to retry', async () => {
     sent.length = 0;
     const fx = await seedAgent();
