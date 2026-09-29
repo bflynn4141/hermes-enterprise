@@ -1,7 +1,14 @@
 # Connectors: one description per outside connection
 
-Status: design note for Phase 2 of the Quest adoption plan, September 29, 2026.
-Nothing here is built yet. Code references are to `main` at `b6d4b836`.
+Status: Phase 2 of the Quest adoption plan, September 29, 2026. Built:
+
+- The contract, per-connection statuses and Admin → Connections → Overview (#218).
+- Disconnect for sending accounts and read-only Gmail (#219).
+- A refresh the provider refuses with `invalid_grant` marks the sending account
+  `error` (Needs attention) and parks its approved email until someone
+  reconnects.
+
+Code references below are to `main` at `b6d4b836`, when the gaps were found.
 
 ## Why
 
