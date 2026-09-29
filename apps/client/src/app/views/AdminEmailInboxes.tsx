@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { REQ, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
-import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
+import { Avatar, Button, Dialog, EmptyState, Item, Pill, Skeleton, Snippet, StatusDot, type StatusTone } from '../ui/primitives.js';
+import { Glass, Icon } from '../ui/icons.js';
 import { sortRoles } from './AdminRoles.js';
 import { useStepUp } from './use-step-up.js';
 import { useEmailPolling } from './use-email-polling.js';
@@ -20,6 +21,7 @@ import './email-message.css';
 export const ADMIN_EMAIL_INBOXES_VIEW = 'Inboxes';
 
 type MailTone = 'quiet' | 'working' | 'ready' | 'problem';
+const DOT_TONE: Record<MailTone, StatusTone> = { quiet: 'muted', working: 'working', ready: 'ready', problem: 'problem' };
 
 /**
  * One email's state in the words of docs/DESIGN.md, with a sentence when a
@@ -101,14 +103,8 @@ export function useAgentAddress(agentId: string): string | null | undefined {
   return address;
 }
 
-export function CopyAddress({ address }: { address: string }) {
-  const [copied, setCopied] = useState(false);
-  return <span className="email-inbox-address">
-    <code>{address}</code>
-    <Button small onClick={() => {
-      void navigator.clipboard?.writeText(address).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); }, () => undefined);
-    }}>{copied ? 'Copied' : 'Copy'}</Button>
-  </span>;
+export function CopyAddress({ address, name }: { address: string; name?: string }) {
+  return <Snippet className="email-inbox-address" value={address} label={name ? `${name}’s address` : 'the address'} />;
 }
 
 function RecentMail({ inbox }: { inbox: EmailInbox }) {
@@ -155,21 +151,24 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
       const subject = message.subject || '(no subject)';
       const stateWords = mailState(message, inbox.agent.name);
       const flagged = message.sender.warnings.some((warning) => warning.severity === 'caution');
+      const sender = message.sender.name ?? message.sender.address;
+      const toDo = message.brief?.action_items.filter((item) => item.owner === 'us').length ?? 0;
       return <li key={message.id} data-tone={stateWords.tone}>
-        <span className="email-inbox-message-main">
-          {requestId
+        <Item
+          media={<Avatar person={{ name: sender }} size={32} />}
+          title={requestId
             ? <button type="button" className="email-inbox-subject" onClick={() => nav(REQ(requestId))}>{subject}</button>
             : <span className="email-inbox-subject">{subject}</span>}
-          <span className="email-inbox-sub">
-            {message.sender.name ?? message.sender.address}
-            {message.brief && message.brief.action_items.some((item) => item.owner === 'us') && ` · ${message.brief.action_items.filter((item) => item.owner === 'us').length} to do`}
-            {flagged && <span className="email-inbox-flag"> · Check the sender</span>}
-          </span>
-        </span>
-        <span className="email-inbox-message-side">
-          <time dateTime={message.received_at}>{receivedAt(message.received_at)}</time>
-          <span className="state" data-tone={stateWords.tone}>{stateWords.text}</span>
-        </span>
+          description={<>
+            <span className="email-inbox-sender">{sender}</span>
+            {toDo > 0 && <Pill tone="info" icon="check">{toDo} to do</Pill>}
+            {flagged && <Pill tone="warn" icon="shield">Check the sender</Pill>}
+          </>}
+          actions={<span className="email-inbox-message-side">
+            <time dateTime={message.received_at}>{receivedAt(message.received_at)}</time>
+            <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} />
+          </span>}
+        />
         {(stateWords.note || message.can_retry) && <span className="email-inbox-note">
           {stateWords.note && <span>{stateWords.note}</span>}
           {message.can_retry && <Button small disabled={retrying !== null} aria-label={`${message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}: ${subject}`} onClick={() => void retry(message)}>
@@ -228,7 +227,7 @@ export function AdminEmailInboxes() {
   const roleName = (slug: string): string => roles.find((role) => role.slug === slug)?.name ?? slug;
   const reviewers = (inbox: EmailInbox): string => inbox.role_slug
     ? `${roleName(inbox.role_slug)} reviews`
-    : 'Its owner reviews';
+    : 'Owner reviews';
 
   if (loadError && !inboxes) return <div role="alert" className="admin-roles-error"><p>Could not load agent email. Try again.</p><Button onClick={polling.refresh}>Try again</Button></div>;
   if (!inboxes) return <Skeleton rows={4} label="Loading agent email" />;
@@ -241,21 +240,33 @@ export function AdminEmailInboxes() {
       : inboxes.length === 0
       ? <EmptyState compact icon="iris" title="No agent has an address yet" detail="An agent gets its own address once someone owns it." />
       : <ul className="email-inboxes-list" aria-label="Agent email">
-        {inboxes.map((inbox) => <li key={inbox.id}>
-          <div className="email-inbox-top">
-            <strong>{inbox.kind === 'agent' ? inbox.agent.name : inbox.label}</strong>
-            <span className="email-inbox-status" data-state={inbox.status}>{inbox.status === 'active' ? 'Receiving' : 'Paused · new email is turned away'}</span>
-            <span className="email-inbox-actions">
-              <Button small disabled={busyId !== null} onClick={() => void setStatus(inbox, inbox.status === 'active' ? 'paused' : 'active')}>{inbox.status === 'active' ? 'Pause' : 'Resume'}</Button>
-              <Button small disabled={busyId !== null} onClick={() => setRemoving(inbox)}>{inbox.kind === 'agent' ? 'New address' : 'Remove'}</Button>
-            </span>
-          </div>
-          <CopyAddress address={inbox.address} />
-          <p className="email-inbox-facts">{inbox.kind === 'agent'
-            ? `${reviewers(inbox)} · ${inbox.message_count} ${inbox.message_count === 1 ? 'email' : 'emails'}`
-            : `${inbox.role_slug ? roleName(inbox.role_slug) : 'Role'} address · Read by ${inbox.agent.name} · ${inbox.message_count} ${inbox.message_count === 1 ? 'email' : 'emails'}`}</p>
-          <RecentMail inbox={inbox} />
-        </li>)}
+        {inboxes.map((inbox) => {
+          const name = inbox.kind === 'agent' ? inbox.agent.name : inbox.label;
+          const active = inbox.status === 'active';
+          return <li key={inbox.id} data-state={inbox.status}>
+            <Item
+              className="email-agent-head"
+              media={<span className="email-agent-mark"><Glass name={inbox.kind === 'agent' ? 'iris' : 'inbox'} size={24} /></span>}
+              title={<><h4>{name}</h4>{active
+                ? <StatusDot tone="ok" label="Receiving" />
+                : <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />}</>}
+              description={<>
+                <span className="email-agent-fact"><Icon name="users" size={14} />{inbox.kind === 'agent' ? reviewers(inbox) : `Read by ${inbox.agent.name}`}</span>
+                <span className="email-agent-fact"><Icon name="mail" size={14} />{inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</span>
+              </>}
+              actions={<>
+                <Button small disabled={busyId !== null} onClick={() => void setStatus(inbox, active ? 'paused' : 'active')}>
+                  <Icon name={active ? 'pause' : 'play'} size={14} />{active ? 'Pause' : 'Resume'}
+                </Button>
+                <Button small danger disabled={busyId !== null} onClick={() => setRemoving(inbox)}>
+                  {inbox.kind === 'agent' ? 'Replace address' : 'Remove address'}
+                </Button>
+              </>}
+            />
+            <CopyAddress address={inbox.address} name={name} />
+            <RecentMail inbox={inbox} />
+          </li>;
+        })}
       </ul>}
     {inboxes.length > 0 && <details className="admin-help">
       <summary>How to send email to an agent</summary>
@@ -265,13 +276,13 @@ export function AdminEmailInboxes() {
         <li>In Microsoft 365: Exchange admin center → Mail flow → Rules → Add a rule that sends a copy to the address.</li>
       </ol>
     </details>}
-    {removing && <Dialog open title={removing.kind === 'agent' ? `Give ${removing.agent.name} a new address?` : `Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
+    {removing && <Dialog open title={removing.kind === 'agent' ? `Replace ${removing.agent.name}’s address?` : `Remove ${removing.label}?`} onClose={() => setRemoving(null)} actions={<>
       <Button onClick={() => setRemoving(null)}>Keep it</Button>
-      <Button primary disabled={busyId === removing.id} onClick={() => void remove(removing)}>{removing.kind === 'agent' ? 'New address' : 'Remove address'}</Button>
+      <Button primary danger disabled={busyId === removing.id} onClick={() => void remove(removing)}>{removing.kind === 'agent' ? 'Replace address' : 'Remove address'}</Button>
     </>}>
-      <p>{removing.kind === 'agent'
-        ? `${removing.address} will stop receiving email and the email it received will be deleted. ${removing.agent.name} gets a new address right away, so update anything that forwards to the old one. Decisions already made stay in History.`
-        : `New email to ${removing.address} will be turned away, every email it received will be deleted, and ${removing.agent.name} will stop suggesting replies for it. Decisions already made stay in History.`}</p>
+      <p className="email-inbox-confirm"><code>{removing.address}</code> stops working and its {removing.message_count === 1 ? 'email is' : `${removing.message_count} emails are`} deleted. {removing.kind === 'agent'
+        ? `${removing.agent.name} gets a new address right away.`
+        : `${removing.agent.name} stops reading it.`} Decisions stay in History. This can’t be undone.</p>
     </Dialog>}
   </>;
 }

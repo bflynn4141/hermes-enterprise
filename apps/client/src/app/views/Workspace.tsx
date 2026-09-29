@@ -497,7 +497,7 @@ export function Members() {
                   setManageNotice(null);
                   setManageProblem(null);
                 }}>Keep</Button>
-                <Button
+                <Button danger
                   primary
                   disabled={pending === `member:remove:${person?.id ?? ''}`}
                   onClick={() => {
@@ -592,7 +592,7 @@ export function Members() {
               </div>}
               <div className="row">
                 <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
-                <Button link disabled={pending?.startsWith('member:')} onClick={() => {
+                <Button danger link disabled={pending?.startsWith('member:')} onClick={() => {
                   setConfirmRemove(true);
                   setManageNotice(null);
                   setManageProblem(null);
@@ -1505,7 +1505,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
           danger
           footer={<>
             <p className="meta">You will confirm before the workspace is disconnected.</p>
-            <Button disabled={busy} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
+            <Button danger disabled={busy} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
           </>}
         />
       )}
@@ -1513,7 +1513,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         open={disconnectOpen}
         title="Disconnect Slack?"
         onClose={() => setDisconnectOpen(false)}
-        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button danger primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
       >
         <p>New Slack messages will stop reaching Hermes immediately. Earlier conversations stay in Hermes.</p>
       </Dialog>
@@ -1733,7 +1733,7 @@ function OrganizationTab() {
               <span className="meta grow" style={{ maxWidth: 620 }}>
                 Everyone loses access right away. Everything is deleted after seven days; you can cancel until then.
               </span>
-              <Button
+              <Button danger
                 quiet
                 onClick={() => {
                   setDialog('delete');
@@ -1757,7 +1757,7 @@ function OrganizationTab() {
         actions={
           <>
             <Button onClick={() => setDialog(null)}>Keep it</Button>
-            <Button
+            <Button danger
               primary
               disabled={typed.trim() !== state.workspace.name}
               onClick={() =>
@@ -1933,7 +1933,7 @@ function UsageLimits() {
         <div className="kv">
           <span className="grow">Today</span>
           <span className="meta">{caps.daily_token_cap === null ? 'No limit' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} used today`}</span>
-          {caps.daily_token_cap !== null && <Button link onClick={() => void save({ daily_token_cap: null })}>Remove limit</Button>}
+          {caps.daily_token_cap !== null && <Button danger link onClick={() => void save({ daily_token_cap: null })}>Remove limit</Button>}
         </div>
         <div className="kv">
           <span className="grow">Running</span>
@@ -2281,7 +2281,7 @@ function ProviderKeysTab() {
                     Rotate
                   </Button>
                 )}
-                <Button
+                <Button danger
                   quiet
                   onClick={() => {
                     setTarget(key);
@@ -2346,7 +2346,7 @@ function ProviderKeysTab() {
         actions={
           <>
             <Button onClick={() => setDialog(null)}>Keep</Button>
-            <Button primary onClick={() => target && void guarded(() => adapter.rest.removeProviderKey(state.workspace.id, target.id))}>
+            <Button danger primary onClick={() => target && void guarded(() => adapter.rest.removeProviderKey(state.workspace.id, target.id))}>
               Remove
             </Button>
           </>

@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, InboundEmailListItem, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -165,6 +165,8 @@ interface MockOptions {
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
   /** `microsoft`: connected, with a Microsoft 365 sending account (C99). */
   email?: 'disconnected' | 'connected' | 'microsoft' | 'unconfigured' | 'unavailable';
+  /** `sample`: labelled sample mail at the first agent's address, and the second address paused, for Admin → Email design review. */
+  mail?: 'sample';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
   /** Contract fixture for native execution over explicitly labeled sample inputs. */
@@ -776,6 +778,23 @@ export function createMockBackend(input: MockOptions = {}) {
   };
   const removedAssignments = new Set<string>();
   const EMAIL_INTAKE_DOMAIN = 'in.mock.hermes.test';
+  // Sample mail for `?mail=sample`: one email in each state the list shows. Fixture senders on .example.
+  const sampleMail = (): InboundEmailListItem[] => {
+    const sender = (name: string, address: string, caution = false) => ({
+      address, name, domain: address.split('@')[1]!, relationship: 'known_contact' as const,
+      authentication: { spf: caution ? 'fail' as const : 'pass' as const, dkim: caution ? 'fail' as const : 'pass' as const, dmarc: caution ? 'fail' as const : 'pass' as const, authserv_id: 'mx.mock.hermes.test' },
+      reply_to: null,
+      warnings: caution ? [{ code: 'lookalike_domain' as const, severity: 'caution' as const, detail: 'The domain looks like northwind.example but is not it.' }] : [],
+    });
+    const at = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
+    return [
+      { id: mockUuid(1_700), received_at: at(4), subject: 'September partnership invoice + co-marketing call', sender: sender('Priya Raman', 'priya@northwind.example'), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null,
+        brief: { summary: 'Northwind sent their September invoice and asked for a co-marketing call next week.', action_items: [{ text: 'Pay invoice NW-2026-09, net 30', owner: 'us' }, { text: 'Offer times for a call next week', owner: 'us' }] } },
+      { id: mockUuid(1_701), received_at: at(2), subject: 'Re: September invoice - updated bank details', sender: sender('Priya Raman', 'priya@northwlnd.example', true), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
+      { id: mockUuid(1_702), received_at: at(1), subject: 'Workshop dates for November', sender: sender('Sam Lee', 'sam@acme.example'), status: 'triaging', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
+      { id: mockUuid(1_703), received_at: at(40), subject: 'Partner program question', sender: sender('Alex Kim', 'alex@globex.example'), status: 'failed', request_ids: [], can_retry: true, retrying: false, problem: 'provider_busy', brief: null },
+    ];
+  };
   let emailInboxes: EmailInbox[] = [];
   const skillCatalog = [
     { key: 'partner-program-screening', name: 'Partner program screening', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', version: '1.8.0', digest: hashForMock(96), tools: ['list_partner_candidates', 'get_partner_candidate', 'propose_approval', 'publish_partner_invoice_review'], template: 'partnerships-agent' },
@@ -2090,10 +2109,12 @@ export function createMockBackend(input: MockOptions = {}) {
     if (p('/email/inboxes') && method === 'GET') {
       for (const agent of agentDirectory()) {
         if (!agent.owner || emailInboxes.some((row) => row.kind === 'agent' && row.agent.id === agent.id)) continue;
+        const sample = options.mail === 'sample';
         emailInboxes = [...emailInboxes, {
           id: mockUuid(1_600 + emailInboxes.length), address: `${agent.name.toLowerCase().replace(/[^a-z0-9]+/gu, '-')}-mk${emailInboxes.length + 1}q4z@${EMAIL_INTAKE_DOMAIN}`,
           label: agent.name, kind: 'agent', role_slug: agent.role?.team.slug ?? null, agent: { id: agent.id, name: agent.name },
-          status: 'active', created_at: iso(), message_count: 0, latest_received_at: null,
+          status: sample && emailInboxes.length === 1 ? 'paused' : 'active', created_at: iso(),
+          message_count: sample && emailInboxes.length === 0 ? sampleMail().length : 0, latest_received_at: null,
         }];
       }
       return json({ domain: EMAIL_INTAKE_DOMAIN, inboxes: emailInboxes, can_manage: seat === 'admin' });
@@ -2117,7 +2138,7 @@ export function createMockBackend(input: MockOptions = {}) {
     if (emailInboxMatch) {
       const inbox = emailInboxes.find((row) => row.id === emailInboxMatch[1]);
       if (!inbox) return fail(404, 'unknown_inbox');
-      if (emailInboxMatch[2] && method === 'GET') return json({ messages: [] });
+      if (emailInboxMatch[2] && method === 'GET') return json({ messages: options.mail === 'sample' && inbox.id === emailInboxes[0]?.id ? sampleMail() : [] });
       if (seat !== 'admin') return fail(403, 'admin_required');
       if (method === 'PATCH') {
         const next = { ...inbox, status: body.status === 'paused' ? 'paused' as const : 'active' as const };

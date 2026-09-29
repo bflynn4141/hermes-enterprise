@@ -67,6 +67,20 @@ describe('design system', () => {
     expect(find(views, /<Pill\b[^>]*>\s*(?:\{\s*)?['"]?Not connected/), 'Show a badge only for "Needs attention"; see AdminSettingsCard `badge`.').toEqual([]);
   });
 
+  it('colours every destructive button with `danger`', () => {
+    // A button that deletes, removes, disconnects, revokes or replaces looks
+    // different from one that saves (Vercel Geist's error button, shadcn's
+    // destructive). The confirmation that carries it out is `danger primary`.
+    const destructive = /\b(?:Delete|Remove|Disconnect|Revoke|Replace address)\b/;
+    const found = views.flatMap((file) => {
+      const text = readFileSync(file, 'utf8');
+      return [...text.matchAll(/<Button\b([^>]*)>([\s\S]*?)<\/Button>/g)]
+        .filter((match) => destructive.test(match[2]!.replace(/<[^>]+>/g, ' ')) && !/\bdanger\b/.test(match[1]!))
+        .map((match) => `${rel(file)}:${lineOf(text, match.index ?? 0)}  ${match[2]!.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
+    });
+    expect(found, 'Add `danger` to the button (and `danger primary` to the confirmation that performs it).').toEqual([]);
+  });
+
   it('builds tab rows only with the Tabs primitive', () => {
     expect(find(views, /role="tablist"/), 'Use <Tabs> from ui/primitives for a row of tabs.').toEqual([]);
   });
