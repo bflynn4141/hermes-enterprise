@@ -61,6 +61,34 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     // Final states. A failed send already told the reviewer it failed, so a
     // repeated or revived job must not quietly send it after all.
     if (!row || ['sent', 'simulated', 'ambiguous', 'cancelled', 'failed'].includes(row.state)) return null;
+    // `sending` is committed before the provider call, so finding it here means
+    // an earlier attempt stopped without recording the provider's answer. The
+    // provider may already have accepted it, so it is uncertain, never resent
+    // (the same rule invitations follow in jobs.ts).
+    if (row.state === 'sending') {
+      await tx.query(
+        `UPDATE outbound_email_outbox SET state='ambiguous',last_error='send_interrupted_outcome_unknown' WHERE id=$1`,
+        [row.id],
+      );
+      await tx.query(
+        `UPDATE approval_requests SET effect_status='failed',effect_reason=$3,work_status='completed'
+          WHERE workspace_id=$1 AND request_id=$2`,
+        [
+          job.workspace_id,
+          row.request_id,
+          'The send was interrupted, so the approved email may or may not have been sent. Check the mailbox before sending it again.',
+        ],
+      );
+      await tx.query(
+        `INSERT INTO events (workspace_id,actor_type,kind,request_id)
+         VALUES ($1,'system','outbound_email.ambiguous',$2)`,
+        [job.workspace_id, row.request_id],
+      );
+      published.push(...await publishEvents(tx, job.workspace_id, [
+        { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: row.request_id, ref: { section: 'inbox', view: 'request', id: row.request_id }, version: null } },
+      ]));
+      return null;
+    }
     // A reply to a role inbox with no connected sender is recorded as a
     // simulated delivery where the effect executor is simulated (D12, C98).
     // Production pins that mode to `unavailable`, so there it waits for a
