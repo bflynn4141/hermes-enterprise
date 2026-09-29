@@ -20,7 +20,7 @@ dated evidence and proposals that may no longer describe current behavior.
 
 | Area | Documents |
 | --- | --- |
-| Approvals and permissions | [Approval contract](APPROVAL-CONTRACT.md), [approval runtime](APPROVAL-RUNTIME.md), [agent operation permissions](AGENT-OPERATION-PERMISSIONS.md) |
+| Approvals and permissions | [Approval contract](APPROVAL-CONTRACT.md), [approval runtime](APPROVAL-RUNTIME.md), [agent operation permissions](AGENT-OPERATION-PERMISSIONS.md), [what can happen twice](EXTERNAL-EFFECTS.md) |
 | Hermes runtime | [Official runtime integration](HERMES-AGENT-RUNTIME.md), [cloud management](CLOUD-MANAGEMENT.md), [enterprise skills](ENTERPRISE-SKILLS.md) |
 | Team workflows | [Partnerships and Finance](PARTNER-FINANCE-WORKFLOW.md), [partner screening](PARTNER-SCREENING.md), [inbound email evidence](INBOUND-EMAIL-EVIDENCE.md), [role inboxes](EMAIL-INTAKE.md) |
 | Provider and identity | [Nous Portal OAuth](NOUS-PORTAL-OAUTH.md), [WorkOS production checklist](WORKOS-PRODUCTION-CHECKLIST.md) |
