@@ -20,9 +20,9 @@
   "dependencies": {
     "@hermes/shared": "workspace:*",
     "@sentry/cloudflare": "10.75.3",
-    "@workos-inc/node": "10.13.0",
+    "@workos-inc/node": "10.14.0",
     "drizzle-orm": "0.45.3",
-    "hono": "4.13.8",
+    "hono": "4.13.9",
     "pg": "8.23.0",
     "postal-mime": "3.0.1",
     "unpdf": "1.8.1",
