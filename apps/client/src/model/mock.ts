@@ -2671,7 +2671,7 @@ export function createMockBackend(input: MockOptions = {}) {
           slackAvailable
             ? { key: 'slack', state: slackConnected ? 'connected' : 'not_connected', reason: null, identity: admin && slackConnected ? 'Fixture workspace' : null, waiting: 0, detail_view: 'Slack' }
             : { key: 'slack', state: 'not_configured', reason: 'This deployment has no Slack app registered.', identity: null, waiting: 0, detail_view: 'Slack' },
-          { key: 'gmail_evidence', state: 'not_configured', reason: 'This deployment has no app registered for it.', identity: null, waiting: 0, detail_view: 'Email' },
+          { key: 'gmail_evidence', state: emailEvidenceConnected ? 'connected' : 'not_connected', reason: null, identity: admin && emailEvidenceConnected ? 'iris-evidence@example.com' : null, waiting: 0, detail_view: 'Library' },
         ],
         can_manage: admin,
       });
@@ -2705,6 +2705,11 @@ export function createMockBackend(input: MockOptions = {}) {
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email/evidence`)) {
+      if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required');
+        emailEvidenceConnected = false;
+        return json({ status: 'disconnected', waiting: 0 });
+      }
       if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
         emailEvidenceConnected = true;
         return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=evidence-fixture', expires_at: iso(600) }, 201);
@@ -2742,6 +2747,12 @@ export function createMockBackend(input: MockOptions = {}) {
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email`)) {
+      if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required');
+        const waiting = emailConnected ? 2 : 0;
+        emailConnected = false;
+        return json({ status: 'disconnected', waiting });
+      }
       if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
         emailConnected = true;
         emailProvider = 'gmail';
