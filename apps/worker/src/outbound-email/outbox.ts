@@ -48,6 +48,17 @@ export async function queueApprovedEmail(
 
   for (const [recipientIndex, recipient] of input.payload.details.recipients.entries()) {
     if (!recipient.address) throw new Error('approved_email_recipient_missing');
+    // Approving a reopened email sends again only to recipients a person
+    // confirmed were not sent. One that was sent, or is still uncertain, is
+    // left alone: sending it again is the duplicate this rule exists to stop.
+    const earlier = await tx.query<{ attempts: number; resendable: boolean }>(
+      `SELECT count(*)::int AS attempts,
+              coalesce(bool_and(state='cancelled' AND settled_outcome='not_sent'), true) AS resendable
+         FROM outbound_email_outbox
+        WHERE workspace_id=$1 AND request_id=$2 AND recipient_index=$3 AND authorization_revision < $4`,
+      [input.workspaceId, input.requestId, recipientIndex, input.authorizationRevision],
+    );
+    if ((earlier.rows[0]?.attempts ?? 0) > 0 && !earlier.rows[0]?.resendable) continue;
     if (recipient.candidate_id) {
       const stopped = await tx.query<{ stage: string }>(
         `SELECT stage FROM partner_engagements

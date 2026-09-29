@@ -1258,6 +1258,14 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
       [row.workspace_id, row.request_id, nextStage],
     );
   }
+  // A resend (reopened after a confirmed-unsent email) only re-queues the
+  // email. The agent's run already continued after the first approval.
+  const earlierAttempt = await work.tx.query(
+    `SELECT 1 FROM outbound_email_outbox
+      WHERE workspace_id=$1 AND request_id=$2 AND authorization_revision < $3 LIMIT 1`,
+    [row.workspace_id, row.request_id, row.authorization_revision],
+  );
+  if (earlierAttempt.rowCount === 1) return;
   const hook: ApprovalFinalizedHook = {
     event: 'approval.finalized', request_id: row.request_id, workspace_id: row.workspace_id,
     approval_type: payload.approval_type, authorization_revision: row.authorization_revision,
@@ -1494,6 +1502,75 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
   return { view: await loadApprovalView(context.tx, requestId, context.userId), duplicate: false };
 }
 
+/**
+ * Write the next authorization revision for `proposal` and put the approval
+ * back to `pending`, so its policy's reviewers decide it again. Shared by a
+ * requester's revision and by reopening an approved email whose send a person
+ * confirmed never went out (`reopenApprovalForResend`). Callers own the
+ * permission check, the idempotency record and the audit kind.
+ */
+async function writeRevision(
+  context: ApprovalHumanContext,
+  row: ApprovalRow,
+  oldPayload: ApprovalPayload,
+  members: MemberRow[],
+  proposal: ApprovalProposal,
+  requestedExpiresAt: string | undefined,
+): Promise<void> {
+  const targetInput = {
+    target_agent_ids: oldPayload.context.target_agent_ids,
+    target_member_ids: oldPayload.context.target_member_ids,
+    target_resource_ids: oldPayload.context.target_resource_ids,
+    dependent_request_ids: oldPayload.context.source.dependent_request_ids,
+  };
+  const targets = await validatedTargetContext(context.tx, context.workspaceId, proposal, targetInput);
+  const selected = await selectPolicy(context.tx, context.workspaceId, proposal, row.requester_agent_id, targets.targetResourceIds, oldPayload.policy.key);
+  await validatePartnerOutreachContact(
+    context.tx, context.workspaceId, row.requester_agent_id, selected.row.key, proposal, row.request_id,
+  );
+  validatePolicyFeasibility(selected.policy, members, row.requester_member_id, targets.requiredOwnerIds);
+  const maximumExpiry = Date.now() + selected.row.max_duration_seconds * 1000;
+  const expiry = requestedExpiresAt ? Date.parse(requestedExpiresAt) : maximumExpiry;
+  if (!Number.isFinite(expiry) || expiry <= Date.now() || expiry > maximumExpiry) throw new RouteError('the requested expiry is outside the selected policy limit', 'invalid_expiry', 422);
+  const expiresAt = new Date(expiry).toISOString();
+  const bindings = await resolveResourceBindings(
+    context.tx, context.workspaceId, proposal, targets.resources,
+    {
+      userId: oldPayload.context.requester.user_id,
+      runId: oldPayload.context.source.run_id,
+      agentId: oldPayload.context.requester.agent_id,
+    },
+  );
+  const serverContext = { ...oldPayload.context, target_agent_ids: targets.targetAgentIds, target_member_ids: targets.targetMemberIds, target_resource_ids: targets.targetResourceIds, source: { ...oldPayload.context.source, dependent_request_ids: targets.dependentRequestIds } };
+  const nextRevision = row.authorization_revision + 1;
+  const hash = await authorizationHash({ proposal: proposal, context: serverContext, policy: selected.policy, resource_bindings: bindings, expires_at: expiresAt });
+  if (hash === row.authorization_hash) throw new RouteError('the revision does not materially change the authorization', 'unchanged_revision', 422);
+  const payload = approvalPayloadSchema.parse({ ...proposal, context: serverContext, authorization: { revision: nextRevision, hash, expires_at: expiresAt }, policy: selected.policy, resource_bindings: bindings });
+  const effect = effectFor(proposal, bindings);
+
+  // An approved revision stays `approved` when an unsent email is reopened:
+  // it was approved, and its attempt is on record. Only an undecided one is superseded.
+  await context.tx.query(
+    `UPDATE approval_revisions SET status = 'superseded', superseded_at = now()
+      WHERE request_id = $1 AND revision = $2 AND status IN ('pending', 'changes_requested')`,
+    [row.request_id, row.authorization_revision],
+  );
+  await context.tx.query(
+    `INSERT INTO approval_revisions (workspace_id, request_id, revision, authorization_hash, payload, status, created_by_type, created_by_user_id)
+     VALUES ($1,$2,$3,$4,$5::jsonb,'pending','user',$6)`, [context.workspaceId, row.request_id, nextRevision, hash, JSON.stringify(payload), context.userId],
+  );
+  await context.tx.query(
+    `UPDATE approval_requests SET policy_id=$2, policy_version=$3, authorization_revision=$4,
+       authorization_hash=$5, status='pending', expires_at=$6, effect_kind=$7, effect_status=$8,
+       effect_reason=$9, work_status='waiting', work_reason=NULL, finalized_at=NULL
+     WHERE request_id=$1`, [row.request_id, selected.row.id, selected.row.version, nextRevision, hash, expiresAt, effect.kind, effect.status, effect.reason],
+  );
+  await context.tx.query(
+    `UPDATE requests SET payload = $2::jsonb, status = 'pending' WHERE id = $1
+     RETURNING EXTRACT(EPOCH FROM updated_at)::int AS version`, [row.request_id, JSON.stringify(payload)],
+  );
+}
+
 export async function reviseApproval(context: ApprovalHumanContext, requestId: string, rawInput: unknown): Promise<{ view: ApprovalView; duplicate: boolean }> {
   const input: ReviseApprovalInput = reviseApprovalInputSchema.parse(rawInput);
   const inputHash = await commandHash('revision', input);
@@ -1516,56 +1593,54 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   const actor = members.find((member) => member.user_id === context.userId);
   if (!actor || (actor.role !== 'admin' && actor.id !== row.requester_member_id)) throw new RouteError('only the requester or an Admin may submit a revision', 'revision_forbidden', 403);
 
-  const targetInput = {
-    target_agent_ids: oldPayload.context.target_agent_ids,
-    target_member_ids: oldPayload.context.target_member_ids,
-    target_resource_ids: oldPayload.context.target_resource_ids,
-    dependent_request_ids: oldPayload.context.source.dependent_request_ids,
-  };
-  const targets = await validatedTargetContext(context.tx, context.workspaceId, input.proposal, targetInput);
-  const selected = await selectPolicy(context.tx, context.workspaceId, input.proposal, row.requester_agent_id, targets.targetResourceIds, oldPayload.policy.key);
-  await validatePartnerOutreachContact(
-    context.tx, context.workspaceId, row.requester_agent_id, selected.row.key, input.proposal, requestId,
-  );
-  validatePolicyFeasibility(selected.policy, members, row.requester_member_id, targets.requiredOwnerIds);
-  const maximumExpiry = Date.now() + selected.row.max_duration_seconds * 1000;
-  const expiry = input.requested_expires_at ? Date.parse(input.requested_expires_at) : maximumExpiry;
-  if (!Number.isFinite(expiry) || expiry <= Date.now() || expiry > maximumExpiry) throw new RouteError('the requested expiry is outside the selected policy limit', 'invalid_expiry', 422);
-  const expiresAt = new Date(expiry).toISOString();
-  const bindings = await resolveResourceBindings(
-    context.tx, context.workspaceId, input.proposal, targets.resources,
-    {
-      userId: oldPayload.context.requester.user_id,
-      runId: oldPayload.context.source.run_id,
-      agentId: oldPayload.context.requester.agent_id,
-    },
-  );
-  const serverContext = { ...oldPayload.context, target_agent_ids: targets.targetAgentIds, target_member_ids: targets.targetMemberIds, target_resource_ids: targets.targetResourceIds, source: { ...oldPayload.context.source, dependent_request_ids: targets.dependentRequestIds } };
-  const nextRevision = row.authorization_revision + 1;
-  const hash = await authorizationHash({ proposal: input.proposal, context: serverContext, policy: selected.policy, resource_bindings: bindings, expires_at: expiresAt });
-  if (hash === row.authorization_hash) throw new RouteError('the revision does not materially change the authorization', 'unchanged_revision', 422);
-  const payload = approvalPayloadSchema.parse({ ...input.proposal, context: serverContext, authorization: { revision: nextRevision, hash, expires_at: expiresAt }, policy: selected.policy, resource_bindings: bindings });
-  const effect = effectFor(input.proposal, bindings);
-
-  await context.tx.query(`UPDATE approval_revisions SET status = 'superseded', superseded_at = now() WHERE request_id = $1 AND revision = $2`, [requestId, row.authorization_revision]);
-  await context.tx.query(
-    `INSERT INTO approval_revisions (workspace_id, request_id, revision, authorization_hash, payload, status, created_by_type, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5::jsonb,'pending','user',$6)`, [context.workspaceId, requestId, nextRevision, hash, JSON.stringify(payload), context.userId],
-  );
-  await context.tx.query(
-    `UPDATE approval_requests SET policy_id=$2, policy_version=$3, authorization_revision=$4,
-       authorization_hash=$5, status='pending', expires_at=$6, effect_kind=$7, effect_status=$8,
-       effect_reason=$9, work_status='waiting', work_reason=NULL, finalized_at=NULL
-     WHERE request_id=$1`, [requestId, selected.row.id, selected.row.version, nextRevision, hash, expiresAt, effect.kind, effect.status, effect.reason],
-  );
-  await context.tx.query(
-    `UPDATE requests SET payload = $2::jsonb, status = 'pending' WHERE id = $1
-     RETURNING EXTRACT(EPOCH FROM updated_at)::int AS version`, [requestId, JSON.stringify(payload)],
-  );
+  await writeRevision(context, row, oldPayload, members, input.proposal, input.requested_expires_at);
   await recordCommand(context.tx, row, 'revision', input.idempotency_key, inputHash);
   await audit(context.tx, context.workspaceId, 'user', context.userId, 'approval.revised', requestId, row.source_session_id);
   await publishRequestChanged(context, requestId);
   return { view: await loadApprovalView(context.tx, requestId, context.userId), duplicate: false };
+}
+
+/**
+ * Reopen an approved email for a fresh decision after a person confirmed its
+ * send never went out (Quest audit H1). The same proposal becomes the next
+ * revision under the email's current policy, so its reviewers, their number
+ * and self-review rules apply exactly as they did the first time. The first
+ * approval was spent on the attempt; nothing is sent until the new one lands.
+ * If the approval is already reopened (another recipient was settled first),
+ * this does nothing: the pending revision covers every unsent recipient.
+ */
+export async function reopenApprovalForResend(context: ApprovalHumanContext, requestId: string): Promise<void> {
+  const row = await loadApprovalRow(context.tx, requestId, true);
+  if (!row) throw new RouteError('no such approval request', 'unknown_approval', 404);
+  if (row.status === 'pending') return;
+  if (row.status !== 'approved') throw new RouteError(`this approval is ${row.status}`, 'approval_not_reopenable', 409);
+  const oldPayload = approvalPayloadSchema.parse(row.payload);
+  if (oldPayload.approval_type !== 'communication') throw new RouteError('only an approved email can be reopened to send again', 'approval_not_reopenable', 409);
+  const { context: _context, authorization: _authorization, policy: _policy, resource_bindings: _bindings, ...proposal } = oldPayload;
+  const members = await activeMembers(context.tx, context.workspaceId);
+  await writeRevision(context, row, oldPayload, members, approvalProposalSchema.parse(proposal), undefined);
+  await context.tx.query(
+    `UPDATE approval_requests SET effect_reason=$2 WHERE request_id=$1`,
+    [requestId, 'A reviewer confirmed the email was not sent. Approve it again to send it.'],
+  );
+  await audit(context.tx, context.workspaceId, 'user', context.userId, 'approval.revised', requestId, row.source_session_id);
+  await publishRequestChanged(context, requestId);
+}
+
+/**
+ * Whether this member could review the approval under any step of its
+ * policy. The people who may settle an uncertain send are chosen from these.
+ */
+export async function approvalReviewerMemberIds(tx: Tx, requestId: string): Promise<Set<string>> {
+  const row = await loadApprovalRow(tx, requestId);
+  if (!row) return new Set();
+  const payload = approvalPayloadSchema.parse(row.payload);
+  const members = await activeMembers(tx, row.workspace_id);
+  const ids = new Set<string>();
+  for (const step of payload.policy.steps) {
+    for (const member of eligibleForStep(step, members, row.requester_member_id, payload.policy.prevent_self_review)) ids.add(member.id);
+  }
+  return ids;
 }
 
 export async function routeApproval(context: ApprovalHumanContext, requestId: string, rawInput: unknown): Promise<{ view: ApprovalView; duplicate: boolean }> {

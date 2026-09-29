@@ -119,6 +119,9 @@ import {
   type CreateSharedIntelligenceProposal,
   type CreateSharedIntelligenceGoal,
   type SharedIntelligenceTriageDecision,
+  emailSendListSchema,
+  type EmailSendList,
+  type SettleEmailSendInput,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -438,6 +441,10 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/revisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    getEmailSends: (workspaceId: string, requestId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/email-sends`, emailSendListSchema) as Promise<EmailSendList>,
+    settleEmailSend: (workspaceId: string, requestId: string, sendId: string, body: SettleEmailSendInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/email-sends/${sendId}/settlement`, emailSendListSchema, body, { requestedFrom: 'inbox' }) as Promise<EmailSendList>,
     routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),

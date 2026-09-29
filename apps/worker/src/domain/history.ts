@@ -667,6 +667,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = requestRef;
       break;
 
+    case 'outbound_email.settled_sent':
+      text = `${actor} confirmed ${subject} was sent`;
+      detail = 'Checked the mailbox after an interrupted send';
+      status = 'Sent';
+      ref = requestRef;
+      break;
+
+    case 'outbound_email.settled_not_sent':
+      text = `${actor} confirmed ${subject} was not sent`;
+      detail = 'It needs approving again before it goes out';
+      status = 'Needs review';
+      ref = requestRef;
+      break;
+
     case 'outbound_email.simulated':
       text = `Practice send: ${subject}`;
       detail = 'This deployment doesn’t deliver email, so nothing left Hermes';

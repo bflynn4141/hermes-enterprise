@@ -7,6 +7,8 @@ import {
   decideApprovalInputSchema,
   reviseApprovalInputSchema,
   routeApprovalInputSchema,
+  emailSendListSchema,
+  settleEmailSendInputSchema,
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
@@ -21,6 +23,7 @@ import {
 import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
 import { RouteError } from './errors.js';
 import { getApprovalEvidence } from '../domain/approval-evidence.js';
+import { listEmailSends, settleEmailSend } from '../outbound-email/settlement.js';
 
 const humanContext = (work: Parameters<Parameters<typeof inWorkspace>[1]>[0]) => ({
   tx: work.tx,
@@ -91,6 +94,34 @@ export async function createApprovalRoute(c: Context<{ Bindings: Env }>): Promis
     return routeApproval(humanContext(work), requestId, parsed.data);
   });
   return c.json(approvalViewSchema.parse(outcome.view), outcome.duplicate ? 200 : 201, {
+    'X-Hermes-Duplicate': outcome.duplicate ? 'true' : 'false',
+  });
+}
+
+/** Each recipient's delivery of an approved email, including any a person must settle. */
+export async function getEmailSendsRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const requestId = pathUuid(c, 'id');
+  const list = await inWorkspace(c, async (work) => {
+    await getApproval(work, requestId, work.userId);
+    return listEmailSends(work.tx, work.workspaceId, requestId, work.userId);
+  });
+  return c.json(emailSendListSchema.parse(list));
+}
+
+/** A person's answer after checking the mailbox for a send whose outcome is unknown. */
+export async function settleEmailSendRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireRequestedFrom(c);
+  requireCsrf(c);
+  const requestId = pathUuid(c, 'id');
+  const outboxId = pathUuid(c, 'sendId');
+  const parsed = settleEmailSendInputSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) throw new RouteError('the answer is invalid', 'bad_email_send_settlement', 422);
+  const outcome = await inWorkspace(c, async (work) => {
+    requireStepUp(work.session);
+    return settleEmailSend(humanContext(work), requestId, outboxId, parsed.data);
+  });
+  return c.json(emailSendListSchema.parse(outcome.list), outcome.duplicate ? 200 : 201, {
     'X-Hermes-Duplicate': outcome.duplicate ? 'true' : 'false',
   });
 }

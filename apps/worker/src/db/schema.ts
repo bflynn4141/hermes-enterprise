@@ -1647,6 +1647,10 @@ export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
   inboundMessageId: uuid('inbound_message_id'),
   inReplyTo: text('in_reply_to'),
   referencesHeader: text('references_header'),
+  // 0082: a person settled an uncertain send after checking the mailbox.
+  settledOutcome: text('settled_outcome'),
+  settledBy: uuid('settled_by'),
+  settledAt: ts('settled_at'),
 });
 
 // 0076: role inboxes that receive forwarded mail (decision C98).
