@@ -2046,3 +2046,48 @@ a paused address cancelling, the daily limit and Read it now),
 classes), and a walkthrough on the local stack through Wrangler's email
 simulator.
 
+
+## C101. A rotated OAuth token is committed before the caller continues
+
+**Decided September 29, 2026.** Slack, Microsoft and Nous Portal refreshed an
+access token inside the caller's transaction and wrote the new refresh token
+at the caller's commit. Anything that rolled that transaction back after the
+provider answered lost the rotated token, and the next refresh replayed the
+spent one. The Nous Portal treats a replay as theft and revokes the session;
+Slack may refuse it; Microsoft still accepts it but says to discard it. A terminal Nous failure's
+quarantine could be rolled back the same way. Examples: the email send claim
+rolling back, or a failed credential further down the runtime model list.
+
+- **Which providers rotate.** Microsoft: "Refresh tokens replace themselves
+  with a fresh token upon every use", and old ones are not revoked but should
+  be discarded ([refresh tokens](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)).
+  Nous Portal: single-use, with reuse detection (`refresh_token_reused` in
+  Hermes Agent's `hermes_cli/auth_nous.py`; no public Portal documentation).
+  Slack token rotation returns a new refresh token to use next time
+  ([token rotation](https://docs.slack.dev/authentication/using-token-rotation/));
+  no grace period for the old one is documented. Google documents no rotation;
+  a refresh that returns no refresh token keeps the stored one.
+- **Its own transaction.** `refreshRotatingToken` (`keys/token-refresh.ts`)
+  runs every refresh in a short transaction on its own connection, supplied by
+  the caller as `own`. It locks the row, re-checks expiry (a concurrent request
+  may already have refreshed), calls the provider, seals, writes and commits
+  before the caller continues. Envelope encryption, AAD and RLS are unchanged;
+  the transaction runs under the caller's role and workspace.
+- **Write it again if the commit fails.** If that transaction fails after the
+  provider answered, the rotated token is written in up to two more fresh
+  transactions. A crash between the answer and the commit can still lose it;
+  that window is one UPDATE and a COMMIT, not the caller's whole transaction.
+- **A lock that serializes refreshes, and nothing else.** `FOR NO KEY UPDATE`
+  keeps two refreshes from spending one token, but doesn't conflict with the
+  foreign-key check a caller takes when it inserts a row that references the
+  credential. `lock_timeout` is 30 seconds, so a caller holding a stronger lock
+  gets an error instead of waiting forever.
+
+**Evidence.** `test/db/token-refresh.test.ts`. A provider fake whose refresh
+tokens work once runs, for Slack, Microsoft and Nous, cases where the caller
+rolls back after the refresh, where the refresh's own commit fails once, where
+the caller holds a foreign-key lock on the row, and where two requests refresh
+concurrently. A Nous quarantine commits even when the caller rolls back. The
+rollback cases failed before the change.
+`test/unit/provider-oauth-store.test.ts` shows the caller's transaction only
+reads.

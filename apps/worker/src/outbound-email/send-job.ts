@@ -147,7 +147,11 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       return { row, provider: 'agent' as const, accessToken: '', raw: '' };
     }
     if (!row.account_id) return null;
-    const resolved = await resolveSendingAccessToken(tx, env, row.account_id);
+    // A refresh commits on its own connection: the provider may already have
+    // retired the old refresh token if this claim rolls back.
+    const resolved = await resolveSendingAccessToken(
+      tx, env, row.account_id, (fn) => withWorkspaceTransaction(env, job.workspace_id, fn),
+    );
     if (resolved.account.address !== row.sender_address) {
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
       return null;

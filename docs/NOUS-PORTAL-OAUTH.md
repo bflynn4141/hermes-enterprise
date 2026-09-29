@@ -70,11 +70,13 @@ manual workspace-key fallback.
 Device codes and access/refresh bundles use the existing per-row envelope
 encryption with workspace and row identifiers in AES-GCM AAD. API responses
 expose only connection kind, status, and expiry. Model calls resolve the access
-token inside the tenant transaction. Near expiry, the Worker holds the row
-lock, redeems the rotating refresh token once, persists the newly encrypted
-bundle, and only then returns the access token to the provider adapter. A
-terminal refresh failure marks the connection invalid so the old token is not
-replayed.
+token inside the tenant transaction. Near expiry, the Worker refreshes in a
+separate short transaction on its own connection: it takes the row lock,
+redeems the rotating refresh token once, commits the newly encrypted bundle,
+and only then returns the access token to the provider adapter, so a caller
+that later rolls back cannot lose the rotated token (C101). A terminal refresh
+failure marks the connection invalid, also in its own transaction, so the old
+token is not replayed.
 
 After authorization, the Worker asks the authenticated Nous
 `/api/oauth/account` endpoint for display-safe user and organisation metadata.

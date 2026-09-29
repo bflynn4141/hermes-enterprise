@@ -1,6 +1,7 @@
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { openSecret, sealSecret, type StoredEnvelope } from '../keys/envelope.js';
+import { refreshRotatingToken, type OwnTransaction } from '../keys/token-refresh.js';
 import { gmailConfig, gmailFetcher } from './gmail-config.js';
 import { refreshGmailToken, type GmailTokenBundle } from './gmail-api.js';
 import { microsoftConfig, microsoftFetcher } from './microsoft-config.js';
@@ -123,40 +124,75 @@ async function openToken(env: Env, row: GmailAccountRow): Promise<GmailTokenBund
   };
 }
 
-/** Resolve and atomically refresh a sending account's token under its row lock. */
-export async function resolveSendingAccessToken(tx: Tx, env: Env, accountId: string): Promise<{ token: string; account: GmailAccountRow }> {
-  const locked = await tx.query<GmailAccountRow>(
+/** The account, if connected. `lock` serializes refreshes without blocking foreign-key checks. */
+async function loadConnectedAccount(tx: Tx, accountId: string, lock: boolean): Promise<GmailAccountRow> {
+  const result = await tx.query<GmailAccountRow>(
     `SELECT ${COLUMNS} FROM outbound_email_accounts
-      WHERE workspace_id=app_workspace_id() AND id=$1 FOR UPDATE`,
+      WHERE workspace_id=app_workspace_id() AND id=$1${lock ? ' FOR NO KEY UPDATE' : ''}`,
     [accountId],
   );
-  const account = locked.rows[0];
+  const account = result.rows[0];
   if (!account || account.status !== 'connected') throw new Error('gmail_account_not_connected');
-  let token = await openToken(env, account);
-  if (Date.parse(token.expires_at) > Date.now() + 5 * 60_000) return { token: token.access_token, account };
-  if (account.provider === 'microsoft') {
+  return account;
+}
+
+const fresh = (token: GmailTokenBundle): boolean => Date.parse(token.expires_at) > Date.now() + 5 * 60_000;
+
+function refresherFor(env: Env, provider: SendingProvider): (current: GmailTokenBundle) => Promise<GmailTokenBundle> {
+  if (provider === 'microsoft') {
     const config = microsoftConfig(env);
     if (!config) throw new Error('microsoft_not_configured');
-    token = await refreshMicrosoftToken(config, token, microsoftFetcher(env));
-  } else {
-    const config = gmailConfig(env);
-    if (!config) throw new Error('gmail_not_configured');
-    token = await refreshGmailToken(config, token, gmailFetcher(env));
+    return (current) => refreshMicrosoftToken(config, current, microsoftFetcher(env));
   }
-  const sealed = await sealSecret(
-    env,
-    { workspaceId: account.workspace_id, keyId: account.id, namespace: TOKEN_NAMESPACE },
-    JSON.stringify(token),
-  );
-  const refreshed = await tx.query<GmailAccountRow>(
-    `UPDATE outbound_email_accounts SET
-       ciphertext=$2,iv=$3,wrapped_dek=$4,wrap_iv=$5,kek_version=$6,
-       token_expires_at=$7,scope=$8,status='connected',last_error=NULL
-      WHERE workspace_id=app_workspace_id() AND id=$1 RETURNING ${COLUMNS}`,
-    [
-      account.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv), Buffer.from(sealed.wrappedDek),
-      Buffer.from(sealed.wrapIv), sealed.kekVersion, new Date(token.expires_at), token.scope,
-    ],
-  );
-  return { token: token.access_token, account: refreshed.rows[0] ?? account };
+  const config = gmailConfig(env);
+  if (!config) throw new Error('gmail_not_configured');
+  return (current) => refreshGmailToken(config, current, gmailFetcher(env));
+}
+
+interface OpenedAccount {
+  readonly account: GmailAccountRow;
+  readonly token: GmailTokenBundle;
+}
+
+/**
+ * Resolve a sending account's token. Microsoft replaces the refresh token on
+ * every refresh (Google may), so a refresh commits on its own connection
+ * (`own`), under the row lock, before the caller's transaction can lose it.
+ */
+export async function resolveSendingAccessToken(
+  tx: Tx,
+  env: Env,
+  accountId: string,
+  own: OwnTransaction,
+): Promise<{ token: string; account: GmailAccountRow }> {
+  const account = await loadConnectedAccount(tx, accountId, false);
+  const token = await openToken(env, account);
+  if (fresh(token)) return { token: token.access_token, account };
+  const exchange = refresherFor(env, account.provider);
+  return refreshRotatingToken<OpenedAccount, { token: string; account: GmailAccountRow }>(own, {
+    lock: async (locked) => {
+      const current = await loadConnectedAccount(locked, accountId, true);
+      return { account: current, token: await openToken(env, current) };
+    },
+    reuse: (current) => (fresh(current.token) ? { token: current.token.access_token, account: current.account } : null),
+    exchange: async (current) => ({ account: current.account, token: await exchange(current.token) }),
+    store: async (locked, next) => {
+      const sealed = await sealSecret(
+        env,
+        { workspaceId: account.workspace_id, keyId: account.id, namespace: TOKEN_NAMESPACE },
+        JSON.stringify(next.token),
+      );
+      const refreshed = await locked.query<GmailAccountRow>(
+        `UPDATE outbound_email_accounts SET
+           ciphertext=$2,iv=$3,wrapped_dek=$4,wrap_iv=$5,kek_version=$6,
+           token_expires_at=$7,scope=$8,status='connected',last_error=NULL
+          WHERE workspace_id=app_workspace_id() AND id=$1 RETURNING ${COLUMNS}`,
+        [
+          account.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv), Buffer.from(sealed.wrappedDek),
+          Buffer.from(sealed.wrapIv), sealed.kekVersion, new Date(next.token.expires_at), next.token.scope,
+        ],
+      );
+      return { token: next.token.access_token, account: refreshed.rows[0] ?? next.account };
+    },
+  });
 }
