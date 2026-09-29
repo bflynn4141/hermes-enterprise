@@ -228,14 +228,16 @@ describe('Microsoft 365 sending account', () => {
     expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'pending_connection' }]);
   });
 
-  it('refreshes an expiring token under the row lock and stores the new expiry', async () => {
+  it('refreshes an expiring token in its own transaction and stores the new expiry', async () => {
     const fx = await seedWorkspace();
     tokenRequests.length = 0;
     const account = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => storeSendingAccount(tx, env, {
       workspaceId: fx.workspaceId, connectedBy: fx.adminId, address: 'ops@contoso.example', provider: 'microsoft',
       token: { access_token: 'old', refresh_token: 'refresh-1', expires_at: new Date(Date.now() - 1000).toISOString(), scope: 'Mail.Send', token_type: 'Bearer' },
     }));
-    const first = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => resolveSendingAccessToken(tx, env, account.id));
+    const first = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => resolveSendingAccessToken(
+      tx, env, account.id, (fn) => withWorkspaceTransaction(env, fx.workspaceId, fn),
+    ));
     expect(first.token).toBe('access-2');
     expect(tokenRequests[0]!.get('grant_type')).toBe('refresh_token');
     expect(tokenRequests[0]!.get('refresh_token')).toBe('refresh-1');

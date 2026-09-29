@@ -367,7 +367,12 @@ export class PgAgentDb implements AgentDb {
   }
 
   async resolveCredential(provider: string): Promise<Credential> {
-    const resolved = await this.tx((q) => resolveKey({ query: q as never }, this.env, this.workspaceId, provider));
+    // An OAuth refresh commits on its own connection, so a rotated token
+    // survives even when this read runs inside a larger runtime transaction.
+    const resolved = await this.tx((q) => resolveKey(
+      { query: q as never }, this.env, this.workspaceId, provider,
+      (fn) => withWorkspaceTransaction(this.env, this.workspaceId, fn, 'agent'),
+    ));
     if (resolved.status === 'invalid' || resolved.apiKey === '') {
       throw new KeyStoreError(`the ${provider} OAuth connection must be reconnected`, 'key_invalid');
     }

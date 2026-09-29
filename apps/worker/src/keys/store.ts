@@ -20,6 +20,7 @@ import {
   type KekEnv,
   type StoredEnvelope,
 } from './envelope.js';
+import { refreshRotatingToken, type OwnTransaction } from './token-refresh.js';
 
 /** Postgres `bytea` arrives as a Buffer; the crypto layer speaks Uint8Array. */
 function bytes(value: unknown): Uint8Array {
@@ -318,12 +319,16 @@ export interface ResolvedKey {
  * workspace's row (a policy regression, a query run outside the transaction)
  * the decrypt still fails. Row-level security and the AAD are independent
  * checks of the same claim, which is what makes either one failing survivable.
+ *
+ * `own` opens a separate transaction for an OAuth refresh: the rotated token
+ * is committed there before this returns, whatever becomes of `tx`.
  */
 export async function resolveKey(
   tx: Tx,
   env: KekEnv,
   workspaceId: string,
   provider: string,
+  own: OwnTransaction,
 ): Promise<ResolvedKey> {
   const { rows } = await tx.query<{
     id: string;
@@ -339,7 +344,7 @@ export async function resolveKey(
     `SELECT id, provider, status, credential_kind, ciphertext, iv, wrapped_dek, wrap_iv, kek_version
        FROM workspace_provider_keys
       WHERE workspace_id = $1 AND provider = $2 AND revoked_at IS NULL
-      LIMIT 1 FOR UPDATE`,
+      LIMIT 1`,
     [workspaceId, provider],
   );
 
@@ -370,41 +375,76 @@ export async function resolveKey(
     if (!credential.access_token || !credential.refresh_token || !credential.expires_at) {
       throw new KeyStoreError('the OAuth connection is incomplete', 'key_invalid');
     }
-    const expires = Date.parse(credential.expires_at);
-    if (!Number.isFinite(expires)) throw new KeyStoreError('the OAuth connection expiry is invalid', 'key_invalid');
-    if (expires <= Date.now() + 120_000) {
+    if (!Number.isFinite(Date.parse(credential.expires_at))) {
+      throw new KeyStoreError('the OAuth connection expiry is invalid', 'key_invalid');
+    }
+    if (!freshOAuth(credential)) {
       try {
-        credential = await refreshNousOAuthCredential(credential);
+        credential = await refreshNousOAuth(env, workspaceId, row.id, own);
       } catch (error) {
         if (error instanceof OAuthRefreshError && error.terminal) {
-          // Quarantine the rotating token after a terminal grant failure. The
-          // next run stops before decrypting or replaying it.
-          await tx.query(
+          // Quarantine the rotating token after a terminal grant failure, in
+          // its own transaction so a caller that rolls back cannot undo it.
+          // The next run stops before decrypting or replaying it.
+          await own((quarantine) => quarantine.query(
             `UPDATE workspace_provider_keys SET status='invalid'
               WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'`,
             [workspaceId, row.id],
-          );
-          // Return a refusal sentinel so the tenant transaction can commit the
-          // quarantine. The caller throws only after its transaction closes.
+          ));
+          // A refusal sentinel; the caller throws it as a reconnect error.
           return { keyId: row.id, provider: row.provider, apiKey: '', status: 'invalid' };
         }
+        if (error instanceof KeyStoreError) throw error;
         throw new KeyStoreError('the Nous OAuth session must be reconnected', 'key_invalid');
       }
-      const plaintext = JSON.stringify(credential);
-      const sealed = await sealKey(env, { workspaceId, keyId: row.id }, plaintext);
-      await tx.query(
-        `UPDATE workspace_provider_keys
-            SET ciphertext=$3, iv=$4, wrapped_dek=$5, wrap_iv=$6, kek_version=$7,
-                fingerprint=$8, oauth_expires_at=$9
-          WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'`,
-        [workspaceId, row.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
-         Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
-         await computeFingerprint(credential.refresh_token), new Date(credential.expires_at)],
-      );
     }
     apiKey = credential.access_token;
   }
   return { keyId: row.id, provider: row.provider, apiKey, status: row.status as KeyStatus };
+}
+
+const freshOAuth = (credential: NousOAuthCredential): boolean => Date.parse(credential.expires_at) > Date.now() + 120_000;
+
+/**
+ * Nous refresh tokens are single-use, and the Portal revokes the whole session
+ * when one is replayed. The refresh commits on its own connection, under the
+ * row lock, so neither a concurrent request nor a caller that rolls back can
+ * make the next refresh replay a spent token.
+ */
+function refreshNousOAuth(env: KekEnv, workspaceId: string, keyId: string, own: OwnTransaction): Promise<NousOAuthCredential> {
+  return refreshRotatingToken<NousOAuthCredential, NousOAuthCredential>(own, {
+    lock: async (locked) => {
+      const { rows } = await locked.query<{ status: string; ciphertext: Uint8Array; iv: Uint8Array; wrapped_dek: Uint8Array; wrap_iv: Uint8Array; kek_version: number }>(
+        `SELECT status, ciphertext, iv, wrapped_dek, wrap_iv, kek_version FROM workspace_provider_keys
+          WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code' AND revoked_at IS NULL
+          FOR NO KEY UPDATE`,
+        [workspaceId, keyId],
+      );
+      const row = rows[0];
+      if (!row) throw new KeyStoreError('the OAuth connection was removed', 'no_usable_key');
+      if (row.status === 'invalid') throw new KeyStoreError('the Nous OAuth session must be reconnected', 'key_invalid');
+      const plaintext = await openKey(env, { workspaceId, keyId }, {
+        ciphertext: bytes(row.ciphertext), iv: bytes(row.iv), wrappedDek: bytes(row.wrapped_dek),
+        wrapIv: bytes(row.wrap_iv), kekVersion: row.kek_version,
+      });
+      return JSON.parse(plaintext) as NousOAuthCredential;
+    },
+    reuse: (current) => (freshOAuth(current) ? current : null),
+    exchange: refreshNousOAuthCredential,
+    store: async (locked, next) => {
+      const sealed = await sealKey(env, { workspaceId, keyId }, JSON.stringify(next));
+      await locked.query(
+        `UPDATE workspace_provider_keys
+            SET ciphertext=$3, iv=$4, wrapped_dek=$5, wrap_iv=$6, kek_version=$7,
+                fingerprint=$8, oauth_expires_at=$9
+          WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'`,
+        [workspaceId, keyId, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
+         Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
+         await computeFingerprint(next.refresh_token), new Date(next.expires_at)],
+      );
+      return next;
+    },
+  });
 }
 
 class OAuthRefreshError extends Error {

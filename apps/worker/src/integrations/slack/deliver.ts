@@ -103,7 +103,7 @@ export async function runSlackDeliverJob(env: Env, job: Job): Promise<void> {
     token = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       const installation = await loadSlackInstallationById(tx, job.workspace_id, delivery.installation_id);
       if (!installation || installation.status !== 'connected') throw new Error('slack_installation_inactive');
-      return resolveSlackAccessToken(tx, env, installation);
+      return resolveSlackAccessToken(tx, env, installation, (fn) => withWorkspaceTransaction(env, job.workspace_id, fn));
     });
   } catch (error) {
     if (error instanceof SlackApiError && error.status !== 429 && error.status < 500) {
