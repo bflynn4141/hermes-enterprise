@@ -113,15 +113,14 @@ export async function settleEmailSend(
   );
   const row = found.rows[0];
   if (!row) throw new RouteError('no such email send', 'unknown_email_send', 404);
-  if (row.settled_outcome === input.outcome) {
-    return { list: await listEmailSends(tx, workspaceId, requestId, userId), duplicate: true };
-  }
-  if (row.state !== 'ambiguous') throw new RouteError('Only a send whose outcome is unknown can be settled.', 'email_send_not_uncertain', 409);
-
   const viewer = await viewerFor(tx, workspaceId, userId);
   if (!viewer || !maySettleUncertainSend(viewer, await approvalReviewerMemberIds(tx, requestId))) {
     throw new RouteError('Only a reviewer of this email or an Admin can settle its send.', 'email_send_settle_forbidden', 403);
   }
+  if (row.settled_outcome === input.outcome) {
+    return { list: await listEmailSends(tx, workspaceId, requestId, userId), duplicate: true };
+  }
+  if (row.state !== 'ambiguous') throw new RouteError('Only a send whose outcome is unknown can be settled.', 'email_send_not_uncertain', 409);
 
   if (input.outcome === 'sent') {
     await tx.query(
