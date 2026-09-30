@@ -3,7 +3,7 @@
 // or real hosted/offline acceptance evidence.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { partnerWatchSchema, type PartnerWatch, type ApprovalProposal } from '@hermes/shared';
+import { approvalViewSchema, partnerWatchSchema, type PartnerWatch, type ApprovalProposal } from '@hermes/shared';
 import type { Env } from '../../src/env.js';
 import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
@@ -340,7 +340,7 @@ describe('one proactive GitHub responsibility', () => {
       content: 'Read the cited SDK documentation and assess whether this migration affects our current integration.',
     } });
     expect(edited.status).toBe(201);
-    expect((await edited.json()).payload.authorization.revision).toBe(2);
+    expect(approvalViewSchema.parse(await edited.json()).payload.authorization.revision).toBe(2);
   });
 
   it('records a source failure without replenishing its request allowance on job replay', async () => {
