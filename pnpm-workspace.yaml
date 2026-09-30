@@ -6,6 +6,9 @@ packages:
 # but force the patched ABI-compatible release until its next upstream cut.
 overrides:
   sharp@0.35.2: 0.35.4
+  # miniflare (via wrangler and the Vitest pool) pins undici 7.29.0 exactly,
+  # which has open security advisories; 7.29.1 is the same-line patch release.
+  undici@7.29.0: 7.29.1
 
 # esbuild and workerd ship prebuilt binaries and need their install scripts.
 # The motion package uses Tailwind's one-shot compiler; its optional file
