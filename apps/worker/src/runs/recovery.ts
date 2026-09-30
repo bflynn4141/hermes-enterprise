@@ -80,6 +80,7 @@ async function wakePolicy(work:RecoveryWork,env:Env,agentId:string):Promise<stri
   const resolved = await resolvePartnerSkillAssignment(env, work.tx, work.workspaceId, agentId);
   const config = resolved.config;
   if (!config) return 'Partner screening needs a configured source.';
+  if(config.github_watch && (!config.github_watch.enabled || !resolved.assignment?.schedule.enabled)) return 'This watch is paused.';
   if (config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env)) return 'A new paid search needs an approved allowance.';
   return null;
 }
@@ -397,16 +398,19 @@ export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
   return {queued};
 }
 
-export async function wakeAuthorizedWork(work:RecoveryWork,env:Env,agentId:string):Promise<AgentRecoveryView> {
+export async function wakeAuthorizedWork(work:RecoveryWork,env:Env,agentId:string,idempotencyKey?:string):Promise<AgentRecoveryView> {
   await requireRecoveryAgent(work,agentId,true);
   const policy=await wakePolicy(work,env,agentId);
   if(policy) return {...blank(),state:'blocked',message:policy};
   // An unresolved cycle takes precedence over minting another search allowance.
   const pending = await unresolvedPartnerWork(work.tx,work.workspaceId,agentId);
   if (pending) return recoveryView(work,env,agentId,pending);
-  const interval=automationIntervalMinutes(env), bucket=`${interval}m-${Math.floor(Date.now()/(interval*60000))}`;
+  const resolved=await resolvePartnerSkillAssignment(env,work.tx,work.workspaceId,agentId);
+  const interval=resolved.config?.github_watch ? resolved.assignment?.schedule.interval_minutes ?? automationIntervalMinutes(env) : automationIntervalMinutes(env);
+  const bucket=resolved.config?.github_watch && idempotencyKey ? `manual:${idempotencyKey}` : `${interval}m-${Math.floor(Date.now()/(interval*60000))}`;
   const key=`partner-screening:auto:${work.workspaceId}:${agentId}:${bucket}`;
-  const id=await enqueueJob(work.tx,work.workspaceId,'partner_screening',key,{agent_id:agentId,owner_user_id:work.userId,bucket});
+  const id=await enqueueJob(work.tx,work.workspaceId,'partner_screening',key,{agent_id:agentId,owner_user_id:work.userId,bucket,
+    ...(resolved.config?.github_watch ? {assignment_id:resolved.assignment?.id,assignment_revision:resolved.assignment?.revision} : {})});
   if(id) work.jobs.push(id);
   const job=await work.tx.query<{done_at:Date|null}>('SELECT done_at FROM jobs WHERE workspace_id=$1 AND kind=$2 AND key=$3',[work.workspaceId,'partner_screening',key]);
   return {...blank(),state:job.rows[0]?.done_at?'idle':'queued',message:job.rows[0]?.done_at?'No new authorized work is due in this screening cycle.':'Iris is queued to check the current screening cycle.',can_run_now:false};

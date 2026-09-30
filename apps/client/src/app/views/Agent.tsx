@@ -21,6 +21,7 @@ import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, ap
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
 import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
 import { persistSetupStep } from './setup-progress.js';
+import { PartnerWatchCard } from './PartnerWatch.js';
 
 export function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -197,6 +198,7 @@ export function AgentOverview() {
           </p>
         )}
         <AgentActivityPanel traces={lists.traces} />
+        <PartnerWatchCard />
         <div className="row" style={{ height: 32 }}>
           <h2 className="section-title">{admin ? 'Needs you' : 'Assigned to you'}</h2>
           <span className="grow" />

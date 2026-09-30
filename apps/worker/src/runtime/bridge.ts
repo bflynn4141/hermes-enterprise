@@ -55,6 +55,8 @@ import { scopeWorkspaceHubEvents } from '../domain/audience.js';
 import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 
 export interface BridgeDb extends AgentDb {
+  bindRuntimeToolRun?(runId: string): void;
+  assertPartnerWatchAuthority?(runId: string): Promise<boolean>;
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
   mappingPending(agentId: string): Promise<boolean>;
   withCallLock<T>(agentId: string, fn: () => Promise<T>): Promise<T>;
@@ -63,6 +65,20 @@ export interface BridgeDb extends AgentDb {
   nextRuntimeSequence(runId: string): Promise<number>;
   startRuntimeWait(runId: string, attempt: number): Promise<void>;
   endRuntimeWait(runId: string, attempt: number): Promise<void>;
+}
+export const PARTNER_WATCH_TOOL_NAMES = new Set([
+  'get_workspace_context', 'list_partner_candidates', 'get_partner_candidate', 'propose_approval',
+]);
+async function fencePartnerWatchTool(db: BridgeDb, runId: string, name: string): Promise<void> {
+  let watch: boolean;
+  try { watch = await db.assertPartnerWatchAuthority?.(runId) ?? false; }
+  catch (error) {
+    if (error instanceof RuntimeBudgetError) throw new RouteError('The watch no longer has permission to run.', error.reason, 409);
+    throw error;
+  }
+  if (watch && !PARTNER_WATCH_TOOL_NAMES.has(name)) {
+    throw new RouteError('This watch only supports research and its review draft.', 'runtime_tool_forbidden', 403);
+  }
 }
 export interface RuntimeCall {
   readonly runtime_run_id: string;
@@ -211,6 +227,8 @@ async function dispatchRuntimeProposalCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
+    db.bindRuntimeToolRun?.(run.id);
+    await fencePartnerWatchTool(db, run.id, call.name);
     const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
@@ -346,6 +364,8 @@ export async function dispatchRuntimeCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
+    db.bindRuntimeToolRun?.(run.id);
+    await fencePartnerWatchTool(db, run.id, call.name);
     const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
@@ -550,6 +570,8 @@ async function requireCurrentPaidRun(tx: Tx, workspaceId: string, agentId: strin
        AND runtime_run_id=$4 AND runtime_attempt=attempt AND status='working'
        AND NOT stop_requested FOR UPDATE`, [workspaceId,agentId,runId,runtimeRunId]);
   if (!rows.length) throw new RouteError('The task attempt is no longer active.', 'runtime_run_inactive', 409);
+  const watch = await tx.query(`SELECT id FROM partner_watch_checks WHERE run_id=$1 AND workspace_id=$2`, [runId, workspaceId]);
+  if (watch.rows.length) throw new RouteError('Paid calls are unavailable to this watch.', 'runtime_tool_forbidden', 403);
   if (isResponseOnlyRecoveryInput(rows[0]?.recovery_input)) {
     throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
   }
@@ -1239,6 +1261,7 @@ export async function runtimeModels(c: Context<{ Bindings: Env }>): Promise<Resp
   } finally { await db?.close(); }
 }
 export interface ModelBridgeDb extends RuntimeBudgetDb {
+  assertPartnerWatchAuthority?(runId: string): Promise<boolean>;
   withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
   activeProfileRun(agentId: string): Promise<EngineRunRow | null>;
   allowedRuntimeModels(): Promise<RuntimeModelRow[]>;
@@ -1247,6 +1270,7 @@ export interface ModelBridgeDb extends RuntimeBudgetDb {
   recordProviderRetryAfter?(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void>;
   settleRuntimeModelCall?(input: {
     reservation: {
+      kind?: 'partner_watch';
       reservationId: string;
       resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled';
       usage?: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
@@ -1291,6 +1315,24 @@ export function restrictToIntakeTools(forwarded: Record<string, unknown>): void 
   }
 }
 
+/** Native MCP/shell tools cannot expand an unattended watch's authority. */
+export function restrictToWatchTools(forwarded: Record<string, unknown>): void {
+  const nameOf = (tool: unknown): string | null => {
+    if (!object(tool)) return null;
+    const fn = object(tool.function) ? tool.function : tool;
+    return typeof fn.name === 'string' ? fn.name : null;
+  };
+  if (Array.isArray(forwarded.tools)) {
+    forwarded.tools = forwarded.tools.filter((tool) => PARTNER_WATCH_TOOL_NAMES.has(nameOf(tool) ?? ''));
+    if ((forwarded.tools as unknown[]).length === 0) {
+      delete forwarded.tools; delete forwarded.tool_choice; delete forwarded.parallel_tool_calls;
+    }
+  }
+  if (object(forwarded.tool_choice) && !PARTNER_WATCH_TOOL_NAMES.has(nameOf(forwarded.tool_choice) ?? '')) {
+    forwarded.tool_choice = 'auto';
+  }
+}
+
 export async function proxyRuntimeModel(
   env: Env,
   db: ModelBridgeDb,
@@ -1305,6 +1347,7 @@ export async function proxyRuntimeModel(
   const prepare = async () => {
     const run = await db.activeProfileRun(agentId);
     if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
+    const watch = await db.assertPartnerWatchAuthority?.(run.id) ?? false;
     const allowed = await db.allowedRuntimeModels();
     const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
     const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
@@ -1323,6 +1366,7 @@ export async function proxyRuntimeModel(
     // reach the model while the email is in context; the AgentCash authorize
     // routes refuse intake runs too, in case a call is invented anyway.
     if (run.mode === 'intake') restrictToIntakeTools(forwarded);
+    if (watch) restrictToWatchTools(forwarded);
     if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
     // Every streamed native call needs its own authoritative usage; otherwise a
     // multi-call run can only expose one terminal aggregate and key rotation can
@@ -1353,6 +1397,7 @@ export async function proxyRuntimeModel(
   if (prepared) {
     try {
       reservation = await db.reserveRuntimeBudget!({
+        ...(prepared.context.kind ? { kind: prepared.context.kind, runAttempt: run.attempt } : {}),
         runId: run.id,
         modelId: selected.model_id,
         inputTokenBound: prepared.inputTokenBound,
@@ -1432,6 +1477,7 @@ export async function proxyRuntimeModel(
     };
     const budgetSettlement = reservation && resolution
       ? {
+          ...(reservation.kind ? { kind: reservation.kind } : {}),
           reservationId: reservation.reservationId,
           resolution,
           ...(usage ? { usage } : {}),
@@ -1465,7 +1511,7 @@ export async function proxyRuntimeModel(
     const delay = ['runtime_provider_rate_limited', 'runtime_provider_unavailable'].includes(failure.reason)
       ? parseProviderRetryAfter(response.headers.get('Retry-After')) : null;
     try { await response.body?.cancel(); } catch { /* Rejection accounting must still settle. */ }
-    await settle(null, 'error', reservation ? 'rejected' : null);
+    await settle(null, 'error', reservation ? (reservation.kind === 'partner_watch' ? 'unresolved' : 'rejected') : null);
     if (delay) await db.recordProviderRetryAfter?.(run.id, run.attempt, delay);
     console.warn(JSON.stringify({
       at: 'runtime.model_rejected', provider: selected.provider,

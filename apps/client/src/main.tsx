@@ -64,6 +64,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       agentless: params.get('agent') === 'none',
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       pendingAgentApproval: params.has('pendingAgentApproval'),
+      partnerWatch: ['ready', 'baseline', 'changed', 'failed', 'conflict', 'admin-paused', 'ambiguous', 'unavailable', 'readonly'].includes(params.get('partnerWatch') ?? '') ? params.get('partnerWatch') as 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly' : undefined,
       recovery: recovery === 'working' || recovery === 'retryable' || recovery === 'retry_scheduled' || recovery === 'blocked' || recovery === 'stopped' || recovery === 'idle' ? recovery : undefined,
       activity: params.get('activity') === 'completed-tool' ? 'completed-tool' : params.get('activity') === 'completed' ? 'completed' : undefined,
       seat: params.get('seat') === 'member' ? 'member' : 'admin',

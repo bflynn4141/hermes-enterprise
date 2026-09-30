@@ -193,6 +193,7 @@ import {
   startPartnerScreening,
 } from './routes/partner-screening.js';
 import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
+import { getPartnerWatch,patchPartnerWatch } from './routes/partner-watch.js';
 import {
   configurePartnerWorkflowRoute,
   correctPartnerInvoice,
@@ -371,6 +372,8 @@ app.post('/w/:ws/agents/:agentId/provisioning/verify', verifyAgentProvisioning);
 // explicit handoff starts the bound agent against those read-only artifacts;
 // any resulting application remains pending for a human in Inbox.
 app.get('/w/:ws/partner-screening/agents/:agentId/sources', partnerScreeningSources);
+app.get('/w/:ws/partner-screening/agents/:agentId/watch',getPartnerWatch);
+app.patch('/w/:ws/partner-screening/agents/:agentId/watch',patchPartnerWatch);
 app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
 app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
 app.post('/w/:ws/partner-screening/runs/:id/handoff', handoffPartnerScreening);

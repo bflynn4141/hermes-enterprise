@@ -8,6 +8,15 @@ Help Scout) is summarized at the end.
 
 ## Voice
 
+The [partner watch](PARTNER-WATCH.md) follows the same restrained language:
+one source line, cadence and spending limits, the latest result, and a quiet
+last/next check line on the existing agent overview. Configure stays in a
+dialog. A clicked Run now says "Check requested" until durable results arrive.
+A quiet later check retains the latest review link. Simulated execution says
+"Sample watch"; a missing deployment, source or model is an actionable setup
+state, never a claim that scheduled work is live. Existing status and dialog
+motion follows real activity and reduced-motion preferences.
+
 - Say what happened and what the person can do, in their words. The screen is
   for the people who run the team, not for the people who run the servers.
 - One idea per sentence. Active voice. Name who did it: "Iris suggested a

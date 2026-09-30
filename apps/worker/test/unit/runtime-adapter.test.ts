@@ -1292,6 +1292,21 @@ describe('official Hermes enterprise projection', () => {
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
   });
 
+  it('emits the persisted missing-review failure when native Hermes reports success', async () => {
+    const missing = { class: 'permanent', retryable: false, reason: 'partner_watch_review_missing', message: 'A required review was not created.' };
+    class WatchDb extends FakeRuntimeDb {
+      override async setRunStatus(id: string, status: string, detail = {}) {
+        await super.setRunStatus(id, status === 'completed' ? 'error' : status, status === 'completed' ? { error: missing } : detail);
+      }
+      async terminalOutcome() { return { status: 'error' as const, error: missing }; }
+    }
+    const store = new WatchDb();
+    await execute(store);
+    expect(store.events.filter((event) => event.kind === 'run.status').at(-1)?.payload)
+      .toMatchObject({ status: 'error', error: missing });
+    expect(store.events.some((event) => event.kind === 'run.status' && event.payload.status === 'completed')).toBe(false);
+    expect(store.events.find((event) => event.kind === 'message.final')?.payload).toMatchObject({ incomplete: true });
+  });
   it('publishes terminal events only after the finalization transaction has completed', async () => {
     const db = new FakeRuntimeDb();
     let finalPublished = false;
