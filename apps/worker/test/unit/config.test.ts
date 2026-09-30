@@ -128,6 +128,21 @@ describe('wrangler.jsonc', () => {
     expect((envs.production!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
   });
 
+  it('offers Turnkey wallet setup on staging only, with passkeys bound to its own host (C103)', () => {
+    const staging = envs.staging!.vars as Record<string, string>;
+    expect(staging.TURNKEY_WALLETS_ENABLED).toBe('1');
+    expect(staging.TURNKEY_PROVISIONING_ENABLED).toBe('1');
+    expect(staging.TURNKEY_MEMBER_WALLETS_ENABLED).toBe('1');
+    expect(staging.TURNKEY_PASSKEY_RP_ID).toBe(new URL(staging.ALLOWED_ORIGINS!).hostname);
+    for (const scope of [config, envs.production!]) {
+      const vars = scope.vars as Record<string, string>;
+      for (const flag of ['TURNKEY_WALLETS_ENABLED', 'TURNKEY_PROVISIONING_ENABLED', 'TURNKEY_MEMBER_WALLETS_ENABLED']) expect(vars[flag] ?? '0').toBe('0');
+    }
+    // The parent org id and key pair stay secrets, out of this public config.
+    const text = JSON.stringify(config);
+    for (const secret of ['TURNKEY_PARENT_ORG_ID', 'TURNKEY_API_PUBLIC_KEY', 'TURNKEY_API_PRIVATE_KEY']) expect(text).not.toContain(secret);
+  });
+
   it('keeps the first member-approved search bounded in every environment', () => {
     for (const scope of [config, ...Object.values(envs)]) {
       const raw = (scope.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON;

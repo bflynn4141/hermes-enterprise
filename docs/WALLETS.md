@@ -64,6 +64,17 @@ Verified so far against a faithful fake of Turnkey's API, a real browser passkey
 (Chrome's virtual authenticator) and the mock app; not yet against Turnkey
 itself.
 
+## Where it is on
+
+- **Staging** (from September 30, 2026): wallet owner setup and member wallets
+  are on. Passkeys are bound to `staging.hermes.brianflynn.dev`. The parent
+  organization id and API key pair are Worker secrets, set from 1Password.
+- **Production**: off. A config test fails if any Turnkey switch is turned on
+  there.
+- **PR previews**: off unless deployed with `--turnkey` (see PREVIEWS.md).
+
+Signing and payments are not built anywhere yet.
+
 ## Who may ask Turnkey to do what
 
 | Who | May submit | Never |
