@@ -2091,3 +2091,29 @@ concurrently. A Nous quarantine commits even when the caller rolls back. The
 rollback cases failed before the change.
 `test/unit/provider-oauth-store.test.ts` shows the caller's transaction only
 reads.
+
+## C102. Prove one proactive responsibility before allocating a fleet
+
+**Decided September 30, 2026** by Brian. The first milestone is an opt-in
+GitHub partner watch on an existing official Hermes profile. Identity,
+permissions, source evidence, responsibility settings, task state and model
+allowances remain durable control-plane data rather than properties of a VM.
+
+The existing Cloudflare scheduler admits bounded checks independently of the
+browser. A quiet baseline and unchanged evidence do not call the model. A
+material source change freezes before/after evidence and can prepare one
+owner-only `deliverable` review in the existing Inbox. This is separate from
+outreach and cannot send, enrich, pay, sign, grant, or release another request.
+
+Ownership and assignment revision are rechecked at source, handoff, model,
+tool and proposal boundaries. Model costs reserve a conservative verified
+catalog ceiling before provider calls; uncertain usage stays charged. A retry
+retains the original check, evidence and allowance. Pause revokes subsequent
+work, while an already in-flight request can finish and remains accounted for.
+
+This choice preserves the existing runtime pin, attestation, provider policy
+and release boundaries. No dedicated fleet, provider migration, broad native
+tools, or multi-day run window is added. A scripted preview can validate the
+interface and mechanics; a real offline pilot and a useful reviewed result
+remain the prerequisite for expanding capacity. See [Partner watch](../PARTNER-WATCH.md)
+for activation and acceptance evidence requirements.

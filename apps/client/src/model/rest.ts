@@ -41,6 +41,8 @@ import {
   type InboundEmailListItem,
   type InboundEmailView,
   agentRecoveryViewSchema,
+  partnerWatchSchema,
+  type PartnerWatchUpdate,
   agentProvisioningResponseSchema,
   catalogPageSchema,
   errorBodySchema,
@@ -404,6 +406,10 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt, ...(expectedSettings ? { expected_settings: expectedSettings } : {}) }) as Promise<RunView>,
+    partnerWatch: (workspaceId: string, agentId: string) =>
+      request('GET', `${ws(workspaceId)}/partner-screening/agents/${agentId}/watch`, partnerWatchSchema),
+    updatePartnerWatch: (workspaceId: string, agentId: string, body: PartnerWatchUpdate) =>
+      request('PATCH', `${ws(workspaceId)}/partner-screening/agents/${agentId}/watch`, partnerWatchSchema, body),
     agentRecovery: (workspaceId: string, agentId: string, runId?: string) =>
       request('GET', `${ws(workspaceId)}/agents/${agentId}/recovery${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`, agentRecoveryViewSchema),
     wakeAgent: (workspaceId: string, agentId: string, body: AgentWakeInput) =>

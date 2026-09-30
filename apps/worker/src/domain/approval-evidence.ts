@@ -88,6 +88,11 @@ export function partnerSourceFacts(source: string, content: unknown): ApprovalEv
         const repository = object(value);
         add('Repository', repository.full_name ?? repository.name);
         add('Repository description', repository.description);
+        add('Last public push',repository.pushed_at);
+        add('Repository topics',Array.isArray(repository.topics) ? repository.topics.filter(topic=>typeof topic==='string').join(', ') : null);
+        add('Repository language',repository.language);
+        add('Repository license',object(repository.license).spdx_id);
+        add('Archived',typeof repository.archived==='boolean' ? String(repository.archived) : null);
         add('Stars', repository.stargazers_count);
       });
     }
@@ -205,6 +210,21 @@ export async function getApprovalEvidence(
       fetched_at: mailbox.imported_at.toISOString(), source_updated_at: null,
       verified_at: null, sha256: mailbox.normalized_sha256, facts,
     });
+  }
+
+  if(payload.approval_type==='deliverable' && payload.policy.key===`partner-watch-review-${approval.requester_agent_id}` && !payload.illustrative) {
+    const artifact=(await tx.query<{source:string;source_url:string;source_updated_at:Date|null;fetched_at:Date;sha256:string;content:unknown}>(`
+      SELECT a.source,a.source_url,a.source_updated_at,a.fetched_at,a.sha256,a.content FROM partner_watch_checks c
+      JOIN partner_source_artifacts a ON a.workspace_id=c.workspace_id AND a.run_id IN(c.screening_run_id,c.previous_screening_run_id)
+      JOIN partner_screening_run_candidates rc ON rc.workspace_id=a.workspace_id AND rc.run_id=a.run_id AND a.id=ANY(rc.artifact_ids)
+      WHERE c.workspace_id=$1 AND c.review_id=$2 AND c.run_id=$3 AND c.agent_id=$4 AND a.id=$5
+        AND (a.run_id=c.previous_screening_run_id OR rc.candidate_id=c.selected_candidate_id)
+        AND $6='partner-watch:'||c.id::text AND $7=c.screening_run_id::text LIMIT 1`,
+      [workspaceId,requestId,approval.source_run_id,approval.requester_agent_id,evidenceId,payload.details.artifact_id,payload.details.version])).rows[0];
+    if(!artifact) return unavailable();
+    return approvalEvidenceViewSchema.parse({...base,kind:'partner_source',source_url:approvalEvidenceSourceUrl(artifact.source_url,artifact.source),
+      fetched_at:artifact.fetched_at.toISOString(),source_updated_at:artifact.source_updated_at?.toISOString()??null,verified_at:null,sha256:artifact.sha256,
+      facts:partnerSourceFacts(artifact.source,artifact.content)});
   }
 
   if (payload.approval_type !== 'communication' || !payload.details.draft_only || payload.illustrative

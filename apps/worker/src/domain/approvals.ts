@@ -439,6 +439,15 @@ async function resolveResourceBindings(
         reason: source?.sha256 ? null : 'The source attachment is not ready with an immutable digest.',
       });
     } else if (evidence.kind === 'artifact') {
+      if(proposal.approval_type==='deliverable' && proposal.details.artifact_id.startsWith('partner-watch:')) {
+        const source=(await tx.query<{id:string;sha256:string;version:string}>(`SELECT a.id,a.sha256,a.fetched_at::text AS version FROM partner_watch_checks c
+          JOIN partner_source_artifacts a ON a.workspace_id=c.workspace_id AND a.run_id IN(c.screening_run_id,c.previous_screening_run_id)
+          JOIN partner_screening_run_candidates rc ON rc.workspace_id=a.workspace_id AND rc.run_id=a.run_id AND a.id=ANY(rc.artifact_ids)
+          WHERE c.workspace_id=$1 AND c.run_id=$2 AND c.agent_id=$3 AND a.id=$4
+            AND (a.run_id=c.previous_screening_run_id OR rc.candidate_id=c.selected_candidate_id)`,
+          [workspaceId,requester.runId,requester.agentId,evidence.id])).rows[0];
+        if(source) bindings.push({kind:'artifact',id:source.id,version:source.version,sha256:source.sha256,immutable:true,executor_available:false,reason:null});
+      }
       // Artifact ids are shared by several evidence systems. Add a binding
       // only when this id is a mailbox snapshot granted to the requester's
       // explicit Enterprise team; partner artifacts keep their existing
@@ -796,6 +805,7 @@ function progress(
 }
 
 export async function loadApprovalView(tx: Tx, requestId: string, viewerUserId: string | null): Promise<ApprovalView> {
+  await requirePartnerWatchViewer(tx,requestId,viewerUserId);
   const row = await loadApprovalRow(tx, requestId);
   if (!row) throw new RouteError('no such approval request', 'unknown_approval', 404);
   const payload = approvalPayloadSchema.parse(row.payload);
@@ -1008,6 +1018,39 @@ async function validatePartnerOutreachContact(
   return { candidateId: recipient.candidate_id, stage: draftPolicy ? 'draft_pending' : 'send_pending' };
 }
 
+const WATCH_EVIDENCE_LIMITATION='Evidence samples the ten most recently pushed public repositories; activity dates do not establish release content, commercial interest, availability, or consent.';
+
+async function validatePartnerWatchReview(context:ApprovalProposerContext,input:ProposeApprovalInput):Promise<string|null> {
+  const check=(await context.tx.query<{id:string;screening_run_id:string;selected_candidate_id:string;previous_screening_run_id:string|null;review_id:string|null;owner_member_id:string;allowed:boolean}>(`
+    SELECT c.*,m.id AS owner_member_id,partner_watch_check_authorized(c.id) AS allowed
+    FROM partner_watch_checks c JOIN members m ON m.workspace_id=c.workspace_id AND m.user_id=c.owner_user_id
+    WHERE c.workspace_id=$1 AND c.run_id=$2 AND c.agent_id=$3 AND c.status='changed' FOR UPDATE OF c`,
+    [context.workspaceId,context.runId ?? null,context.agentId])).rows[0];
+  if(!check && !input.policy_key.startsWith('partner-watch-review-')) return null;
+  if(!check?.allowed) throw new RouteError('This watch is no longer authorized.','partner_watch_authority_stale',409);
+  if(check.review_id) throw new RouteError('This change already has a review.','partner_watch_review_exists',409);
+  const proposal=input.proposal;
+  if(input.policy_key!==`partner-watch-review-${context.agentId}` || proposal.approval_type!=='deliverable'
+    || proposal.illustrative || proposal.details.artifact_id!==`partner-watch:${check.id}` || proposal.details.version!==check.screening_run_id
+    || proposal.details.releases_dependent_request_ids.length || input.target_agent_ids.length || input.target_resource_ids.length || input.dependent_request_ids.length
+    || input.target_member_ids.length!==1 || input.target_member_ids[0]!==check.owner_member_id
+    || !proposal.details.missing_information.includes(WATCH_EVIDENCE_LIMITATION)) {
+    throw new RouteError('A watch may prepare only its exact owner-reviewed research brief.','invalid_partner_watch_review',422);
+  }
+  const artifacts=(await context.tx.query<{id:string;run_id:string}>(`SELECT a.id,a.run_id FROM partner_source_artifacts a
+    JOIN partner_screening_run_candidates rc ON rc.workspace_id=a.workspace_id AND rc.run_id=a.run_id AND a.id=ANY(rc.artifact_ids)
+    WHERE a.workspace_id=$1 AND ((a.run_id=$2 AND rc.candidate_id=$3) OR a.run_id=$4)`,
+    [context.workspaceId,check.screening_run_id,check.selected_candidate_id,check.previous_screening_run_id])).rows;
+  const ids=proposal.evidence.map(e=>e.id);
+  if(!ids.length || proposal.evidence.some(e=>e.kind!=='artifact' || !artifacts.some(a=>a.id===e.id))
+    || proposal.details.evidence_ids.some(id=>!ids.includes(id)) || ids.some(id=>!proposal.details.evidence_ids.includes(id))
+    || !artifacts.some(a=>a.run_id===check.screening_run_id && ids.includes(a.id))
+    || (artifacts.some(a=>a.run_id===check.previous_screening_run_id) && !artifacts.some(a=>a.run_id===check.previous_screening_run_id && ids.includes(a.id)))) {
+    throw new RouteError('Cite this change’s stored before and after evidence.','invalid_partner_watch_evidence',422);
+  }
+  return check.id;
+}
+
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
   const input = proposeApprovalInputSchema.parse(rawInput);
   const actorUserId = context.userId ?? null;
@@ -1062,6 +1105,7 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   }
 
   const requester = await requesterContext(context);
+  const watchCheckId=await validatePartnerWatchReview(context,input);
   // Existing agent/session callers derive their human attribution inside
   // requesterContext. Only the explicit delegated path separates actor from
   // maker; preserving this fallback avoids erasing the session owner's audit.
@@ -1112,6 +1156,12 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   );
   const requestId = inserted.rows[0]?.id;
   if (!requestId) throw new RouteError('approval request was not created', 'approval_create_failed', 409);
+  if(watchCheckId) {
+    await context.tx.query('UPDATE partner_watch_checks SET review_id=$3 WHERE workspace_id=$1 AND id=$2',[context.workspaceId,watchCheckId,requestId]);
+    await context.tx.query(`INSERT INTO request_audiences(workspace_id,request_id,user_id,purpose)
+      SELECT workspace_id,$3,owner_user_id,'owner' FROM partner_watch_checks WHERE workspace_id=$1 AND id=$2`,
+      [context.workspaceId,watchCheckId,requestId]);
+  }
   await context.tx.query(
     `INSERT INTO approval_requests
        (request_id, workspace_id, policy_id, policy_version, authorization_revision, authorization_hash,
@@ -1179,7 +1229,18 @@ async function markExpired(work: ApprovalWork, row: ApprovalRow): Promise<void> 
   await publishRequestChanged(work, row.request_id);
 }
 
+async function requirePartnerWatchViewer(tx:Tx,requestId:string,viewerUserId:string|null):Promise<void> {
+  // Null is an internal proposal projection. Every human route supplies its
+  // authenticated user; Admin setup authority does not reveal private work.
+  if(!viewerUserId) return;
+  const privateCheck=(await tx.query<{allowed:boolean}>(`SELECT EXISTS(SELECT 1 FROM members m
+    WHERE m.workspace_id=c.workspace_id AND m.user_id=$2 AND m.user_id=c.owner_user_id AND m.status='active') AS allowed
+    FROM partner_watch_checks c WHERE c.workspace_id=app_workspace_id() AND c.review_id=$1`,[requestId,viewerUserId])).rows[0];
+  if(privateCheck && !privateCheck.allowed) throw new RouteError('no such approval request','unknown_approval',404);
+}
+
 export async function getApproval(work: ApprovalWork, requestId: string, viewerUserId: string): Promise<ApprovalView> {
+  await requirePartnerWatchViewer(work.tx,requestId,viewerUserId);
   const row = await loadApprovalRow(work.tx, requestId, true);
   if (!row) throw new RouteError('no such approval request', 'unknown_approval', 404);
   if (row.status === 'pending' && asTime(row.expires_at).getTime() <= Date.now()) await markExpired(work, row);
@@ -1517,6 +1578,20 @@ async function writeRevision(
   proposal: ApprovalProposal,
   requestedExpiresAt: string | undefined,
 ): Promise<void> {
+  const watch=(await context.tx.query<{id:string;screening_run_id:string}>(`SELECT id,screening_run_id FROM partner_watch_checks
+    WHERE workspace_id=$1 AND review_id=$2`,[context.workspaceId,row.request_id])).rows[0];
+  if(watch || oldPayload.policy.key.startsWith('partner-watch-review-')) {
+    await requirePartnerWatchViewer(context.tx,row.request_id,context.userId);
+    const citations=(value:ApprovalProposal) => sortedUnique(value.evidence.map(item=>`${item.kind}:${item.id}`));
+    if(!watch || oldPayload.approval_type!=='deliverable' || proposal.approval_type!=='deliverable'
+      || proposal.illustrative || proposal.details.artifact_id!==`partner-watch:${watch.id}`
+      || proposal.details.version!==watch.screening_run_id || proposal.details.releases_dependent_request_ids.length
+      || !proposal.details.missing_information.includes(WATCH_EVIDENCE_LIMITATION)
+      || JSON.stringify(citations(proposal))!==JSON.stringify(citations(oldPayload))
+      || JSON.stringify(sortedUnique(proposal.details.evidence_ids))!==JSON.stringify(sortedUnique(oldPayload.details.evidence_ids))) {
+      throw new RouteError('Edit the research prose while preserving its original watch evidence and review-only scope.','invalid_partner_watch_revision',422);
+    }
+  }
   const targetInput = {
     target_agent_ids: oldPayload.context.target_agent_ids,
     target_member_ids: oldPayload.context.target_member_ids,

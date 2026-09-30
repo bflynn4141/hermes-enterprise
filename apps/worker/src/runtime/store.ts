@@ -44,18 +44,34 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     status: string,
     detail: { waitingFor?: string | null; waitingLabel?: string | null; error?: RunErrorInput | null } = {},
   ): Promise<void> {
-    await super.setRunStatus(runId, status, detail);
-    if (!['completed', 'stopped', 'error'].includes(status)) return;
-    // Read the status that actually won. `PgAgentDb.setRunStatus` refuses to
-    // resurrect a terminal run, so projecting the requested value here could
-    // otherwise turn a run swept as errored into completed work.
-    const { rows } = await this.runtimeQuery<{ status: string }>(
-      `SELECT status FROM runs WHERE id = $1`, [runId],
-    );
-    const actual = rows[0]?.status;
-    if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
-    await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
-    await this.runtimeQuery('SELECT project_partner_handoff_run_outcome($1)', [runId]);
+    await this.runtimeTx(async () => {
+      if (status === 'completed') {
+        const check = await this.runtimeQuery<{ review_id: string | null }>(
+          `SELECT review_id FROM partner_watch_checks WHERE run_id=$1 AND workspace_id=app_workspace_id()`, [runId]);
+        if (check.rows.length && !check.rows[0]!.review_id) {
+          status = 'error';
+          detail = { ...detail, error: {
+            class: 'permanent', retryable: false, reason: 'partner_watch_review_missing',
+            message: 'The watch finished without its required review draft. Check this run before continuing the watch.',
+          } };
+        }
+      }
+      await super.setRunStatus(runId, status, detail);
+      if (!['completed', 'stopped', 'error'].includes(status)) return;
+      // Project only the state that won the guarded transition.
+      const { rows } = await this.runtimeQuery<{ status: string }>(`SELECT status FROM runs WHERE id=$1`, [runId]);
+      const actual = rows[0]?.status;
+      if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
+      await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
+      await this.runtimeQuery('SELECT project_partner_handoff_run_outcome($1)', [runId]);
+      if (actual === 'stopped') await this.runtimeQuery('SELECT cancel_stopped_partner_watch($1)', [runId]);
+    });
+  }
+
+  async terminalOutcome(runId: string): Promise<{ status: 'completed' | 'stopped' | 'error'; error: RunErrorInput | null } | null> {
+    const { rows } = await this.runtimeQuery<{ status: 'completed' | 'stopped' | 'error'; error: RunErrorInput | null }>(
+      `SELECT status,error FROM runs WHERE id=$1 AND status IN ('completed','stopped','error')`, [runId]);
+    return rows[0] ?? null;
   }
   async recoveryInput(runId: string, attempt: number): Promise<string | null> {
     const { rows } = await this.runtimeQuery<{ recovery_input: string | null }>(
@@ -266,7 +282,47 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;
   }
+  /** Presence is distinct from authorization: stale watch work must never become an ordinary run. */
+  async assertPartnerWatchAuthority(runId: string): Promise<boolean> {
+    const { rows } = await this.runtimeQuery<{ authorized: boolean }>(
+      `SELECT partner_watch_check_authorized(id) AS authorized FROM partner_watch_checks
+        WHERE run_id=$1 AND workspace_id=app_workspace_id()`, [runId]);
+    if (!rows.length) return false;
+    if (!rows[0]!.authorized) throw new RuntimeBudgetError('partner_watch_budget_authorization_stale');
+    return true;
+  }
+  private async partnerWatchBudgetForRun(runId: string): Promise<RuntimeBudgetContext | null> {
+    const { rows } = await this.runtimeQuery<{
+      id: string; authorized: boolean; model_id: string; context_length: number | null;
+      pricing_verified_on: Date | string | null; pricing_per_million: { input?: unknown; output?: unknown; cached_input?: unknown } | null;
+    }>(`SELECT c.id, partner_watch_check_authorized(c.id) AS authorized, r.model_id,
+                 m.context_length, m.pricing_verified_on, m.pricing_per_million
+          FROM partner_watch_checks c JOIN runs r ON r.id=c.run_id AND r.workspace_id=c.workspace_id
+          LEFT JOIN catalog m ON m.model_id=r.model_id
+          WHERE c.run_id=$1 AND c.workspace_id=app_workspace_id()`, [runId]);
+    const row = rows[0];
+    if (!row) return null;
+    const price = (value: unknown): number | null => {
+      if (typeof value !== 'number' && typeof value !== 'string') return null;
+      if (typeof value === 'string' && !value.trim()) return null;
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? number : null;
+    };
+    return {
+      kind: 'partner_watch', budgetId: row.id,
+      authorizationState: row.authorized ? 'admitted' : 'stale', state: 'active',
+      modelId: row.model_id, maxOutputTokensPerCall: 2048, contextLength: row.context_length,
+      pricingVerifiedOn: row.pricing_verified_on instanceof Date
+        ? row.pricing_verified_on.toISOString().slice(0,10) : row.pricing_verified_on,
+      pricing: row.pricing_per_million ? {
+        input: price(row.pricing_per_million.input), output: price(row.pricing_per_million.output),
+        cachedInput: price(row.pricing_per_million.cached_input),
+      } : null,
+    };
+  }
   async runtimeBudgetForRun(runId: string): Promise<RuntimeBudgetContext | null> {
+    const watch = await this.partnerWatchBudgetForRun(runId);
+    if (watch) return watch;
     const { rows } = await this.runtimeQuery<{
       authorization_state: string;
       expires_at: Date;
@@ -324,6 +380,8 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     };
   }
   async reserveRuntimeBudget(input: {
+    kind?: 'partner_watch';
+    runAttempt?: number;
     runId: string;
     modelId: string;
     inputTokenBound: number;
@@ -332,20 +390,23 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
   }): Promise<RuntimeBudgetReservation> {
     try {
       const { rows } = await this.runtimeQuery<{ reservation_id: string; budget_id: string }>(
-        `SELECT reservation_id, budget_id
-           FROM reserve_approval_model_budget($1, $2, $3, $4, $5)`,
-        [input.runId, input.modelId, input.inputTokenBound, input.outputTokenBound, input.reservedCostUsd],
+        input.kind === 'partner_watch'
+          ? `SELECT reservation_id, budget_id FROM reserve_partner_watch_model_budget($1,$2,$3,$4,$5,$6)`
+          : `SELECT reservation_id, budget_id FROM reserve_approval_model_budget($1,$2,$3,$4,$5)`,
+        [input.runId, input.modelId, input.inputTokenBound, input.outputTokenBound, input.reservedCostUsd,
+          ...(input.kind === 'partner_watch' ? [input.runAttempt ?? null] : [])],
       );
       const row = rows[0];
       if (!row) throw new RuntimeBudgetError('approval_budget_reservation_failed');
-      return { reservationId: row.reservation_id, budgetId: row.budget_id };
+      return { reservationId: row.reservation_id, budgetId: row.budget_id, ...(input.kind ? { kind: input.kind } : {}) };
     } catch (error) {
       if (error instanceof RuntimeBudgetError) throw error;
-      const reason = /approval_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
+      const reason = /(?:approval|partner_watch)_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
       throw new RuntimeBudgetError(reason ?? 'approval_budget_reservation_failed');
     }
   }
   async reconcileRuntimeBudget(input: {
+    kind?: 'partner_watch';
     reservationId: string;
     resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled';
     usage?: RuntimeUsage;
@@ -354,7 +415,9 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     const usage = input.usage;
     try {
       await this.runtimeQuery(
-        `SELECT reconcile_approval_model_budget($1, $2, $3, $4, $5, $6)`,
+        input.kind === 'partner_watch'
+          ? `SELECT reconcile_partner_watch_model_budget($1,$2,$3,$4,$5,$6)`
+          : `SELECT reconcile_approval_model_budget($1,$2,$3,$4,$5,$6)`,
         [
           input.reservationId,
           input.resolution,
@@ -365,7 +428,7 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
         ],
       );
     } catch (error) {
-      const reason = /approval_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
+      const reason = /(?:approval|partner_watch)_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
       throw new RuntimeBudgetError(reason ?? 'approval_budget_reconciliation_failed');
     }
   }
@@ -376,6 +439,7 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
    */
   async settleRuntimeModelCall(input: {
     reservation: {
+      kind?: 'partner_watch';
       reservationId: string;
       resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled';
       usage?: RuntimeUsage;

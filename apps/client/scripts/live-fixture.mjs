@@ -18,8 +18,9 @@
 // the real HTTP routes, because those are what is being tested.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-const repoRoot = new URL('../../..', import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 /**
  * The database every fixture and every live assertion talks to.

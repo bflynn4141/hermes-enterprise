@@ -26,6 +26,7 @@ export * from './email-intake.js';
 export * from './enterprise-skills.js';
 export * from './partner-workflow.js';
 export * from './partner-screening.js';
+export * from './partner-watch.js';
 export * from './plain-text.js';
 export * from './wire.js';
 export * from './recovery.js';

@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type PartnerWatch, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, EmailSend, InboundEmailListItem, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -95,6 +95,8 @@ interface MockOptions {
   agentless?: boolean;
   /** Opt-in settings fixtures; never part of the live bundle. */
   agentSettings?: 'ok' | 'fail' | 'conflict';
+  /** Scripted watch fixtures. Never fetch GitHub or call a model. */
+  partnerWatch?: 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly';
   pendingAgentApproval?: boolean;
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
   recovery?: 'working' | 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
@@ -990,6 +992,47 @@ export function createMockBackend(input: MockOptions = {}) {
     });
   }
 
+  const watchTime = (offsetMinutes: number) => new Date(Date.now() + offsetMinutes * 60_000).toISOString();
+  let watchChecks = options.partnerWatch === 'baseline' ? 1 : 0;
+  let watchView: PartnerWatch = {
+    agent_id: AGENT, execution_mode: 'simulated', assignment_id: options.partnerWatch ? mockUuid(622) : null, revision: options.partnerWatch ? 1 : null,
+    enabled: Boolean(options.partnerWatch && options.partnerWatch !== 'unavailable' && options.partnerWatch !== 'admin-paused'), interval_minutes: 360,
+    selected_source: options.partnerWatch ? { id: 'url:0', label: 'GitHub · Sample partner' } : null,
+    source_options: options.partnerWatch ? [{ id: 'url:0', label: 'GitHub · Sample partner' }, { id: 'url:1', label: 'GitHub · Another sample partner' }] : [],
+    max_api_requests: 2, budget: { max_cost_usd_per_run: 0.10, max_cost_usd_per_day: 0.25, max_model_calls: 4 },
+    state: options.partnerWatch === 'admin-paused' ? 'paused' : options.partnerWatch ? 'ready' : 'unconfigured', may_configure: Boolean(options.partnerWatch && options.partnerWatch !== 'readonly' && options.partnerWatch !== 'unavailable'),
+    may_run: Boolean(options.partnerWatch && options.partnerWatch !== 'readonly' && options.partnerWatch !== 'unavailable' && options.partnerWatch !== 'admin-paused'),
+    blocked_reason: options.partnerWatch === 'admin-paused' ? 'assignment_paused' : options.partnerWatch === 'unavailable' || !options.partnerWatch ? 'automated_triggers_disabled' : options.partnerWatch === 'readonly' ? 'not_owner' : null,
+    next_check_at: options.partnerWatch && options.partnerWatch !== 'admin-paused' && options.partnerWatch !== 'unavailable' ? watchTime(360) : null,
+    latest_review: null,
+    last_check: options.partnerWatch === 'baseline' ? { id: mockUuid(1600), checked_at: watchTime(-5), status: 'baseline', candidates_checked: 1, changed_candidates: 0, run_id: null, session_id: null, review_id: null, error_code: null } : null,
+  };
+  const watchWakeKeys = new Set<string>();
+  let watchAmbiguousDelivered = false;
+  const finishWatchCheck = () => {
+    watchChecks += 1;
+    const changed = options.partnerWatch === 'changed' || watchChecks === 3;
+    const failed = options.partnerWatch === 'failed';
+    const status = failed ? 'failed' : changed ? 'changed' : watchChecks === 1 ? 'baseline' : 'unchanged';
+    watchView = { ...watchView, state: failed ? 'needs_attention' : 'ready', last_check: { id: mockUuid(1600 + watchChecks), checked_at: new Date().toISOString(), status, candidates_checked: 1, changed_candidates: changed ? 1 : 0, run_id: changed ? RUN : null, session_id: changed ? SESSION_A : null, review_id: changed ? APPROVAL_DEMO_REQUEST_IDS.deliverable : null, error_code: failed ? 'sample_source_failed' : null } };
+    if (changed) watchView.latest_review = { id: APPROVAL_DEMO_REQUEST_IDS.deliverable, created_at: new Date().toISOString() };
+    if (changed && !requests.some((row) => row.id === APPROVAL_DEMO_REQUEST_IDS.deliverable)) {
+      const review = structuredClone(approvalDemo.views.get(APPROVAL_DEMO_REQUEST_IDS.deliverable)!);
+      review.payload.summary = 'Sample partner project added integration documentation. Review the cited change before deciding on any follow-up.';
+      review.payload.consequence = 'Acceptance records this research review only. Nothing is sent, granted, or paid.';
+      review.payload.context.source.dependent_request_ids = [];
+      if (review.payload.approval_type === 'deliverable') {
+        review.payload.details.title = 'Sample partner source change';
+        review.payload.details.content = 'Sample result: the project added an integration guide. This may help partner onboarding; customer impact has not been independently verified.';
+        review.payload.details.releases_dependent_request_ids = [];
+      }
+      approvalViews.set(review.request_id, review);
+      const row = structuredClone(approvalDemo.requests.find((item) => item.id === review.request_id)!);
+      row.subject = 'Sample partner source change'; row.title = 'Sample partner source review'; row.label = 'Partner source review'; row.payload = review.payload as unknown as Record<string, unknown>;
+      requests.push(row);
+    }
+  };
+
   let recoveryView: AgentRecoveryView = {
     state: options.recovery ?? (empty || options.activity ? 'idle' : 'waiting'),
     run_id: empty ? null : options.recovery ? RUN : TRACE_LEAH,
@@ -1480,12 +1523,30 @@ export function createMockBackend(input: MockOptions = {}) {
 
     if (p('/bootstrap')) return json(bootstrap());
 
+    if (p(`/partner-screening/agents/${AGENT}/watch`) && method === 'GET') return json(watchView);
+    if (p(`/partner-screening/agents/${AGENT}/watch`) && method === 'PATCH') {
+      if (!watchView.may_configure) return fail(403, 'not_owner');
+      if (options.partnerWatch === 'conflict' && body.revision === 1) { watchView = { ...watchView, revision: 2, interval_minutes: 720 }; return fail(409, 'stale_revision'); }
+      if (body.revision !== watchView.revision) return fail(409, 'stale_revision');
+      const source = watchView.source_options.find((item) => item.id === body.source_id);
+      if (!source) return fail(422, 'source_unavailable');
+      watchView = { ...watchView, revision: watchView.revision! + 1, enabled: Boolean(body.enabled), selected_source: source, interval_minutes: Number(body.interval_minutes), budget: { max_cost_usd_per_run: Number(body.max_cost_usd_per_run), max_cost_usd_per_day: Number(body.max_cost_usd_per_day), max_model_calls: Number(body.max_model_calls) }, state: body.enabled ? 'ready' : 'paused', may_run: Boolean(body.enabled), next_check_at: body.enabled ? watchTime(Number(body.interval_minutes)) : null, blocked_reason: body.enabled ? null : 'watch_paused' };
+      if (options.partnerWatch === 'admin-paused') watchView = { ...watchView, enabled: false, state: 'paused', may_run: false, next_check_at: null, blocked_reason: 'assignment_paused' };
+      return json(watchView);
+    }
     if (p(`/agents/${AGENT}/recovery`) && method === 'GET') return json(recoveryView);
     if (story && p(`/agents/${FINANCE_AGENT}/recovery`) && method === 'GET') return json(recoveryView);
     if (p(`/agents/${AGENT}/wake`) && method === 'POST') {
       // Keep submission observable to browser tests; this is a mock admission,
       // never an inference call or another paid discovery cycle.
       await new Promise((resolve) => setTimeout(resolve, 350));
+      if (body.action === 'run_now' && options.partnerWatch) {
+        if (!watchView.may_run) return fail(409, 'watch_paused');
+        const key = String(body.idempotency_key);
+        if (!watchWakeKeys.has(key)) { finishWatchCheck(); watchWakeKeys.add(key); }
+        if (options.partnerWatch === 'ambiguous' && !watchAmbiguousDelivered) { watchAmbiguousDelivered = true; return fail(503, 'unknown_outcome'); }
+        return json({ ...recoveryView, state: 'idle', run_id: null, session_id: null, attempt: null });
+      }
       if (body.action === 'cancel_retry' && recoveryView.can_cancel) {
         recoveryView = { ...recoveryView, state: 'stopped', next_retry_at: null, can_retry: true, can_cancel: false, message: 'Automatic retry cancelled. You can resume this task when ready.' };
       } else if (body.action === 'retry' && recoveryView.can_retry) {
