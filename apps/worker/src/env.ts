@@ -163,6 +163,8 @@ export interface Env {
    * every Turnkey value is set.
    */
   TURNKEY_PROVISIONING_ENABLED?: string;
+  /** Owner-passkey member wallet provisioning; default off, never grants payment authority. */
+  TURNKEY_MEMBER_WALLETS_ENABLED?: string;
   /** Hermes's parent Turnkey organization; it can read, never write, workspace sub-orgs. */
   TURNKEY_PARENT_ORG_ID?: string;
   /** Compressed P-256 public half of the parent API key (not secret). */

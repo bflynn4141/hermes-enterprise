@@ -197,34 +197,34 @@ test('inviting a member with Finance shows what they will be able to approve', a
   await expect(card).toContainText('Gets Finance when they join');
 });
 
-test('an Admin changes a member’s roles in Manage and sees what they can approve update', async ({ page }) => {
+test('an Admin changes responsibilities on the member page and sees approval eligibility update', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Members', exact: true }).click();
   const pane = app(page);
-
   await pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' }).getByRole('button', { name: 'Manage' }).click();
-  const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
-  const line = manage.getByText(/^Can approve:/);
-  await expect(manage.getByRole('checkbox', { name: 'Finance' })).toBeChecked();
-  await expect(line).toContainText('Pay an approved invoice');
-  await expect(manage.getByRole('button', { name: 'Save roles' })).toBeDisabled();
-  await manage.getByRole('checkbox', { name: 'Finance' }).uncheck();
-  await manage.getByRole('checkbox', { name: 'Access reviewer' }).check();
-  await expect(line).not.toContainText('Pay an approved invoice');
-  await expect(line).toContainText('Grant access to an admitted partner');
-  if (shots) await page.screenshot({ path: `${shots}/manage-with-roles.png` });
-  await manage.getByRole('button', { name: 'Save roles' }).click();
-  await expect(manage.getByRole('status')).toHaveText('Roles updated.');
-  await manage.getByRole('button', { name: 'Done' }).click();
-  await expect(pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' })).toContainText('Access reviewer');
+  await expect(pane.getByRole('heading', { name: 'Alex Rivera', exact: true })).toBeVisible();
+  await pane.getByRole('tab', { name: 'Roles & permissions' }).click();
+  await pane.getByRole('button', { name: 'Edit roles', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Edit roles', exact: true });
+  await expect(picker.getByRole('checkbox', { name: 'Finance', exact: true })).toBeChecked();
+  await expect(picker.getByRole('button', { name: 'Save roles' })).toBeDisabled();
+  await picker.getByRole('checkbox', { name: 'Access reviewer' }).check();
+  await expect(picker).toContainText('Grant access to an admitted partner review added.');
+  if (shots) await page.screenshot({ path: `${shots}/member-with-roles.png` });
+  await picker.getByRole('button', { name: 'Save roles' }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(pane.getByRole('status')).toHaveText('Roles updated');
+  await expect(pane.locator('.member-permission').filter({ hasText: 'Grant access to an admitted partner' })).toBeVisible();
+  await pane.getByRole('button', { name: '← Members' }).click();
+  await expect(pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' })).toContainText('Finance, Access reviewer');
 
-  // Your own roles are read-only here.
   await pane.getByRole('listitem').filter({ hasText: 'Maya Chen' }).getByRole('button', { name: 'Manage' }).click();
-  const you = page.getByRole('dialog', { name: 'Maya Chen' });
-  await expect(you).toContainText('Roles: Partnerships, Access reviewer. Another Admin changes your own roles.');
-  await expect(you.getByRole('checkbox')).toHaveCount(0);
-  await expect(you.getByText(/^Can approve:/)).toContainText('Admit a partner applicant');
+  await pane.getByRole('tab', { name: 'Roles & permissions' }).click();
+  await expect(pane.getByRole('button', { name: 'Edit roles', exact: true })).toBeDisabled();
+  await expect(pane.getByRole('button', { name: 'Change role' })).toBeDisabled();
+  await expect(pane).toContainText('Another Admin changes your own roles.');
+  await expect(pane.locator('.member-permission').filter({ hasText: 'Admit a partner applicant' })).toBeVisible();
 });
 
 test('a rule change without a recent sign-in offers one and keeps the draft', async ({ page }) => {
@@ -237,32 +237,30 @@ test('a rule change without a recent sign-in offers one and keeps the draft', as
   await expect(who.getByRole('checkbox', { name: /^Legal/ })).toBeChecked();
 });
 
-test('Manage without a recent sign-in offers one for the role switch and Remove, and changes nothing', async ({ page }) => {
+test('member changes without a recent sign-in preserve the draft and confirmed state', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?approvals=stepup');
   await page.getByRole('button', { name: 'Members', exact: true }).click();
   const pane = app(page);
-  const alex = pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
-  await alex.getByRole('button', { name: 'Manage' }).click();
-  const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
-  const roleGroup = manage.getByRole('radiogroup', { name: 'Role' });
-  // Alex is an Admin in the fixture; the switch tries to make them a Member.
-  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
-
-  await roleGroup.getByRole('radio', { name: /^Member/ }).click();
-  await expect(manage.getByRole('alert')).toContainText('Changing someone’s role needs a recent sign-in.');
-  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
-  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
-  await expect(manage.getByRole('status')).toHaveCount(0);
-
-  await manage.getByRole('button', { name: 'Remove…' }).click();
-  await manage.getByRole('button', { name: 'Remove', exact: true }).click();
-  await expect(manage.getByRole('alert')).toContainText('Removing a member needs a recent sign-in.');
-  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
-  await manage.getByRole('button', { name: 'Keep' }).click();
-  await expect(manage.getByRole('alert')).toHaveCount(0);
-  await manage.getByRole('button', { name: 'Done' }).click();
-  await expect(alex).toContainText('Admin');
+  await pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' }).getByRole('button', { name: 'Manage' }).click();
+  await pane.getByRole('button', { name: 'Change role' }).click();
+  const role = page.getByRole('dialog', { name: 'Change Alex Rivera’s workspace role' });
+  await expect(role.getByRole('radio', { name: /^Admin/ })).toBeChecked();
+  await role.getByRole('radio', { name: /^Member/ }).check();
+  await role.getByRole('button', { name: 'Save role' }).click();
+  await expect(role.getByRole('alert')).toContainText('Changing someone’s role needs a recent sign-in.');
+  await expect(role.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await expect(role.getByRole('radio', { name: /^Member/ })).toBeChecked();
+  await role.getByRole('button', { name: 'Cancel' }).click();
+  await expect(pane.getByRole('region', { name: 'Workspace access' })).toContainText('Admin');
+  await pane.getByRole('button', { name: 'Remove member', exact: true }).click();
+  const remove = page.getByRole('dialog', { name: /^Remove Alex Rivera from/ });
+  await remove.getByRole('button', { name: 'Remove member', exact: true }).click();
+  await expect(remove.getByRole('alert')).toContainText('Removing a member needs a recent sign-in.');
+  await expect(remove.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await remove.getByRole('button', { name: 'Keep member' }).click();
+  await expect(remove).toHaveCount(0);
+  await expect(pane.getByRole('region', { name: 'Profile' })).toContainText('Active');
 });
 
 test('a Member has no Approvals page', async ({ page }) => {

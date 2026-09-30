@@ -27,6 +27,9 @@ regexes = [
   '''fa83a20bd4f9f3a90a3ac010db0a68f548259587946ea80b81b2f3253bafd5ec''',
   # The staging demo workspace id (a uuid, also the deploy preflight target).
   '''8cb93c4c-6af3-41cd-bae5-94f849b4976b''',
+  # Public Base USDC contract in the immutable spending-policy JSON constraint.
+  # This is a token contract address, never an API credential.
+  '''token_address":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913''',
 ]
 paths = [
   '''pnpm-lock\.yaml''',

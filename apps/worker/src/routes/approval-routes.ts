@@ -1,3 +1,4 @@
+import { guardPaymentRuleChange } from '../wallets/member-authority.js';
 // /w/:ws/approval-routes — who may approve each kind of work (decisions
 // C93–C95): the base rule, and for invoices and payments an optional second
 // rule above an amount.
@@ -83,6 +84,7 @@ export async function putApprovalRoute(c: Context<{ Bindings: Env }>): Promise<R
     if (unknown.length > 0) {
       throw new RouteError(`this workspace has no role called ${unknown.join(', ')}`, 'unknown_role', 422);
     }
+    if (key === 'payment') await guardPaymentRuleChange(work.tx, work.workspaceId, rule, threshold);
     // Both bands in this transaction, so a reader never sees a new base rule
     // beside the old band above an amount.
     await upsertBand(work, key, 'base', rule, null);
@@ -135,6 +137,7 @@ export async function resetApprovalRoute(c: Context<{ Bindings: Env }>): Promise
   const route = await inWorkspace(c, async (work) => {
     work.requireAdmin('changing who approves');
     requireStepUp(work.session);
+    if (key === 'payment') await guardPaymentRuleChange(work.tx, work.workspaceId, approvalRouteDefinition(key).default, null);
     const removed = await work.tx.query(
       `DELETE FROM approval_route_rules WHERE workspace_id = $1 AND route_key = $2`,
       [work.workspaceId, key],

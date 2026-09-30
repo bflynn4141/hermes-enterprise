@@ -56,6 +56,7 @@ Run from the repository root, on a machine signed in to Wrangler and Neon
 node scripts/preview.mjs init --neon-org <org-id>  # once per machine
 node scripts/preview.mjs up <pr> --comment          # deploy or update, then comment the link on the PR
 node scripts/preview.mjs up <pr> --comment --wallets # also enable wallet enrollment requests only
+op run --env-file=<Turnkey refs> -- node scripts/preview.mjs up <pr> --turnkey # real Turnkey workspace and member wallet creation
 node scripts/preview.mjs down <pr>                  # delete every resource for that PR
 node scripts/preview.mjs list
 ```
@@ -79,3 +80,15 @@ after 14 days; the Worker, queues and Hyperdrive configs do not.
   their GitHub environments, which require an approving reviewer.
 - Account limits: Hyperdrive allows a limited number of configs per account,
   and each preview uses two. Take previews down rather than letting them pile up.
+
+## Real Turnkey in a preview
+
+`--turnkey` points the preview at Hermes's Turnkey parent organization. The key
+comes from the environment (`TURNKEY_PARENT_ORG_ID`, `TURNKEY_API_PUBLIC_KEY`,
+`TURNKEY_API_PRIVATE_KEY`), normally injected by `op run` from 1Password, and is
+uploaded as a Worker secret for that deploy only; it is never written to
+`state.json`. That key may only create workspace sub-organizations. The passkey
+relying party is the preview's host, so an owner passkey created there works only
+on that preview. Signing and payments stay off. Workspaces created from a preview
+remain in Turnkey after `down`; they hold no funds.
+

@@ -44,3 +44,7 @@ export * from './shared-intelligence.js';
 export * from './demo-access.js';
 
 export * from './wallets.js';
+
+export * from './member-wallets.js';
+
+export * from './role-spending.js';

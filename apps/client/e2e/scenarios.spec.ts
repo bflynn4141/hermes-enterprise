@@ -213,13 +213,19 @@ test.describe('members write feedback', () => {
     await app.getByRole('tab', { name: 'All members' }).click();
     const alex = app.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
     await alex.getByRole('button', { name: 'Manage' }).click();
-    const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
-    await manage.getByRole('radio', { name: /Member/ }).click();
-    await expect(manage.getByRole('alert')).toHaveText('Could not change this role. Nothing was changed. Try again.');
-    await manage.getByRole('button', { name: 'Remove…' }).click();
-    await manage.getByRole('button', { name: 'Remove', exact: true }).click();
-    await expect(manage.getByRole('alert')).toHaveText('Could not remove this member. Their access has not changed. Try again.');
-    await expect(manage).toBeVisible();
+    await app.getByRole('button', { name: 'Change role' }).click();
+    const role = page.getByRole('dialog', { name: 'Change Alex Rivera’s workspace role' });
+    await role.getByRole('radio', { name: /^Member/ }).check();
+    await role.getByRole('button', { name: 'Save role' }).click();
+    await expect(role.getByRole('alert')).toHaveText('Could not change this role. Nothing was changed. Try again.');
+    await expect(role.getByRole('radio', { name: /^Member/ })).toBeChecked();
+    await role.getByRole('button', { name: 'Cancel' }).click();
+    await expect(app.getByRole('region', { name: 'Workspace access' })).toContainText('Admin');
+    await app.getByRole('button', { name: 'Remove member', exact: true }).click();
+    const remove = page.getByRole('dialog', { name: /^Remove Alex Rivera from/ });
+    await remove.getByRole('button', { name: 'Remove member', exact: true }).click();
+    await expect(remove.getByRole('alert')).toHaveText('Could not remove this member. Their access has not changed. Try again.');
+    await expect(remove).toBeVisible();
   });
 
   test('flag-off legacy delivery has truthful copy and queues the invitation', async ({ page }) => {

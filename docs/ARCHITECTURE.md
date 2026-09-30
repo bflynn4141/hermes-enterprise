@@ -81,7 +81,9 @@ runtime graph.
 
 Workspace wallet enrollment is an additive, default-off capability described in
 [Workspace wallets](WALLETS.md). It records scoped enrollment requests only;
-provider wallets, signing, and mainnet execution are not activated by this build.
+owner-passkey setup and separately gated [member wallet creation](MEMBER-WALLET-ACCESS.md)
+are available only when configured. [Role spending drafts](ROLE-SPENDING.md)
+grant no authority; payment signing and mainnet execution remain unavailable.
 
 The application and test suites work offline after dependencies are installed.
 The pinned gitleaks, actionlint, and official Hermes installers download their

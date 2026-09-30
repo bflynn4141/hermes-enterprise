@@ -203,6 +203,16 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
 ];
 
 describe('database grants', () => {
+  it('keeps member wallet proposals immutable and provider confirmations unavailable to the agent', async () => {
+    const appGrants = await grantsFor('app');
+    expect(appGrants.get('member_wallet_operations')).toEqual(new Set(['SELECT', 'INSERT']));
+    expect(appGrants.get('member_wallet_bindings')).toEqual(new Set(['SELECT']));
+    expect((await grantsFor('agent')).has('member_wallet_operations')).toBe(false);
+    expect((await grantsFor('agent')).has('member_wallet_bindings')).toBe(false);
+    const updates = (await columnGrantsFor('app', 'member_wallet_operations')).filter(g => g.privilege_type === 'UPDATE');
+    expect(updates.map(g => g.column_name)).toEqual(['failure_code', 'provider_activity_id', 'state', 'updated_at']);
+  });
+
   it('keeps missing-instance observations app-owned', async () => {
     expect((await grantsFor('app')).get('run_sweep_observations')).toEqual(new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']));
     expect((await grantsFor('agent')).has('run_sweep_observations')).toBe(false);

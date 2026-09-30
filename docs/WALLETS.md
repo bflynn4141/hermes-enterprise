@@ -1,23 +1,24 @@
 # Workspace wallets
 
 Wallet setup starts in **Admin → Connections → Wallets**. An Admin can request
-enrollment for the workspace, an active member, or that member's agent. Requests
+enrollment for the workspace or agents. Member access lives in **Members →
+Manage → Wallet access**. Requests
 are durable and idempotent; requesting enrollment again does not create another
 identity. A regular member can read their own enrollment status and their owned
 agents' status, but cannot request enrollment or read other members' wallets.
 
 ## Current implementation boundary
 
-This first increment records enrollment requests, not provider wallets. Every
-request remains **Needs owner setup**, with no address, until a later provider
-enrollment and verification flow exists. It does not contact Turnkey, create a
-suborganization, collect keys or passkeys, sign a transaction, or transfer funds.
-The feature defaults off. Enabling it allows enrollment requests only.
+Wallet features default off. Workspace and agent enrollment remain saved
+requests. Owner setup creates a passkey-controlled Turnkey suborganization when
+explicitly configured. Member wallet creation has an additional opt-in flag and
+exact owner review; see [Member wallet access](MEMBER-WALLET-ACCESS.md).
+No flow here signs a payment or transfers funds.
 
 Set `TURNKEY_WALLETS_ENABLED=1` only in a deployment selected for enrollment
 testing. For an isolated pull-request preview, add `--wallets` to the preview
 command. Omission keeps the feature disabled. No Turnkey credentials are needed
-or consumed by this increment.
+or consumed by enrollment requests.
 
 The target network is Base mainnet and the initial asset is native USDC. The
 transfer-intent module validates and hashes a narrow, exact transfer envelope;
@@ -95,7 +96,8 @@ quorum; changing someone's Hermes Admin role must not grant root custody.
 Hermes sign-in and a saved enrollment request do not establish signing authority.
 Every agent payment will need a member with the finance role to approve the exact
 pending Turnkey request with their passkey; an approval recorded only in Hermes
-never releases a signature. Members get their own wallets in the first version.
+never releases a signature. An owner-controlled wallet can be associated with a
+member; that association does not enroll a provider user or grant payment access.
 
 Before signing becomes available, implementation must bind verified provider
 identities and addresses to these records, verify the customer root ceremony,
@@ -108,3 +110,11 @@ The [implementation plan](plans/2026-09-28-turnkey-workspace-wallets.md) records
 the remaining provider checks, isolation tests, enrollment, permission changes,
 and mainnet acceptance gates. Existing AgentCash wallets are not imported or
 funded by this feature.
+
+## Role spending drafts
+
+Admin → Roles → a role → Spending limits saves proposed per-transfer USDC caps,
+recipients and human approvals. Daily/monthly values record future intent only.
+All saved drafts explicitly remain inactive. Saving never calls Turnkey or
+consumes signatures. See [Role spending](ROLE-SPENDING.md) for current free-tier
+constraints and the remaining activation prerequisites.

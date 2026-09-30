@@ -1,3 +1,4 @@
+import type { RoleSpendingPolicy } from '@hermes/shared';
 // The Drizzle schema.
 //
 // It mirrors the hand-written SQL migrations; the SQL is the source of truth
@@ -51,6 +52,25 @@ export const walletRootSetups = pgTable('wallet_root_setups', {
   providerActivityId: text('provider_activity_id'), failureCode: text('failure_code'), expiresAt: ts('expires_at').notNull(),
   createdAt: now('created_at'), updatedAt: now('updated_at'),
 });
+export const memberWalletOperations = pgTable('member_wallet_operations', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), memberId: uuid('member_id').notNull(),
+  ownerMemberId: uuid('owner_member_id').notNull(), requestedBy: uuid('requested_by').notNull(), kind: text('kind').notNull(),
+  state: text('state').notNull().default('awaiting_owner_review'), version: integer('version').notNull().default(1),
+  proposalHash: text('proposal_hash').notNull(), proposal: jsonb('proposal').notNull(), requestBody: text('request_body').notNull(),
+  providerOrgId: text('provider_org_id').notNull(), walletName: text('wallet_name').notNull(), providerActivityId: text('provider_activity_id'),
+  failureCode: text('failure_code'), expiresAt: ts('expires_at').notNull(), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+export const memberWalletBindings = pgTable('member_wallet_bindings', {
+  workspaceId: uuid('workspace_id').notNull(), memberId: uuid('member_id').notNull(), principalId: uuid('principal_id').notNull(),
+  providerOrgId: text('provider_org_id').notNull(), providerWalletId: text('provider_wallet_id').notNull(), providerUserId: text('provider_user_id'),
+  operationId: uuid('operation_id').notNull(), verifiedAt: ts('verified_at').notNull(),
+}, t => [primaryKey({ columns: [t.workspaceId,t.memberId] })]);
+export const roleSpendingDrafts = pgTable('role_spending_drafts', {
+  workspaceId: uuid('workspace_id').notNull(), roleId: uuid('role_id').notNull(), roleName: text('role_name').notNull(),
+  revision: integer('revision').notNull(), policy: jsonb('policy').$type<RoleSpendingPolicy>().notNull(),
+  requestedBy: uuid('requested_by').notNull(), createdAt: now('created_at'),
+}, t => [primaryKey({ columns: [t.workspaceId, t.roleId, t.revision] })]);
+
 export const walletPrincipals = pgTable('wallet_principals', {
   id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
   kind: text('kind').notNull(), memberId: uuid('member_id'), agentId: uuid('agent_id'), createdAt: now('created_at'),
@@ -2525,6 +2545,9 @@ export const ALL_TABLES = {
   wallet_enrollment_operations: walletEnrollmentOperations,
   wallet_accounts: walletAccounts,
   wallet_root_setups: walletRootSetups,
+  role_spending_drafts: roleSpendingDrafts,
+  member_wallet_operations: memberWalletOperations,
+  member_wallet_bindings: memberWalletBindings,
   workspace_roles: workspaceRoles,
   enterprise_teams: enterpriseTeams,
   enterprise_team_agents: enterpriseTeamAgents,

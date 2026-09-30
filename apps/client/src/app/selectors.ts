@@ -162,7 +162,7 @@ export function describeRef(state: AppState, app: Ref): [string, string] {
     const label = view === 'rules' ? 'Rules' : app.filters?.status === 'resolved' ? 'Resolved' : 'Needs review';
     return [label, label];
   }
-  if (section === 'members') return ['Team', 'Members and invitations'];
+  if (section === 'members') return app.id ? [members(state).find(person => person.id === app.id)?.name ?? 'Member', 'Member details'] : ['Team', 'Members and invitations'];
   if (section === 'admin') {
     const label = ADMIN_SETTINGS_LABELS[app.view ?? 'Organization'] ?? 'Organization';
     return [label, label];

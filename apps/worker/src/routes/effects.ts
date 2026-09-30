@@ -1,3 +1,4 @@
+import { custodyConfigured, walletPaymentPermissionRequired } from '../wallets/member-authority.js';
 // The effects ledger.
 //
 //   GET  /w/:ws/effects?status=      what a decision implied and nobody has done
@@ -100,11 +101,15 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
 
   const { row, viewerId } = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
+    const hasWalletCustody = await custodyConfigured(work.tx, work.workspaceId);
     // Held for the whole press, so two holders confirming at the same moment
     // cannot both see the count reach its quorum and both execute.
     await work.tx.query(`SELECT 1 FROM effects WHERE id = $1 FOR UPDATE`, [effectId]);
     const effect = await loadEffect(work.tx, effectId, work.userId);
     if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
+    // Role assignments, invitations and identity-provider sync cannot stand in
+    // for verified customer-owner approval of provider payment authority.
+    if (effect.kind === 'payment' && hasWalletCustody) throw walletPaymentPermissionRequired();
 
     const viewer = await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
     const routed = effectRule(effect, viewer.routes);

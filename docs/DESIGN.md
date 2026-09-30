@@ -317,3 +317,28 @@ animation because this increment performs no provider provisioning; ordinary
 loading feedback reflects only an actual API request. This needs no spatial
 animation, including in reduced-motion mode. Preserve the sign-in-again action
 when setup requires recent authentication.
+
+## Member access and spending drafts (September 29, 2026)
+
+Approved Paper reference: [Wallets · Owner passkey · Sep 29](https://app.paper.design/file/01M2B594V9R1KZKZ398A79KVHA/p-L-0),
+D1–D8 member sections and the revised D2/D3 compact roles screens. Members →
+Manage opens Overview, Roles & permissions, Agents and Wallet access. Use compact
+settings rows, responsibility chips and an anchored searchable checkbox picker;
+put the effect of an edit below the choices only while a draft has changed.
+Explain individual approval rules in disclosures instead of prose-heavy cards.
+Workspace access, business responsibility, agent governance and provider payment
+authority are separate. Admins may inspect agent settings without seeing private
+conversations. Removing application access never claims provider revocation.
+
+The role picker becomes a sheet at phone width. Preserve keyboard focus and
+Escape/cancel behavior; saving shows only confirmed server state. Existing short
+fade transitions are sufficient; no spatial motion is required, and reduced
+motion removes movement. Wallet review names workspace, member, owner and network
+before a passkey prompt. An uncertain outcome offers Check status, never a second
+provider create. Ready means an address verified by provider read-back.
+
+Spending limits live on role detail as clearly inactive drafts. Open the editor
+on demand, keep future daily/monthly limits collapsed, and preserve local edits
+on failure or revision conflict. No activation action is exposed until provider
+policy, identity, account usage and owner approval can be verified. This addition
+records future payment controls without consuming paid signatures.

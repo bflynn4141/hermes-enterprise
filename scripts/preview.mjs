@@ -210,9 +210,11 @@ function previewConfig({ name, pr, origin, hyperdrive }) {
     ENVIRONMENT: 'development',
     AUTH_MODE: 'fake',
     MODEL_SCRIPTED: '1',
-    // Preview-only enrollment requests. This does not enable a Turnkey signer,
-    // provider provisioning, or payments; those paths do not exist yet.
-    TURNKEY_WALLETS_ENABLED: process.argv.includes('--wallets') ? '1' : '0',
+    // `--wallets`: wallet screens with enrollment requests only, no provider.
+    // `--turnkey`: also real Turnkey workspace and member wallet creation (see
+    // turnkeyVars). Neither enables signing or payments.
+    TURNKEY_WALLETS_ENABLED: process.argv.includes('--wallets') || TURNKEY ? '1' : '0',
+    ...(TURNKEY ? turnkeyVars(origin) : {}),
     ALLOWED_ORIGINS: origin ?? 'https://preview-origin-pending.invalid',
     HERMES_ENTERPRISE_PUBLIC_URL: origin ?? 'https://preview-origin-pending.invalid',
     AUTOMATED_TRIGGERS_ENABLED: '0',
@@ -224,6 +226,29 @@ function previewConfig({ name, pr, origin, hyperdrive }) {
     assertPreviewResource(resource);
   }
   return config;
+}
+
+const TURNKEY = process.argv.includes('--turnkey');
+
+function turnkeyEnv(name) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`--turnkey needs ${name}; run through \`op run --env-file=<Turnkey refs> -- node scripts/preview.mjs ...\``);
+  return value;
+}
+
+/**
+ * Real Turnkey for a preview: Hermes's parent org and its provisioning key,
+ * which may only create workspace sub-organizations. The passkey relying party
+ * is the preview's own host, so owner passkeys made here work only here.
+ */
+function turnkeyVars(origin) {
+  return {
+    TURNKEY_PROVISIONING_ENABLED: '1',
+    TURNKEY_MEMBER_WALLETS_ENABLED: '1',
+    TURNKEY_PARENT_ORG_ID: turnkeyEnv('TURNKEY_PARENT_ORG_ID'),
+    TURNKEY_API_PUBLIC_KEY: turnkeyEnv('TURNKEY_API_PUBLIC_KEY'),
+    TURNKEY_PASSKEY_RP_ID: origin ? new URL(origin).hostname : 'preview-origin-pending.invalid',
+  };
 }
 
 function deploy(config, secrets) {
@@ -351,6 +376,8 @@ async function up(pr) {
     KEK_V1: preview.kek,
     HUB_TICKET_SECRET: preview.hubTicket,
     WORKOS_COOKIE_PASSWORD: preview.cookie,
+    // Read from the environment for this deploy only; never saved in state.json.
+    ...(TURNKEY ? { TURNKEY_API_PRIVATE_KEY: turnkeyEnv('TURNKEY_API_PRIVATE_KEY') } : {}),
   };
   let url = deploy(previewConfig({ name, pr, origin: preview.url, hyperdrive }), secrets);
   if (!url) throw new Error('wrangler did not report a workers.dev URL');
@@ -431,7 +458,7 @@ try {
   else if (command === 'down' && pr) await down(pr);
   else if (command === 'list') list();
   else {
-    log('usage: node scripts/preview.mjs init --neon-org <id> | up <pr> [--comment] [--wallets] | down <pr> | list');
+    log('usage: node scripts/preview.mjs init --neon-org <id> | up <pr> [--comment] [--wallets] [--turnkey] | down <pr> | list');
     process.exitCode = 2;
   }
 } catch (error) {

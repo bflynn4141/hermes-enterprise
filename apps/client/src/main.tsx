@@ -74,6 +74,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
       providerKeysLocked: params.get('providerKeys') === 'locked',
       runtimeCapacityStepUp: params.get('runtimeCapacity') === 'stepup',
+      roleSpendingConflictOnce: params.get('spending') === 'conflict',
       roleWritesStepUp: params.get('roles') === 'stepup',
       approvalWritesStepUp: params.get('approvals') === 'stepup',
       agentWritesStepUp: params.get('agents') === 'stepup',

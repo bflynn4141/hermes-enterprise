@@ -69,6 +69,8 @@ export type ManageAction = 'role' | 'roles' | 'remove';
  * session gets the step-up sentence and the caller adds "Sign in again".
  */
 export function manageErrorMessage(action: ManageAction, error: unknown): string {
+  if ((error as { reason?: string } | null)?.reason === 'wallet_owner_transfer_required') return 'This member owns the workspace wallets. Transfer wallet ownership before changing their workspace access.';
+  if ((error as { reason?: string } | null)?.reason === 'wallet_payment_permission_required') return 'This change affects payment review. The wallet owner must approve payment permissions before these roles can change.';
   const stale = (error as { reason?: string } | null)?.reason === 'reauth_required';
   switch (action) {
     case 'role': return stale ? 'Changing someone’s role needs a recent sign-in.' : 'Could not change this role. Nothing was changed. Try again.';

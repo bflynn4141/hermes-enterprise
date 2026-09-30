@@ -137,6 +137,7 @@ export const needsSignIn = (error: unknown): boolean => reasonOf(error) === 'rea
 /** A refused rule change, in the words an Admin would use. */
 export function approvalRouteErrorMessage(error: unknown): string {
   switch (reasonOf(error)) {
+    case 'wallet_payment_permission_required': return 'Payment permissions need approval from the wallet owner before this rule can change.';
     case 'reauth_required': return 'Changing who approves needs a recent sign-in.';
     case 'no_approver': return NO_APPROVER_MESSAGE;
     case 'no_amount_for_route': return 'This approval has no amount, so it can’t use a different rule above one. Nothing was changed.';
@@ -152,6 +153,7 @@ export function approvalRouteErrorMessage(error: unknown): string {
 /** A refused change to someone's roles, from the invite or Manage dialogs. */
 export function memberRolesErrorMessage(error: unknown): string {
   switch (reasonOf(error)) {
+    case 'wallet_payment_permission_required': return 'This change affects payment review and needs approval from the wallet owner.';
     case 'reauth_required': return 'Changing roles needs a recent sign-in.';
     case 'self_change': return 'Another Admin changes your own roles.';
     case 'unknown_role': return 'One of those roles no longer exists. Reload and try again.';
@@ -176,6 +178,7 @@ const sentence = (message: string): string => {
 export function approvalRefusalMessage(error: unknown): string | null {
   const { reason, message } = (error ?? {}) as { reason?: string; message?: string };
   switch (reason) {
+    case 'wallet_payment_permission_required': return 'Payment review needs verified permission from the wallet owner.';
     case 'own_request': return 'Your agent prepared this, so someone else approves it.';
     case 'same_person': return 'You approved this request, so someone else carries it out.';
     case 'approver_required':
