@@ -1,3 +1,4 @@
+import { TurnkeyAuthorityError } from '../../src/wallets/turnkey-client.js';
 import { describe, expect, it } from 'vitest';
 import { paymentBandAuthority } from '../../src/wallets/member-authority.js';
 import { memberWalletSubmitSchema, type MemberWalletStamp } from '@hermes/shared';
@@ -26,13 +27,23 @@ describe('exact member wallet owner request',()=>{
       expect(String(input)).toBe('https://api.turnkey.test/public/v1/submit/create_wallet');expect(init?.body).toBe(body);
       const h=new Headers(init?.headers);expect(h.has('X-Stamp')).toBe(false);expect(JSON.parse(h.get('X-Stamp-Webauthn')!)).toEqual(assertion);
       observed=true;return Response.json({activity:{id:'act',status:'ACTIVITY_STATUS_COMPLETED'}});
-    }},body,assertion);
+    }},body,assertion,'org');
     expect(observed).toBe(true);expect(result.kind).toBe('completed');
+  });
+  it('forwards only owner-approved wallet creation into this workspace, never users, roles or policies',async()=>{
+    let calls=0;const fetcher=async()=>{calls++;return Response.json({activity:{id:'act',status:'ACTIVITY_STATUS_COMPLETED'}});};
+    const wallet=memberWalletBody('org','member-operation',123),assertion=await stamp(wallet);
+    await expect(submitMemberWallet({baseUrl:'https://api.turnkey.test',fetch:fetcher},wallet,assertion,'other-org')).rejects.toBeInstanceOf(TurnkeyAuthorityError);
+    for(const type of ['ACTIVITY_TYPE_CREATE_USERS_V4','ACTIVITY_TYPE_UPDATE_USER_TAG','ACTIVITY_TYPE_CREATE_POLICY_V3','ACTIVITY_TYPE_UPDATE_ROOT_QUORUM','ACTIVITY_TYPE_SIGN_TRANSACTION_V2']){
+      const body=JSON.stringify({type,timestampMs:'123',organizationId:'org',parameters:{}});
+      await expect(submitMemberWallet({baseUrl:'https://api.turnkey.test',fetch:fetcher},body,await stamp(body),'org')).rejects.toBeInstanceOf(TurnkeyAuthorityError);
+    }
+    expect(calls).toBe(0);
   });
   it('keeps transport, redirect, and server errors ambiguous',async()=>{
     const body=memberWalletBody('org','member-operation',123),assertion=await stamp(body);
     for(const fetcher of [async()=>{throw new Error('offline');},async()=>new Response('',{status:503}),async()=>new Response('',{status:302})]){
-      expect((await submitMemberWallet({baseUrl:'https://api.turnkey.test',fetch:fetcher},body,assertion)).kind).toBe('ambiguous');
+      expect((await submitMemberWallet({baseUrl:'https://api.turnkey.test',fetch:fetcher},body,assertion,'org')).kind).toBe('ambiguous');
     }
   });
 });

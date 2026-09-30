@@ -152,7 +152,7 @@ export async function submitMemberWalletOperation(c:C):Promise<Response>{
     await work.tx.query("UPDATE member_wallet_operations SET state='submitting',updated_at=now() WHERE workspace_id=$1 AND id=$2",[work.workspaceId,op.id]);
     return {op,result:null};
   });
-  if(claim.op)await providerFinish(c.env,claim.op,await submitMemberWallet(config.turnkey,claim.op.request_body,parsed.data.stamp));
+  if(claim.op)await providerFinish(c.env,claim.op,await submitMemberWallet(config.turnkey,claim.op.request_body,parsed.data.stamp,claim.op.provider_org_id));
   c.header('Cache-Control','no-store');return c.json(claim.result??await inWorkspace(c,w=>overview(w,c.env,id)));
 }
 export async function cancelMemberWalletOperation(c:C):Promise<Response>{
