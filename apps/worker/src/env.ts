@@ -155,7 +155,7 @@ export interface Env {
   MICROSOFT_TENANT?: string;
   /** Test seam for Microsoft identity and Graph calls. */
   MICROSOFT_FETCHER?: Fetcher;
-  /** Wallet enrollment requests (C101); alone it never contacts Turnkey. */
+  /** Wallet enrollment requests (C103); alone it never contacts Turnkey. */
   TURNKEY_WALLETS_ENABLED?: string;
   /**
    * Lets an Admin create the workspace's Turnkey sub-organization with their

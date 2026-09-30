@@ -20,40 +20,58 @@ async function oauthRow() {
   };
 }
 
+/** The refresh's own transaction: answers the row lock with `row`, records every statement. */
+function ownTransaction(row: Awaited<ReturnType<typeof oauthRow>>) {
+  const query = vi.fn(async (sql: string) => (sql.includes('FOR NO KEY UPDATE')
+    ? { rows: [row], rowCount: 1 }
+    : { rows: [], rowCount: 1 }));
+  return {
+    run: (<T>(fn: (tx: never) => Promise<T>) => fn({ query } as never)) as never,
+    statements: () => query.mock.calls.map(([sql]) => String(sql)),
+  };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('OAuth runtime credential resolution', () => {
   it('refreshes an expiring access token and persists the rotated bundle before returning it', async () => {
     const row = await oauthRow();
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [row], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    const query = vi.fn().mockResolvedValueOnce({ rows: [row], rowCount: 1 });
+    const own = ownTransaction(row);
     const send = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('x-nous-refresh-token')).toBe('old-rotating-refresh');
       expect(String(init?.body)).not.toContain('old-rotating-refresh');
       return Response.json({ access_token: 'fresh-access', refresh_token: 'new-rotating-refresh', expires_in: 3600, scope: 'inference:invoke' });
     });
     vi.stubGlobal('fetch', send);
-    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal')).resolves.toMatchObject({ apiKey: 'fresh-access' });
-    expect(query).toHaveBeenCalledTimes(2);
-    expect(String(query.mock.calls[1]?.[0])).toContain('SET ciphertext=');
+    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal', own.run)).resolves.toMatchObject({ apiKey: 'fresh-access' });
+    // The caller's transaction only read; the rotated bundle was written and
+    // committed in the refresh's own transaction, under the row lock.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(own.statements()).toEqual([
+      expect.stringContaining('lock_timeout'),
+      expect.stringContaining('FOR NO KEY UPDATE'),
+      expect.stringContaining('SET ciphertext='),
+    ]);
   });
 
   it('quarantines a terminal refresh failure instead of replaying a rotated token', async () => {
     const row = await oauthRow();
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [row], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    const query = vi.fn().mockResolvedValueOnce({ rows: [row], rowCount: 1 });
+    const own = ownTransaction(row);
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'invalid_grant' }, { status: 400 })));
-    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal')).resolves.toMatchObject({ status: 'invalid', apiKey: '' });
-    expect(String(query.mock.calls[1]?.[0])).toContain("status='invalid'");
+    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal', own.run)).resolves.toMatchObject({ status: 'invalid', apiKey: '' });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(own.statements().at(-1)).toContain("status='invalid'");
   });
 
   it('does not quarantine a transient refresh failure', async () => {
     const row = await oauthRow();
     const query = vi.fn().mockResolvedValueOnce({ rows: [row], rowCount: 1 });
+    const own = ownTransaction(row);
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'rate_limited' }, { status: 429 })));
-    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal')).rejects.toMatchObject({ reason: 'key_invalid' });
+    await expect(resolveKey({ query } as never, env, WORKSPACE, 'nous_portal', own.run)).rejects.toMatchObject({ reason: 'key_invalid' });
     expect(query).toHaveBeenCalledTimes(1);
+    expect(own.statements().some((sql) => /^\s*UPDATE/.test(sql))).toBe(false);
   });
 });

@@ -24,8 +24,9 @@ import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
-import { getOutboundEmailConnection, gmailOAuthCallback, microsoftOAuthCallback, startGmailOAuth, startMicrosoftOAuth } from './routes/outbound-email.js';
+import { disconnectOutboundEmail, getOutboundEmailConnection, gmailOAuthCallback, microsoftOAuthCallback, startGmailOAuth, startMicrosoftOAuth } from './routes/outbound-email.js';
 import {
+  disconnectGmailEvidence,
   getInboundEmailConnection,
   gmailEvidenceOAuthCallback,
   importGmailEvidenceThread,
@@ -129,12 +130,15 @@ import {
   stopRun,
 } from './routes/turns.js';
 import { createDecision } from './routes/decisions.js';
+import { getConnections } from './routes/connections.js';
 import {
   createApprovalDecision,
   createApprovalRevision,
   createApprovalRoute,
   getApprovalRoute,
   getApprovalEvidenceRoute,
+  getEmailSendsRoute,
+  settleEmailSendRoute,
 } from './routes/approvals.js';
 import {
   createRequestNote,
@@ -191,6 +195,7 @@ import {
   startPartnerScreening,
 } from './routes/partner-screening.js';
 import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
+import { getPartnerWatch,patchPartnerWatch } from './routes/partner-watch.js';
 import {
   configurePartnerWorkflowRoute,
   correctPartnerInvoice,
@@ -369,6 +374,8 @@ app.post('/w/:ws/agents/:agentId/provisioning/verify', verifyAgentProvisioning);
 // explicit handoff starts the bound agent against those read-only artifacts;
 // any resulting application remains pending for a human in Inbox.
 app.get('/w/:ws/partner-screening/agents/:agentId/sources', partnerScreeningSources);
+app.get('/w/:ws/partner-screening/agents/:agentId/watch',getPartnerWatch);
+app.patch('/w/:ws/partner-screening/agents/:agentId/watch',patchPartnerWatch);
 app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
 app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
 app.post('/w/:ws/partner-screening/runs/:id/handoff', handoffPartnerScreening);
@@ -388,7 +395,12 @@ app.delete('/w/:ws/integrations/slack', disconnectSlack);
 app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
 app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
 app.post('/w/:ws/integrations/email/microsoft/oauth/start', startMicrosoftOAuth);
+// Every outside connection's state on one list, from Hermes's own records.
+app.get('/w/:ws/connections', getConnections);
 app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
+// An Admin disconnects a mailbox; Hermes deletes its stored access (docs/CONNECTORS.md).
+app.delete('/w/:ws/integrations/email/evidence', disconnectGmailEvidence);
+app.delete('/w/:ws/integrations/email', disconnectOutboundEmail);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
 // Role inboxes that receive forwarded mail (C98). Mail itself arrives through
@@ -481,6 +493,9 @@ app.get('/w/:ws/requests/:id/approval/evidence/:evidenceId', getApprovalEvidence
 app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
+// An approved email whose send is uncertain: a person checks the mailbox and settles it.
+app.get('/w/:ws/requests/:id/email-sends', getEmailSendsRoute);
+app.post('/w/:ws/requests/:id/email-sends/:sendId/settlement', settleEmailSendRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
 app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);

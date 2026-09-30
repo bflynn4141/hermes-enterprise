@@ -24,7 +24,7 @@ export async function wakeAgent(c: Context<{ Bindings: Env }>): Promise<Response
     throw new RouteError('A task and expected attempt are required.', 'bad_body', 422);
   }
   const result = await inWorkspace(c, async work => {
-    if (input.action === 'run_now') return wakeAuthorizedWork(work, c.env, agentId);
+    if (input.action === 'run_now') return wakeAuthorizedWork(work, c.env, agentId,input.idempotency_key);
     if (input.action === 'retry') {
       await retryTask(work, c.env, agentId, input.run_id!, input.expected_attempt);
     } else {

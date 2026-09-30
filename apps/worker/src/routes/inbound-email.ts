@@ -1,4 +1,5 @@
 import {
+  mailboxDisconnectSchema,
   inboundEmailConnectionSchema,
   inboundEmailOAuthStartSchema,
   inboundEmailThreadImportInputSchema,
@@ -148,4 +149,34 @@ export async function importGmailEvidenceThread(c: Context<{ Bindings: Env }>): 
     return inboundEmailThreadImportSchema.parse(await importSelectedGmailThread(work, c.env, parsed.data));
   });
   return c.json(result, result.created ? 201 : 200);
+}
+
+/**
+ * Disconnect the read-only Gmail mailbox (docs/CONNECTORS.md). Hermes erases
+ * its stored access; threads already saved to the Library stay. Removing
+ * Hermes from the Google account itself is done in that account's settings.
+ */
+export async function disconnectGmailEvidence(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireCsrf(c);
+  const result = await inWorkspace(c, async (work) => {
+    work.requireAdmin('disconnecting read-only Gmail');
+    requireStepUp(work.session);
+    const erased = await work.tx.query(
+      `UPDATE gmail_evidence_accounts
+          SET status='revoked', ciphertext='\\x00'::bytea, iv='\\x00'::bytea,
+              wrapped_dek='\\x00'::bytea, wrap_iv='\\x00'::bytea, last_error='disconnected_by_admin'
+        WHERE workspace_id=$1 AND status<>'revoked'`,
+      [work.workspaceId],
+    );
+    if ((erased.rowCount ?? 0) > 0) {
+      await work.tx.query(
+        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
+         VALUES ($1,'user',$2,'gmail_evidence.disconnected')`,
+        [work.workspaceId, work.userId],
+      );
+    }
+    return { status: 'disconnected' as const, waiting: 0 };
+  });
+  return c.json(mailboxDisconnectSchema.parse(result));
 }

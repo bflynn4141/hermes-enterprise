@@ -233,7 +233,12 @@ export function approvalEffectSentence(view: ApprovalView): string {
     case 'simulated': return 'This is a test workspace, so nothing was actually sent.';
     case 'executed': return reply ? 'The reply was sent.' : 'Done.';
     case 'waiting': return reply ? 'Waiting for a connected Google or Microsoft account to send from.' : 'Waiting to run.';
-    case 'failed': return reply ? 'The reply could not be sent. Nothing went out.' : 'This did not run.';
+    case 'failed': {
+      // The server's sentence says whether anything left: an interrupted
+      // send may have been delivered, so "nothing went out" would be a guess.
+      const said = view.effect.reason && !/^[a-z0-9_:.-]+$/.test(view.effect.reason) ? view.effect.reason : null;
+      return said ?? (reply ? 'The reply could not be sent.' : 'This did not run.');
+    }
     case 'unavailable': return 'Nothing runs automatically for this kind of request.';
     case 'not_required': return 'Nothing else needs to happen.';
     case 'cancelled': return 'Cancelled before it ran.';

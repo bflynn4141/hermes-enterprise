@@ -67,6 +67,8 @@ interface QueryResultLike<T> {
 }
 
 export class PgAgentDb implements AgentDb {
+  private runtimeToolRunId:string|null=null;
+  bindRuntimeToolRun(runId:string):void {this.runtimeToolRunId=runId;}
   private client: Client | null = null;
   private runtimeTransactionQuery: (<R>(text: string, values?: readonly unknown[]) => Promise<QueryResultLike<R>>) | null = null;
 
@@ -367,7 +369,12 @@ export class PgAgentDb implements AgentDb {
   }
 
   async resolveCredential(provider: string): Promise<Credential> {
-    const resolved = await this.tx((q) => resolveKey({ query: q as never }, this.env, this.workspaceId, provider));
+    // An OAuth refresh commits on its own connection, so a rotated token
+    // survives even when this read runs inside a larger runtime transaction.
+    const resolved = await this.tx((q) => resolveKey(
+      { query: q as never }, this.env, this.workspaceId, provider,
+      (fn) => withWorkspaceTransaction(this.env, this.workspaceId, fn, 'agent'),
+    ));
     if (resolved.status === 'invalid' || resolved.apiKey === '') {
       throw new KeyStoreError(`the ${provider} OAuth connection must be reconnected`, 'key_invalid');
     }
@@ -650,6 +657,9 @@ export class PgAgentDb implements AgentDb {
     // and no human command. The official bridge executes this method outside
     // its agent-role run-row lock; see runtime/bridge.ts.
     return withWorkspaceTransaction(this.env, this.workspaceId, async (tx) => {
+      if(input.continuation && (await tx.query('SELECT 1 FROM partner_watch_checks WHERE workspace_id=$1 AND run_id=$2',[this.workspaceId,input.runId])).rows[0]) {
+        throw new Error('invalid_partner_watch_review: A partner watch cannot create another run.');
+      }
       const approval = await proposeEnterpriseApproval(
         {
           tx,
@@ -1060,6 +1070,9 @@ export class PgAgentDb implements AgentDb {
   async listPartnerCandidates(agentId: string | null, minimumPriority: number, limit: number): Promise<unknown[]> {
     if (!agentId) return [];
     return this.tx(async (q) => {
+      const watch=(await q<{selected_candidate_id:string}>(`SELECT c.selected_candidate_id FROM partner_watch_checks c
+        JOIN runs r ON r.workspace_id=c.workspace_id AND r.id=c.run_id WHERE c.workspace_id=$1 AND c.agent_id=$2
+          AND (($4::uuid IS NOT NULL AND r.id=$4) OR ($4::uuid IS NULL AND r.trace_id=$3))`,[this.workspaceId,agentId,this.traceId,this.runtimeToolRunId])).rows[0];
       const { rows } = await q<Record<string, unknown>>(
         `SELECT c.id, c.source, c.source_key, c.display_name, c.profile_url,
                 c.deterministic_priority, c.confidence, c.evidence_gaps,
@@ -1080,10 +1093,11 @@ export class PgAgentDb implements AgentDb {
            ) ce ON true
           WHERE c.workspace_id = $1 AND c.agent_id = $2
             AND c.deterministic_priority >= $3
-            AND pe.id IS NULL
+            AND ($5::uuid IS NULL OR c.id=$5)
+            AND ($5::uuid IS NOT NULL OR pe.id IS NULL)
           ORDER BY c.deterministic_priority DESC, c.last_seen_at DESC
           LIMIT $4`,
-        [this.workspaceId, agentId, Math.max(0, Math.min(100, minimumPriority)), Math.max(1, Math.min(10, limit))],
+        [this.workspaceId, agentId, Math.max(0, Math.min(100, minimumPriority)), Math.max(1, Math.min(10, limit)),watch?.selected_candidate_id ?? null],
       );
       return rows;
     });
@@ -1092,20 +1106,23 @@ export class PgAgentDb implements AgentDb {
   async getPartnerCandidate(agentId: string | null, candidateId: string): Promise<unknown | null> {
     if (!agentId) return null;
     return this.tx(async (q) => {
+      const watch=(await q<{id:string;screening_run_id:string;previous_screening_run_id:string|null;selected_candidate_id:string;change_summary:unknown}>(`SELECT c.* FROM partner_watch_checks c JOIN runs r ON r.workspace_id=c.workspace_id AND r.id=c.run_id
+        WHERE c.workspace_id=$1 AND c.agent_id=$2 AND (($4::uuid IS NOT NULL AND r.id=$4) OR ($4::uuid IS NULL AND r.trace_id=$3))`,[this.workspaceId,agentId,this.traceId,this.runtimeToolRunId])).rows[0];
+      if(watch && watch.selected_candidate_id!==candidateId) return null;
       const { rows } = await q<Record<string, unknown> & { latest_run_id: string; artifact_ids: string[] }>(
         `SELECT c.id, c.source, c.source_key, c.display_name, c.profile_url,
                 c.deterministic_priority, c.priority_breakdown, c.confidence,
                 c.evidence_gaps, c.source_updated_at, c.first_seen_at, c.last_seen_at,
-                c.latest_run_id, rc.artifact_ids,
+                rc.run_id AS latest_run_id, rc.artifact_ids,
                 (SELECT r.id FROM requests r
                   WHERE r.workspace_id = c.workspace_id
                     AND r.subject_key = 'partner-candidate:' || c.id::text
                   ORDER BY r.created_at LIMIT 1) AS existing_request_id
            FROM partner_candidates c
            JOIN partner_screening_run_candidates rc
-             ON rc.run_id = c.latest_run_id AND rc.candidate_id = c.id
+             ON rc.run_id = COALESCE($4::uuid,c.latest_run_id) AND rc.candidate_id = c.id
           WHERE c.workspace_id = $1 AND c.agent_id = $2 AND c.id = $3`,
-        [this.workspaceId, agentId, candidateId],
+        [this.workspaceId, agentId, candidateId,watch?.screening_run_id ?? null],
       );
       const candidate = rows[0];
       if (!candidate) return null;
@@ -1171,11 +1188,16 @@ export class PgAgentDb implements AgentDb {
             : contact.status === 'verification_pending' && contact.verification_poll_url
               ? agentCashEmailVerificationPollArguments(contact.verification_poll_url)
               : null;
+      const beforeArtifacts=watch?.previous_screening_run_id ? (await q<Record<string,unknown>>(`SELECT a.id,a.kind,a.source_url,a.source_updated_at,a.fetched_at,a.sha256,a.content
+        FROM partner_source_artifacts a JOIN partner_screening_run_candidates rc ON rc.workspace_id=a.workspace_id AND rc.run_id=a.run_id AND a.id=ANY(rc.artifact_ids)
+        WHERE a.workspace_id=$1 AND a.run_id=$2 ORDER BY a.kind,a.id`,[this.workspaceId,watch.previous_screening_run_id])).rows : [];
       const { latest_run_id: _run, artifact_ids: _ids, ...summary } = candidate;
       return {
         ...summary,
         deterministic_priority_note: 'Connector-side triage only; independently apply the Partner Program criteria.',
         source_artifacts: artifacts.rows,
+        ...(watch ? {watch_review_context:{check_id:watch.id,screening_run_id:watch.screening_run_id,change_summary:watch.change_summary,before_source_artifacts:beforeArtifacts,
+          limitation:'Evidence samples the ten most recently pushed public repositories; activity dates do not establish release content, commercial interest, availability, or consent.'}} : {}),
         proposal_provenance: {
           candidate_id: candidate.id,
           source: candidate.source,
@@ -1201,14 +1223,14 @@ export class PgAgentDb implements AgentDb {
           verified_at: contact.verified_at,
           source: 'agentcash_minerva_hunter',
         } : null,
-        draft_approval_context: draftPolicy ? {
+        draft_approval_context: !watch && draftPolicy ? {
           policy_key: draftPolicy.policy_key,
           approval_type: 'communication',
           draft_only: true,
           target_member_ids: [draftPolicy.member_id],
           sender: { member_id: draftPolicy.member_id, address: draftPolicy.sender_address },
         } : null,
-        next_contact_call: nextContactCall,
+        next_contact_call:watch ? null : nextContactCall,
         constraints: [
           'Do not claim this organization applied or consented.',
           'Cite only source_artifact ids returned here.',

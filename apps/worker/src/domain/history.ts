@@ -660,6 +660,41 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = requestRef;
       break;
 
+    case 'outbound_email.ambiguous':
+      text = `${capitalize(subject)} may or may not have been sent`;
+      detail = 'The send was interrupted. Check the mailbox before sending it again';
+      status = 'Needs attention';
+      ref = requestRef;
+      break;
+
+    case 'outbound_email.settled_sent':
+      text = `${actor} confirmed ${subject} was sent`;
+      detail = 'Checked the mailbox after an interrupted send';
+      status = 'Sent';
+      ref = requestRef;
+      break;
+
+    case 'outbound_email.settled_not_sent':
+      text = `${actor} confirmed ${subject} was not sent`;
+      detail = 'It needs approving again before it goes out';
+      status = 'Needs review';
+      ref = requestRef;
+      break;
+
+    case 'outbound_email.disconnected':
+      text = `${actor} disconnected the sending account`;
+      detail = 'Approved emails that had not gone out wait for a new one';
+      status = 'Disconnected';
+      ref = { section: 'admin', view: 'Email' };
+      break;
+
+    case 'gmail_evidence.disconnected':
+      text = `${actor} disconnected read-only Gmail`;
+      detail = 'Threads already saved to the Library stay';
+      status = 'Disconnected';
+      ref = { section: 'admin', view: 'Email' };
+      break;
+
     case 'outbound_email.simulated':
       text = `Practice send: ${subject}`;
       detail = 'This deployment doesn’t deliver email, so nothing left Hermes';

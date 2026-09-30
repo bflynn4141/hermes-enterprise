@@ -233,7 +233,7 @@ export async function runSlackIngestJob(env: Env, job: Job): Promise<void> {
       const token = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
         const installation = await loadSlackInstallationById(tx, job.workspace_id, confirmation.installationId);
         if (!installation) throw new Error('slack_installation_inactive');
-        return resolveSlackAccessToken(tx, env, installation);
+        return resolveSlackAccessToken(tx, env, installation, (fn) => withWorkspaceTransaction(env, job.workspace_id, fn));
       });
       await callSlackWebApi('chat.postMessage', token, {
         channel: confirmation.channel,

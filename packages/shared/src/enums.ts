@@ -213,6 +213,14 @@ export const EVENT_KINDS = [
   'outbound_email.simulated',
   'email_handoff.completed',
   'email_triage.retried',
+  // An interrupted send whose outcome is unknown (Quest audit H1).
+  'outbound_email.ambiguous',
+  // A person checked the mailbox and settled an uncertain send.
+  'outbound_email.settled_sent',
+  'outbound_email.settled_not_sent',
+  // An Admin disconnected a mailbox (docs/CONNECTORS.md).
+  'outbound_email.disconnected',
+  'gmail_evidence.disconnected',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 

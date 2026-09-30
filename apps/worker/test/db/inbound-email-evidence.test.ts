@@ -398,6 +398,27 @@ describe('inbound email evidence database boundaries', () => {
     expect(teamBBody.items).toContainEqual(expect.objectContaining({ id: sourceB, version: 2, content_markdown: '# Team B v2 private' }));
   });
 
+  it('lets an Admin disconnect read-only Gmail while saved threads stay', async () => {
+    const fx = await seedWorkspace();
+    const seeded = await seedSnapshot(fx);
+    expect((await asUser(env, fx.memberId, `/w/${fx.workspaceId}/integrations/email/evidence`, { method: 'DELETE' })).status).toBe(403);
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email/evidence`, { method: 'DELETE' });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(await response.json()).toEqual({ status: 'disconnected', waiting: 0 });
+    const rows = await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const account = await c.query(`SELECT status, encode(ciphertext,'hex') AS secret FROM gmail_evidence_accounts WHERE id=$1`, [seeded.accountId]);
+      const saved = await c.query(`SELECT count(*)::int AS n FROM library_source_versions WHERE id=$1`, [seeded.versionId]);
+      const events = await c.query(`SELECT count(*)::int AS n FROM events WHERE workspace_id=$1 AND kind='gmail_evidence.disconnected'`, [fx.workspaceId]);
+      await c.query('COMMIT');
+      return { account: account.rows[0], saved: saved.rows[0], events: events.rows[0] };
+    });
+    expect(rows).toEqual({ account: { status: 'revoked', secret: '00' }, saved: { n: 1 }, events: { n: 1 } });
+    const status = await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/integrations/email/evidence`)).json() as { status: string };
+    expect(status.status).not.toBe('connected');
+  });
+
   it('does not expose a receipt route that could imply an external action was executed', async () => {
     const fx = await seedWorkspace();
     const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/effects/${randomUUID()}/external-evidence`, {

@@ -1,18 +1,18 @@
 // `pnpm --filter @hermes/client email-intake:record` — records the email
-// intake happy path (decision C98) as an MP4 against a real local stack.
+// intake happy path (decisions C98, C100) as an MP4 against a real local stack.
 //
 // Unlike the product walkthrough, this does not use the mock build. It starts
 // the Worker, a private Postgres and the fake-auth client (email-intake-stack.mjs),
 // and every step goes through real routes and the database:
 //
-//   1. Maya, an Admin, gives Partnerships a role inbox address.
+//   1. Maya, an Admin, opens Admin → Email: Iris already has its own address.
 //   2. A partner's email is delivered to that address through the Worker's
 //      email() handler, exactly as Cloudflare Email Routing hands it over in
 //      development (POST /cdn-cgi/handler/email).
 //   3. The intake job hands it to Iris, who suggests a reply and hands the
 //      invoice to Finance. Iris's words come from the scripted development
 //      model (MODEL_SCRIPTED=1); the tools, policies and approvals are real.
-//   4. The Role inboxes page updates on its own while Iris reads it, and
+//   4. Admin → Email updates on its own while Iris reads it, and
 //      Iris's conversation shows the email as a card, not the instructions.
 //   5. Maya reviews the suggested reply (reply first, then the original
 //      email, its links and the attachment text Iris read) and approves it;
@@ -312,23 +312,20 @@ async function story(page, base, chapter) {
   const app = page.getByRole('region', { name: 'Application' });
   const say = async (title, text) => { chapter(title); await caption(page, text); };
 
-  await say('Maya sets up a role inbox', 'Maya is an Admin. She gives the Partnerships team an email address its agent can read.');
+  await say('Iris has its own email', 'Maya is an Admin. Every agent gets its own email address; nobody has to set one up.');
   await pause(page, 2_500);
   await click(page, page.getByRole('button', { name: 'Admin', exact: true }));
   await pause(page, 1_200);
-  await click(page, page.getByRole('button', { name: 'Role inboxes' }));
-  await pause(page, 1_000);
-  await pause(page, 600);
-  await click(page, app.getByRole('button', { name: 'Add inbox' }).first());
-  await pause(page, 2_000);
-  await say('Partnerships, read by Iris', 'The inbox belongs to the Partnerships role. Iris, Maya’s agent, reads what arrives. Iris can only suggest.');
-  await pause(page, 2_600);
-  await click(page, page.getByRole('dialog').getByRole('button', { name: 'Add inbox' }));
+  await click(page, app.getByRole('tab', { name: 'Connections', exact: true }));
+  await pause(page, 800);
+  await click(page, app.getByRole('tab', { name: 'Email', exact: true }));
   await pause(page, 1_800);
+  await say('Reviewed by its owner and its role', 'Iris reads what arrives and can only suggest. Its owner and the people in its role review.');
+  await pause(page, 2_600);
   const address = (await app.locator('.email-inbox-address code').first().textContent())?.trim();
   if (!address) throw new Error('no inbox address on screen');
   await moveTo(page, app.locator('.email-inbox-address code').first());
-  await say('A private forwarding address', 'Hermes creates a private address. The team forwards or copies partner email to it.');
+  await say('An address partners can use', 'Partners email Iris directly, or the team routes a shared address such as partners@ to it.');
   await pause(page, 3_200);
 
   await say('A partner emails the team', 'Priya at Northwind emails that address: her September invoice and a request for a call.');
@@ -342,15 +339,15 @@ async function story(page, base, chapter) {
   await pause(page, 3_000);
 
   await say('The email, as Iris saw it', 'In Iris’s conversation the email is a card. The instructions around it go to the model only.');
-  await click(page, page.getByRole('button', { name: /Email · Partnerships/ }).first());
+  await click(page, page.getByRole('button', { name: /^Email · / }).first());
   await pause(page, 1_500);
   await moveTo(page, page.locator('.msg-email').first());
   await pause(page, 3_500);
 
   await say('Iris suggests, a person decides', 'Iris drafted a reply and handed the invoice to Finance. Nothing has been sent.');
-  await click(page, page.getByRole('button', { name: /^Inbox/ }).first());
-  await pause(page, 2_000);
-  await openItem(page, 'September partnership invoice + co-marketing call');
+  // Open the reply from its card in the conversation, as a reviewer following Iris would.
+  await click(page, page.getByRole('button', { name: /Review in Inbox/ }).first());
+  await app.locator('.email-message').first().waitFor({ state: 'visible', timeout: 15_000 });
   await pause(page, 2_500);
   await moveTo(page, app.locator('.email-reply-badge').first());
   await say('The reply comes first', 'The suggested reply leads, marked Not sent. It goes only to the address that wrote in, in the same thread.');

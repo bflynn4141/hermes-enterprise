@@ -30,6 +30,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
 import { withTenantTransaction, type Tx } from '../db/client.js';
+import { withWorkspaceTransaction } from '../jobs.js';
 import {
   addProviderKey,
   findByFingerprint,
@@ -331,7 +332,8 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     // the tenant key and the AAD are both in force. The plaintext lives from
     // here until the probe returns and is written nowhere.
     const resolved = row.credential_kind === 'oauth_device_code'
-      ? await resolveKey(work.tx, c.env, work.workspaceId, row.provider)
+      ? await resolveKey(work.tx, c.env, work.workspaceId, row.provider,
+        (fn) => withWorkspaceTransaction(c.env, work.workspaceId, fn))
       : null;
     const apiKey = resolved
       ? resolved.apiKey

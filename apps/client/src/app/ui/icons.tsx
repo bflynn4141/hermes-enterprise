@@ -70,6 +70,9 @@ const STROKE: Record<string, string> = {
   layers: 'M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5',
   doc: 'M6 3h9l5 5v13H6ZM14 3v6h6M9 13h6M9 17h6',
   dot: 'M12 12h.1',
+  pause: 'M9 6v12M15 6v12',
+  play: 'M8 5.5v13l10.5-6.5Z',
+  replace: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4',
 };
 
 export interface IconProps { name: string; size?: number; className?: string; style?: CSSProperties; strokeWidth?: number; title?: string }

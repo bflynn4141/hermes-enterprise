@@ -1,6 +1,7 @@
 import type { Tx } from '../../db/client.js';
 import type { Env } from '../../env.js';
 import { openSecret, rewrapSecretDek, sealSecret, type KekEnv, type StoredEnvelope } from '../../keys/envelope.js';
+import { refreshRotatingToken, type OwnTransaction } from '../../keys/token-refresh.js';
 import { refreshSlackToken, type SlackOAuthGrant, type SlackTokenBundle } from './api.js';
 import { slackConfig, slackInstallKey } from './config.js';
 
@@ -181,37 +182,61 @@ export async function openSlackAccessTokenForRevocation(env: Env, row: SlackInst
   return (await openToken(env, row)).access_token;
 }
 
-/** Resolve and, under the row lock, atomically rotate a 12-hour Slack token. */
-export async function resolveSlackAccessToken(tx: Tx, env: Env, row: SlackInstallationRow): Promise<string> {
-  const locked = await tx.query<SlackInstallationRow>(
-    `SELECT ${COLUMNS} FROM slack_installations WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+/** The installation, unless revoked. `lock` serializes refreshes without blocking foreign-key checks. */
+async function loadActiveInstallation(tx: Tx, row: SlackInstallationRow, lock: boolean): Promise<SlackInstallationRow> {
+  const { rows } = await tx.query<SlackInstallationRow>(
+    `SELECT ${COLUMNS} FROM slack_installations WHERE workspace_id=$1 AND id=$2${lock ? ' FOR NO KEY UPDATE' : ''}`,
     [row.workspace_id, row.id],
   );
-  const current = locked.rows[0];
+  const current = rows[0];
   if (!current || current.status === 'revoked') throw new Error('slack_installation_revoked');
-  let token = await openToken(env, current);
-  const expiresAt = token.expires_at ? Date.parse(token.expires_at) : Number.POSITIVE_INFINITY;
-  if (expiresAt > Date.now() + 5 * 60_000) return token.access_token;
-  if (!token.refresh_token) throw new Error('slack_refresh_token_missing');
+  return current;
+}
+
+const fresh = (token: SlackTokenBundle): boolean =>
+  (token.expires_at ? Date.parse(token.expires_at) : Number.POSITIVE_INFINITY) > Date.now() + 5 * 60_000;
+
+/**
+ * Resolve a 12-hour Slack token. Slack rotates the refresh token on every
+ * refresh, so a refresh commits on its own connection (`own`), under the row
+ * lock, before the caller's transaction can lose it.
+ */
+export async function resolveSlackAccessToken(
+  tx: Tx,
+  env: Env,
+  row: SlackInstallationRow,
+  own: OwnTransaction,
+): Promise<string> {
+  const token = await openToken(env, await loadActiveInstallation(tx, row, false));
+  if (fresh(token)) return token.access_token;
   const config = slackConfig(env);
   if (!config) throw new Error('slack_not_configured');
-  token = await refreshSlackToken(config, token.refresh_token);
-  const sealed = await sealSecret(
-    env,
-    { workspaceId: current.workspace_id, keyId: current.id, namespace: TOKEN_NAMESPACE },
-    JSON.stringify(token),
-  );
-  await tx.query(
-    `UPDATE slack_installations SET ciphertext=$3, iv=$4, wrapped_dek=$5, wrap_iv=$6,
-       kek_version=$7, token_expires_at=$8, status='connected', last_error_code=NULL
-      WHERE workspace_id=$1 AND id=$2`,
-    [
-      current.workspace_id, current.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
-      Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
-      token.expires_at ? new Date(token.expires_at) : null,
-    ],
-  );
-  return token.access_token;
+  return refreshRotatingToken<SlackTokenBundle, string>(own, {
+    lock: async (locked) => openToken(env, await loadActiveInstallation(locked, row, true)),
+    reuse: (current) => (fresh(current) ? current.access_token : null),
+    exchange: (current) => {
+      if (!current.refresh_token) throw new Error('slack_refresh_token_missing');
+      return refreshSlackToken(config, current.refresh_token);
+    },
+    store: async (locked, next) => {
+      const sealed = await sealSecret(
+        env,
+        { workspaceId: row.workspace_id, keyId: row.id, namespace: TOKEN_NAMESPACE },
+        JSON.stringify(next),
+      );
+      await locked.query(
+        `UPDATE slack_installations SET ciphertext=$3, iv=$4, wrapped_dek=$5, wrap_iv=$6,
+           kek_version=$7, token_expires_at=$8, status='connected', last_error_code=NULL
+          WHERE workspace_id=$1 AND id=$2`,
+        [
+          row.workspace_id, row.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
+          Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
+          next.expires_at ? new Date(next.expires_at) : null,
+        ],
+      );
+      return next.access_token;
+    },
+  });
 }
 
 export async function rewrapSlackInstallation(

@@ -15,8 +15,8 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type EmailInbox, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type PartnerWatch, type StreamEvent } from '@hermes/shared';
+import type { ApprovalView, EmailSend, InboundEmailListItem, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -95,6 +95,8 @@ interface MockOptions {
   agentless?: boolean;
   /** Opt-in settings fixtures; never part of the live bundle. */
   agentSettings?: 'ok' | 'fail' | 'conflict';
+  /** Scripted watch fixtures. Never fetch GitHub or call a model. */
+  partnerWatch?: 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly';
   pendingAgentApproval?: boolean;
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
   recovery?: 'working' | 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
@@ -147,6 +149,8 @@ interface MockOptions {
    */
   turn?: 'completed' | 'proposes_request' | 'waiting';
   communicationDraft?: boolean;
+  /** The approved pilot invitation's send is interrupted, so a reviewer must settle it (Quest audit H1). */
+  uncertainSend?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
@@ -165,9 +169,13 @@ interface MockOptions {
   memberSetupFinance?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
+  /** The connected sending account's token was refused, so Connections shows Needs attention. */
+  connectionTrouble?: boolean;
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
   /** `microsoft`: connected, with a Microsoft 365 sending account (C99). */
   email?: 'disconnected' | 'connected' | 'microsoft' | 'unconfigured' | 'unavailable';
+  /** `sample`: labelled sample mail at the first agent's address, and the second address paused, for Admin → Email design review. */
+  mail?: 'sample';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
   /** Contract fixture for native execution over explicitly labeled sample inputs. */
@@ -355,6 +363,8 @@ export function createMockBackend(input: MockOptions = {}) {
     at: iso,
   });
   const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
+  // Each approved email's deliveries, for the uncertain-send fixture only.
+  const emailSends = new Map<string, EmailSend[]>();
   const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
   if (options.partnerWorkflow && approvalScenario) {
     const requestId = APPROVAL_DEMO_REQUEST_IDS.record_change;
@@ -779,6 +789,23 @@ export function createMockBackend(input: MockOptions = {}) {
   };
   const removedAssignments = new Set<string>();
   const EMAIL_INTAKE_DOMAIN = 'in.mock.hermes.test';
+  // Sample mail for `?mail=sample`: one email in each state the list shows. Fixture senders on .example.
+  const sampleMail = (): InboundEmailListItem[] => {
+    const sender = (name: string, address: string, caution = false) => ({
+      address, name, domain: address.split('@')[1]!, relationship: 'known_contact' as const,
+      authentication: { spf: caution ? 'fail' as const : 'pass' as const, dkim: caution ? 'fail' as const : 'pass' as const, dmarc: caution ? 'fail' as const : 'pass' as const, authserv_id: 'mx.mock.hermes.test' },
+      reply_to: null,
+      warnings: caution ? [{ code: 'lookalike_domain' as const, severity: 'caution' as const, detail: 'The domain looks like northwind.example but is not it.' }] : [],
+    });
+    const at = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
+    return [
+      { id: mockUuid(1_700), received_at: at(4), subject: 'September partnership invoice + co-marketing call', sender: sender('Priya Raman', 'priya@northwind.example'), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null,
+        brief: { summary: 'Northwind sent their September invoice and asked for a co-marketing call next week.', action_items: [{ text: 'Pay invoice NW-2026-09, net 30', owner: 'us' }, { text: 'Offer times for a call next week', owner: 'us' }] } },
+      { id: mockUuid(1_701), received_at: at(2), subject: 'Re: September invoice - updated bank details', sender: sender('Priya Raman', 'priya@northwlnd.example', true), status: 'suggested', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
+      { id: mockUuid(1_702), received_at: at(1), subject: 'Workshop dates for November', sender: sender('Sam Lee', 'sam@acme.example'), status: 'triaging', request_ids: [], can_retry: false, retrying: false, problem: null, brief: null },
+      { id: mockUuid(1_703), received_at: at(40), subject: 'Partner program question', sender: sender('Alex Kim', 'alex@globex.example'), status: 'failed', request_ids: [], can_retry: true, retrying: false, problem: 'provider_busy', brief: null },
+    ];
+  };
   let emailInboxes: EmailInbox[] = [];
   const skillCatalog = [
     { key: 'partner-program-screening', name: 'Partner program screening', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', version: '1.8.0', digest: hashForMock(96), tools: ['list_partner_candidates', 'get_partner_candidate', 'propose_approval', 'publish_partner_invoice_review'], template: 'partnerships-agent' },
@@ -967,6 +994,47 @@ export function createMockBackend(input: MockOptions = {}) {
       allowed_tools: [], version: 1,
     });
   }
+
+  const watchTime = (offsetMinutes: number) => new Date(Date.now() + offsetMinutes * 60_000).toISOString();
+  let watchChecks = options.partnerWatch === 'baseline' ? 1 : 0;
+  let watchView: PartnerWatch = {
+    agent_id: AGENT, execution_mode: 'simulated', assignment_id: options.partnerWatch ? mockUuid(622) : null, revision: options.partnerWatch ? 1 : null,
+    enabled: Boolean(options.partnerWatch && options.partnerWatch !== 'unavailable' && options.partnerWatch !== 'admin-paused'), interval_minutes: 360,
+    selected_source: options.partnerWatch ? { id: 'url:0', label: 'GitHub · Sample partner' } : null,
+    source_options: options.partnerWatch ? [{ id: 'url:0', label: 'GitHub · Sample partner' }, { id: 'url:1', label: 'GitHub · Another sample partner' }] : [],
+    max_api_requests: 2, budget: { max_cost_usd_per_run: 0.10, max_cost_usd_per_day: 0.25, max_model_calls: 4 },
+    state: options.partnerWatch === 'admin-paused' ? 'paused' : options.partnerWatch ? 'ready' : 'unconfigured', may_configure: Boolean(options.partnerWatch && options.partnerWatch !== 'readonly' && options.partnerWatch !== 'unavailable'),
+    may_run: Boolean(options.partnerWatch && options.partnerWatch !== 'readonly' && options.partnerWatch !== 'unavailable' && options.partnerWatch !== 'admin-paused'),
+    blocked_reason: options.partnerWatch === 'admin-paused' ? 'assignment_paused' : options.partnerWatch === 'unavailable' || !options.partnerWatch ? 'automated_triggers_disabled' : options.partnerWatch === 'readonly' ? 'not_owner' : null,
+    next_check_at: options.partnerWatch && options.partnerWatch !== 'admin-paused' && options.partnerWatch !== 'unavailable' ? watchTime(360) : null,
+    latest_review: null,
+    last_check: options.partnerWatch === 'baseline' ? { id: mockUuid(1600), checked_at: watchTime(-5), status: 'baseline', candidates_checked: 1, changed_candidates: 0, run_id: null, session_id: null, review_id: null, error_code: null } : null,
+  };
+  const watchWakeKeys = new Set<string>();
+  let watchAmbiguousDelivered = false;
+  const finishWatchCheck = () => {
+    watchChecks += 1;
+    const changed = options.partnerWatch === 'changed' || watchChecks === 3;
+    const failed = options.partnerWatch === 'failed';
+    const status = failed ? 'failed' : changed ? 'changed' : watchChecks === 1 ? 'baseline' : 'unchanged';
+    watchView = { ...watchView, state: failed ? 'needs_attention' : 'ready', last_check: { id: mockUuid(1600 + watchChecks), checked_at: new Date().toISOString(), status, candidates_checked: 1, changed_candidates: changed ? 1 : 0, run_id: changed ? RUN : null, session_id: changed ? SESSION_A : null, review_id: changed ? APPROVAL_DEMO_REQUEST_IDS.deliverable : null, error_code: failed ? 'sample_source_failed' : null } };
+    if (changed) watchView.latest_review = { id: APPROVAL_DEMO_REQUEST_IDS.deliverable, created_at: new Date().toISOString() };
+    if (changed && !requests.some((row) => row.id === APPROVAL_DEMO_REQUEST_IDS.deliverable)) {
+      const review = structuredClone(approvalDemo.views.get(APPROVAL_DEMO_REQUEST_IDS.deliverable)!);
+      review.payload.summary = 'Sample partner project added integration documentation. Review the cited change before deciding on any follow-up.';
+      review.payload.consequence = 'Acceptance records this research review only. Nothing is sent, granted, or paid.';
+      review.payload.context.source.dependent_request_ids = [];
+      if (review.payload.approval_type === 'deliverable') {
+        review.payload.details.title = 'Sample partner source change';
+        review.payload.details.content = 'Sample result: the project added an integration guide. This may help partner onboarding; customer impact has not been independently verified.';
+        review.payload.details.releases_dependent_request_ids = [];
+      }
+      approvalViews.set(review.request_id, review);
+      const row = structuredClone(approvalDemo.requests.find((item) => item.id === review.request_id)!);
+      row.subject = 'Sample partner source change'; row.title = 'Sample partner source review'; row.label = 'Partner source review'; row.payload = review.payload as unknown as Record<string, unknown>;
+      requests.push(row);
+    }
+  };
 
   let recoveryView: AgentRecoveryView = {
     state: options.recovery ?? (empty || options.activity ? 'idle' : 'waiting'),
@@ -1418,7 +1486,7 @@ export function createMockBackend(input: MockOptions = {}) {
 
     if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id),
       root: options.wallets ? walletRoot : { status: 'not_started', available: false, owner_name: null, verified_at: null } });
-    // Owner passkey setup (C101). Reasons and messages match the Worker's.
+    // Owner passkey setup (C103). Reasons and messages match the Worker's.
     if (p('/wallets/root/challenge') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
       if (!options.wallets) return fail(503, 'wallets_unavailable', 'wallet setup is not enabled');
@@ -1506,12 +1574,30 @@ export function createMockBackend(input: MockOptions = {}) {
 
     if (p('/bootstrap')) return json(bootstrap());
 
+    if (p(`/partner-screening/agents/${AGENT}/watch`) && method === 'GET') return json(watchView);
+    if (p(`/partner-screening/agents/${AGENT}/watch`) && method === 'PATCH') {
+      if (!watchView.may_configure) return fail(403, 'not_owner');
+      if (options.partnerWatch === 'conflict' && body.revision === 1) { watchView = { ...watchView, revision: 2, interval_minutes: 720 }; return fail(409, 'stale_revision'); }
+      if (body.revision !== watchView.revision) return fail(409, 'stale_revision');
+      const source = watchView.source_options.find((item) => item.id === body.source_id);
+      if (!source) return fail(422, 'source_unavailable');
+      watchView = { ...watchView, revision: watchView.revision! + 1, enabled: Boolean(body.enabled), selected_source: source, interval_minutes: Number(body.interval_minutes), budget: { max_cost_usd_per_run: Number(body.max_cost_usd_per_run), max_cost_usd_per_day: Number(body.max_cost_usd_per_day), max_model_calls: Number(body.max_model_calls) }, state: body.enabled ? 'ready' : 'paused', may_run: Boolean(body.enabled), next_check_at: body.enabled ? watchTime(Number(body.interval_minutes)) : null, blocked_reason: body.enabled ? null : 'watch_paused' };
+      if (options.partnerWatch === 'admin-paused') watchView = { ...watchView, enabled: false, state: 'paused', may_run: false, next_check_at: null, blocked_reason: 'assignment_paused' };
+      return json(watchView);
+    }
     if (p(`/agents/${AGENT}/recovery`) && method === 'GET') return json(recoveryView);
     if (story && p(`/agents/${FINANCE_AGENT}/recovery`) && method === 'GET') return json(recoveryView);
     if (p(`/agents/${AGENT}/wake`) && method === 'POST') {
       // Keep submission observable to browser tests; this is a mock admission,
       // never an inference call or another paid discovery cycle.
       await new Promise((resolve) => setTimeout(resolve, 350));
+      if (body.action === 'run_now' && options.partnerWatch) {
+        if (!watchView.may_run) return fail(409, 'watch_paused');
+        const key = String(body.idempotency_key);
+        if (!watchWakeKeys.has(key)) { finishWatchCheck(); watchWakeKeys.add(key); }
+        if (options.partnerWatch === 'ambiguous' && !watchAmbiguousDelivered) { watchAmbiguousDelivered = true; return fail(503, 'unknown_outcome'); }
+        return json({ ...recoveryView, state: 'idle', run_id: null, session_id: null, attempt: null });
+      }
       if (body.action === 'cancel_retry' && recoveryView.can_cancel) {
         recoveryView = { ...recoveryView, state: 'stopped', next_retry_at: null, can_retry: true, can_cancel: false, message: 'Automatic retry cancelled. You can resume this task when ready.' };
       } else if (body.action === 'retry' && recoveryView.can_retry) {
@@ -1720,8 +1806,57 @@ export function createMockBackend(input: MockOptions = {}) {
         if (!current) return fail(403, 'not_eligible', 'The current step belongs to another reviewer');
         const decision = body.decision === 'decline' ? 'decline' : body.decision === 'request_changes' ? 'request_changes' : 'approve';
         approvalResult(approval, decision, typeof body.note === 'string' ? body.note : null, idempotencyKey);
+        if (options.uncertainSend && id === APPROVAL_DEMO_REQUEST_IDS.communication && approval.status === 'approved' && approval.payload.approval_type === 'communication') {
+          // The first approval's send is interrupted; approving again after "It wasn't sent" delivers.
+          const sends = emailSends.get(id) ?? [];
+          const recipient = approval.payload.details.recipients[0]!;
+          const first = sends.length === 0;
+          sends.push({
+            id: mockUuid(2_400 + sends.length), authorization_revision: approval.payload.authorization.revision,
+            recipient_name: recipient.name, recipient_address: recipient.address ?? '', sender_address: approval.payload.details.sender.address,
+            state: first ? 'ambiguous' : 'sent', sent_at: first ? null : iso(2), settled: null,
+          });
+          emailSends.set(id, sends);
+          approval.effect = first
+            ? { ...approval.effect, status: 'failed', reason: 'The send was interrupted, so the approved email may or may not have been sent. Check the mailbox before sending it again.' }
+            : { ...approval.effect, status: 'executed', reason: 'The approved email was sent.' };
+        }
         syncApprovalRow();
         return json(approvalForViewer(approval));
+      }
+      if (rest === '/email-sends' && method === 'GET') {
+        const sends = emailSends.get(id) ?? [];
+        return json({ sends, can_settle: seat === 'admin' && sends.some((send) => send.state === 'ambiguous') });
+      }
+      const settleMatch = /^\/email-sends\/([^/]+)\/settlement$/u.exec(rest);
+      if (settleMatch && method === 'POST') {
+        const sends = emailSends.get(id) ?? [];
+        const send = sends.find((candidate) => candidate.id === settleMatch[1]);
+        if (!send || !approval || !row) return fail(404, 'unknown_email_send');
+        if (seat !== 'admin') return fail(403, 'email_send_settle_forbidden', 'Only a reviewer of this email or an Admin can settle its send.');
+        if (send.state !== 'ambiguous') return fail(409, 'email_send_not_uncertain', 'Only a send whose outcome is unknown can be settled.');
+        const outcome = body.outcome === 'sent' ? 'sent' : 'not_sent';
+        send.state = outcome === 'sent' ? 'sent' : 'cancelled';
+        send.settled = { outcome, by_name: viewerName, at: iso(1) };
+        if (outcome === 'sent') {
+          approval.effect = { ...approval.effect, status: 'executed', reason: 'A reviewer checked the mailbox and confirmed the approved email was sent.' };
+        } else {
+          // Reopen as the next revision: the same email, approved again before it goes out.
+          const nextRevision = approval.payload.authorization.revision + 1;
+          approval.payload = { ...approval.payload, authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + 2_400) } } as ApprovalView['payload'];
+          approval.status = 'pending';
+          approval.votes = [];
+          approval.finalized_at = null;
+          approval.steps = approval.payload.policy.steps.map((step, index) => ({
+            step_id: step.id, label: step.label, order: step.order, status: index === 0 ? 'current' : 'blocked',
+            approvals_recorded: 0, quorum: step.quorum,
+            current_reviewer_member_ids: index === 0 && step.reviewers[0]?.kind === 'member' ? [step.reviewers[0].member_id] : [],
+          }));
+          approval.effect = { ...approval.effect, status: 'waiting', reason: 'A reviewer confirmed the email was not sent. Approve it again to send it.' };
+          approval.work = { status: 'waiting', continuation_id: null, reason: null };
+        }
+        syncApprovalRow();
+        return json({ sends, can_settle: sends.some((candidate) => candidate.state === 'ambiguous') }, 201);
       }
       if (rest === '/approval/revisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');
@@ -2141,10 +2276,12 @@ export function createMockBackend(input: MockOptions = {}) {
     if (p('/email/inboxes') && method === 'GET') {
       for (const agent of agentDirectory()) {
         if (!agent.owner || emailInboxes.some((row) => row.kind === 'agent' && row.agent.id === agent.id)) continue;
+        const sample = options.mail === 'sample';
         emailInboxes = [...emailInboxes, {
           id: mockUuid(1_600 + emailInboxes.length), address: `${agent.name.toLowerCase().replace(/[^a-z0-9]+/gu, '-')}-mk${emailInboxes.length + 1}q4z@${EMAIL_INTAKE_DOMAIN}`,
           label: agent.name, kind: 'agent', role_slug: agent.role?.team.slug ?? null, agent: { id: agent.id, name: agent.name },
-          status: 'active', created_at: iso(), message_count: 0, latest_received_at: null,
+          status: sample && emailInboxes.length === 1 ? 'paused' : 'active', created_at: iso(),
+          message_count: sample && emailInboxes.length === 0 ? sampleMail().length : 0, latest_received_at: null,
         }];
       }
       return json({ domain: EMAIL_INTAKE_DOMAIN, inboxes: emailInboxes, can_manage: seat === 'admin' });
@@ -2168,7 +2305,7 @@ export function createMockBackend(input: MockOptions = {}) {
     if (emailInboxMatch) {
       const inbox = emailInboxes.find((row) => row.id === emailInboxMatch[1]);
       if (!inbox) return fail(404, 'unknown_inbox');
-      if (emailInboxMatch[2] && method === 'GET') return json({ messages: [] });
+      if (emailInboxMatch[2] && method === 'GET') return json({ messages: options.mail === 'sample' && inbox.id === emailInboxes[0]?.id ? sampleMail() : [] });
       if (seat !== 'admin') return fail(403, 'admin_required');
       if (method === 'PATCH') {
         const next = { ...inbox, status: body.status === 'paused' ? 'paused' as const : 'active' as const };
@@ -2615,6 +2752,42 @@ export function createMockBackend(input: MockOptions = {}) {
       // Fixture-only: the mock never authorizes a real Cloud organization.
       return json({ status: 'not_connected', organization_name: null, automatic_setup_ready: false, available: false });
     }
+    if (path === `/w/${WS}/connections` && method === 'GET') {
+      // The Worker's list, from the same fixture state the Email and Slack pages read.
+      const admin = seat === 'admin';
+      const emailAvailable = options.email !== 'unconfigured' && options.email !== 'unavailable';
+      const sending = (provider: 'gmail' | 'microsoft') => {
+        const key = provider === 'gmail' ? 'gmail_sending' as const : 'microsoft_sending' as const;
+        if (!emailAvailable) return { key, state: 'not_configured' as const, reason: 'This deployment has no app registered for it.', identity: null, waiting: 0, detail_view: 'Email' as const };
+        if (!emailConnected || emailProvider !== provider) {
+          const other = emailConnected ? `${emailProvider === 'gmail' ? 'Gmail' : 'Microsoft 365'} is the sending account.` : null;
+          return { key, state: 'not_connected' as const, reason: other, identity: null, waiting: 0, detail_view: 'Email' as const };
+        }
+        const trouble = options.connectionTrouble === true;
+        return {
+          key,
+          state: trouble ? 'needs_attention' as const : 'connected' as const,
+          reason: trouble ? 'The provider stopped accepting Hermes’s access. Reconnect the account.' : null,
+          identity: admin ? (provider === 'microsoft' ? 'partners@contoso.example' : 'iris-partners@example.com') : null,
+          waiting: admin ? 2 : 0,
+          detail_view: 'Email' as const,
+        };
+      };
+      const activeInboxes = emailInboxes.filter((inbox) => inbox.kind === 'agent' && inbox.status === 'active').length;
+      const slackAvailable = options.slack !== 'unconfigured' && options.slack !== 'unavailable';
+      return json({
+        connections: [
+          sending('gmail'),
+          sending('microsoft'),
+          { key: 'agent_address', state: activeInboxes > 0 ? 'connected' : 'not_connected', reason: activeInboxes > 0 ? null : 'No agent has an address yet. An agent gets one once someone owns it.', identity: admin ? `@${EMAIL_INTAKE_DOMAIN}` : null, waiting: 0, detail_view: 'Email' },
+          slackAvailable
+            ? { key: 'slack', state: slackConnected ? 'connected' : 'not_connected', reason: null, identity: admin && slackConnected ? 'Fixture workspace' : null, waiting: 0, detail_view: 'Slack' }
+            : { key: 'slack', state: 'not_configured', reason: 'This deployment has no Slack app registered.', identity: null, waiting: 0, detail_view: 'Slack' },
+          { key: 'gmail_evidence', state: emailEvidenceConnected ? 'connected' : 'not_connected', reason: null, identity: admin && emailEvidenceConnected ? 'iris-evidence@example.com' : null, waiting: 0, detail_view: 'Library' },
+        ],
+        can_manage: admin,
+      });
+    }
     if (path.startsWith(`/w/${WS}/integrations/slack`)) {
       if (method === 'POST' && path.endsWith('/oauth/start')) {
         if (seat !== 'admin') return fail(403, 'admin_required');
@@ -2644,6 +2817,11 @@ export function createMockBackend(input: MockOptions = {}) {
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email/evidence`)) {
+      if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required');
+        emailEvidenceConnected = false;
+        return json({ status: 'disconnected', waiting: 0 });
+      }
       if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
         emailEvidenceConnected = true;
         return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=evidence-fixture', expires_at: iso(600) }, 201);
@@ -2681,6 +2859,12 @@ export function createMockBackend(input: MockOptions = {}) {
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email`)) {
+      if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required');
+        const waiting = emailConnected ? 2 : 0;
+        emailConnected = false;
+        return json({ status: 'disconnected', waiting });
+      }
       if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
         emailConnected = true;
         emailProvider = 'gmail';

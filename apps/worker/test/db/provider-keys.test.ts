@@ -45,6 +45,8 @@ function kek(seed: number): string {
 
 const ENV_V1 = { KEK_V1: kek(1) };
 const ENV_V1_V2 = { KEK_V1: kek(1), KEK_V2: kek(2), KEK_CURRENT: '2' };
+/** An API key never refreshes; resolving one must not open a second transaction. */
+const NO_REFRESH = (() => { throw new Error('an API key does not refresh'); }) as never;
 
 const KEY_A = ['sk', 'ant', 'api03', 'FIRSTKEY0000000000000000'].join('-');
 const KEY_B = ['sk', 'ant', 'api03', 'SECONDKEY000000000000000'].join('-');
@@ -107,12 +109,12 @@ describe('storing a provider key', () => {
 
     // A key is not usable until it verifies, which is the whole point of the
     // status: an unverified row must not be able to pay for a run.
-    await expect(asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic'))).rejects.toMatchObject({
+    await expect(asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic', NO_REFRESH))).rejects.toMatchObject({
       reason: 'no_usable_key',
     });
 
     await asTenant(fx, (tx) => setKeyStatus(tx, fx.workspaceId, stored.id, 'verified', ['claude-sonnet-4-6']));
-    const resolved = await asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic'));
+    const resolved = await asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic', NO_REFRESH));
     expect(resolved.apiKey).toBe(KEY_A);
     expect(resolved.keyId).toBe(stored.id);
   });
@@ -169,7 +171,7 @@ describe('storing a provider key', () => {
     });
 
     // Row-level security: the other tenant simply cannot see the row.
-    await expect(asTenant(theirs, (tx) => resolveKey(tx, ENV_V1, theirs.workspaceId, 'anthropic'))).rejects.toThrow(
+    await expect(asTenant(theirs, (tx) => resolveKey(tx, ENV_V1, theirs.workspaceId, 'anthropic', NO_REFRESH))).rejects.toThrow(
       KeyStoreError,
     );
 
@@ -251,7 +253,7 @@ describe('rotating a key', () => {
     expect(all.filter((k) => k.revoked_at === null)).toHaveLength(1);
 
     await asTenant(fx, (tx) => setKeyStatus(tx, fx.workspaceId, key.id, 'verified', []));
-    expect((await asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic'))).apiKey).toBe(KEY_B);
+    expect((await asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic', NO_REFRESH))).apiKey).toBe(KEY_B);
   });
 });
 
@@ -369,7 +371,7 @@ describe('KEK rotation', () => {
       await asTenant(fx, (tx) => setKeyStatus(tx, fx.workspaceId, key?.id ?? '', 'verified', []));
       // Encrypted under v1, rotated to v2, still readable — and readable with
       // the *new* environment, which is what a post-rotation deploy has.
-      expect((await asTenant(fx, (tx) => resolveKey(tx, ENV_V1_V2, fx.workspaceId, 'anthropic'))).apiKey).toBe(KEY_A);
+      expect((await asTenant(fx, (tx) => resolveKey(tx, ENV_V1_V2, fx.workspaceId, 'anthropic', NO_REFRESH))).apiKey).toBe(KEY_A);
     }
   });
 

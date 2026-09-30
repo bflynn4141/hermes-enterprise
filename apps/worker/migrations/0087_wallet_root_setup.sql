@@ -1,4 +1,4 @@
--- Workspace wallet root setup (C101). An Admin's passkey becomes the only root
+-- Workspace wallet root setup (C103). An Admin's passkey becomes the only root
 -- of the workspace's Turnkey sub-organization. Each attempt is one row, so an
 -- uncertain provider outcome is reconciled rather than retried into a second
 -- sub-organization. Nothing here grants signing authority.

@@ -14,7 +14,7 @@ import { runEmailTriageJob } from '../../src/inbound-email/triage.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../../src/jobs.js';
 import { asUser, callWithWaitUntil, makeEnv } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
-import { emailInboxListSchema, inboundEmailListSchema } from '@hermes/shared';
+import { emailInboxListSchema, emailSendListSchema, inboundEmailListSchema } from '@hermes/shared';
 import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
 
@@ -231,6 +231,113 @@ describe('every agent has its own email address (C100)', () => {
     expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state }]);
     await sendJob(fx, outbox.id);
     expect(sent).toHaveLength(0);
+  });
+
+  // A send the Worker started and never finished recording: the provider may
+  // already have it. A revived job must not send it a second time (H1).
+  it('marks a send left half-finished as uncertain, and never sends it again', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='sending' WHERE id=$1`, [outbox.id]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+    expect(await scoped(fx.workspaceId, 'SELECT state, last_error FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
+      .toEqual([{ state: 'ambiguous', last_error: 'send_interrupted_outcome_unknown' }]);
+    const [effect] = await scoped<{ effect_status: string; effect_reason: string }>(fx.workspaceId,
+      'SELECT effect_status, effect_reason FROM approval_requests WHERE request_id=$1', [requestId]);
+    expect(effect).toMatchObject({ effect_status: 'failed' });
+    expect(effect!.effect_reason).toMatch(/may or may not have been sent/u);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('sends once when the provider accepted but the result was never recorded', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { outbox } = await approvedReply(fx);
+    expect(sent).toHaveLength(1);
+    // The Worker died after Cloudflare accepted the message and before `sent` was written.
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='sending', provider_message_id=NULL, sent_at=NULL WHERE id=$1`, [outbox.id]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(1);
+  });
+
+  describe('settling an uncertain send', () => {
+    const sends = async (fx: Seeded, userId: string, requestId: string) => {
+      const response = await asUser(env, userId, `/w/${fx.workspaceId}/requests/${requestId}/email-sends`);
+      expect(response.status, await response.clone().text()).toBe(200);
+      return emailSendListSchema.parse(await response.json());
+    };
+    const settle = (fx: Seeded, userId: string, requestId: string, sendId: string, outcome: 'sent' | 'not_sent') =>
+      asUser(env, userId, `/w/${fx.workspaceId}/requests/${requestId}/email-sends/${sendId}/settlement`, {
+        method: 'POST', headers: INBOX_HEADERS, body: { outcome, idempotency_key: `settle:${randomUUID()}` },
+      });
+
+    it('records a send a reviewer confirmed, without calling the provider', async () => {
+      sent.length = 0;
+      const fx = await seedAgent();
+      const { requestId, outbox } = await approvedReply(fx, 'E_INTERNAL_SERVER_ERROR');
+      const before = await sends(fx, fx.adminId, requestId);
+      expect(before).toMatchObject({ can_settle: true, sends: [{ id: outbox.id, state: 'ambiguous', settled: null }] });
+
+      const response = await settle(fx, fx.adminId, requestId, outbox.id, 'sent');
+      expect(response.status, await response.clone().text()).toBe(201);
+      const after = emailSendListSchema.parse(await response.json());
+      expect(after.sends[0]).toMatchObject({ state: 'sent', settled: { outcome: 'sent' } });
+      expect(after.can_settle).toBe(false);
+      expect(sent).toHaveLength(0);
+      expect(await scoped(fx.workspaceId, 'SELECT effect_status FROM approval_requests WHERE request_id=$1', [requestId]))
+        .toEqual([{ effect_status: 'executed' }]);
+
+      // The same answer again is a no-op; the other answer is refused.
+      expect((await settle(fx, fx.adminId, requestId, outbox.id, 'sent')).status).toBe(200);
+      expect((await settle(fx, fx.adminId, requestId, outbox.id, 'not_sent')).status).toBe(409);
+    });
+
+    it('sends again only after the email is approved again', async () => {
+      sent.length = 0;
+      const fx = await seedAgent();
+      const { requestId, outbox } = await approvedReply(fx, 'E_INTERNAL_SERVER_ERROR');
+      const response = await settle(fx, fx.adminId, requestId, outbox.id, 'not_sent');
+      expect(response.status, await response.clone().text()).toBe(201);
+      expect(sent).toHaveLength(0);
+      expect(await scoped(fx.workspaceId, 'SELECT status, authorization_revision FROM approval_requests WHERE request_id=$1', [requestId]))
+        .toEqual([{ status: 'pending', authorization_revision: 2 }]);
+      // The first revision's approval stays on record as approved.
+      expect(await scoped(fx.workspaceId, 'SELECT revision, status FROM approval_revisions WHERE request_id=$1 ORDER BY revision', [requestId]))
+        .toEqual([{ revision: 1, status: 'approved' }, { revision: 2, status: 'pending' }]);
+
+      await approve(fx, fx.adminId, requestId);
+      expect(sent).toHaveLength(1);
+      expect(await scoped(fx.workspaceId,
+        'SELECT authorization_revision, state, settled_outcome FROM outbound_email_outbox WHERE request_id=$1 ORDER BY authorization_revision', [requestId]))
+        .toEqual([
+          { authorization_revision: 1, state: 'cancelled', settled_outcome: 'not_sent' },
+          { authorization_revision: 2, state: 'sent', settled_outcome: null },
+        ]);
+      // The agent's run already continued after the first approval; a resend does not wake it again.
+      expect(await scoped(fx.workspaceId, `SELECT count(*)::int AS n FROM jobs WHERE kind='approval_continue' AND key LIKE $1`, [`approval-finalized:${requestId}:2:%`]))
+        .toEqual([{ n: 0 }]);
+    });
+
+    it('refuses someone who does not review the email', async () => {
+      sent.length = 0;
+      const fx = await seedAgent();
+      const { requestId, outbox } = await approvedReply(fx, 'E_INTERNAL_SERVER_ERROR');
+      expect((await sends(fx, fx.memberId, requestId)).can_settle).toBe(false);
+      const response = await settle(fx, fx.memberId, requestId, outbox.id, 'sent');
+      expect(response.status).toBe(403);
+      expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'ambiguous' }]);
+    });
+
+    it('refuses to settle a send that is not uncertain', async () => {
+      sent.length = 0;
+      const fx = await seedAgent();
+      const { requestId, outbox } = await approvedReply(fx);
+      expect((await settle(fx, fx.adminId, requestId, outbox.id, 'not_sent')).status).toBe(409);
+      expect(sent).toHaveLength(1);
+    });
   });
 
   it('keeps a throttled send queued for the job to retry', async () => {

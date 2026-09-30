@@ -53,12 +53,17 @@ the test is the thing to keep passing.
    counter column. The demo's property that four requests reach zero in any
    order comes from deriving them.
 
-5. **No real outreach, payment or signature code.** No SMTP, no payment
-   provider, no signature provider, no webhook that triggers one. Not behind a
-   flag, not "just for testing". The row records the requirement; a human acts.
-   The simulated executor in invariant 3 is not an exception: it contacts
-   nothing, invents its record inside the tenant transaction, and writes
-   `simulated`, never `executed`.
+5. **No outside effect except through an approved outbox or effect record
+   with a recorded outcome.** Anything that leaves the system is tied to the
+   exact revision people approved, runs from a `jobs` row, and records what the
+   provider said: confirmed, rejected, or unknown. An unknown outcome is
+   `ambiguous` and waits for a person; it is never retried automatically,
+   because the provider may already have acted. Today only approved email
+   meets this bar (`apps/worker/src/outbound-email/`). There is no payment
+   provider, no signature provider, and no access-grant executor; adding one
+   is a product decision, not a refactor. The simulated executor in invariant 3
+   contacts nothing, invents its record inside the tenant transaction, and
+   writes `simulated`, never `executed`.
 
 6. **Every cross-system side effect after a commit is a `jobs` row**, written in
    the same transaction as the change, with a key containing a uuid.

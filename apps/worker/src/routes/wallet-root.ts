@@ -1,4 +1,4 @@
-// Workspace wallet root setup (C101).
+// Workspace wallet root setup (C103).
 //
 // An Admin creates a passkey in the browser; Hermes asks Turnkey to create the
 // workspace's sub-organization with that passkey as its only root user, then

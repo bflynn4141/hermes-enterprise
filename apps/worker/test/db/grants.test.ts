@@ -99,6 +99,10 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   partner_source_artifacts: ['SELECT'],
   partner_candidates: ['SELECT'],
   partner_screening_run_candidates: ['SELECT'],
+  // Watches and their spending ledger are written by the app or narrowly
+  // guarded accounting functions; runtime agents can only inspect them.
+  partner_watch_checks: ['SELECT'],
+  partner_watch_model_reservations: ['SELECT'],
   partner_contact_enrichments: ['SELECT'],
   partner_engagements: ['SELECT'],
   stream_events: ['INSERT'],
@@ -114,6 +118,8 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
 
 /** The revocations the approval invariant rests on, named one by one. */
 const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
+  { table: 'partner_watch_checks', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_watch_model_reservations', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'shared_intelligence_proposals', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'shared_intelligence_evidence', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'cloud_connections', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },

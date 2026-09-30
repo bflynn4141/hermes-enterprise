@@ -208,6 +208,17 @@ Cloudflare is the business-trigger scheduler. Native Hermes cron may be exposed
 for a demo profile, but it should not schedule this same screening flow; doing so
 would create two scheduler owners even though downstream ids are defensive.
 
+### Opt-in GitHub partner watch
+
+The agent owner can opt into a [partner watch](PARTNER-WATCH.md) on an existing
+GitHub skill assignment. It saves a quiet baseline, compares later public
+evidence, and prepares one private deliverable review for a material change.
+This path does not run the outreach procedure above, enrich contacts, send
+email, or release dependent work. Source allowances, ownership, assignment
+revision, and per-check/daily model reservations remain server enforced.
+The existing profile and Cloudflare scheduler own execution; no per-agent VM
+or second native scheduler is required.
+
 ## Dedicated Gmail sender
 
 Email remains off unless both deployment gates are changed deliberately:

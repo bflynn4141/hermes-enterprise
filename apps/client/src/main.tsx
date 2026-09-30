@@ -9,7 +9,7 @@
 // `MotionConfig` plus the `data-reduce-motion` effect are replaced by
 // `HermesMotionProvider`, which honours the OS setting and the member
 // preference together.
-import { StrictMode, useEffect, useRef, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState, type ComponentType } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HermesMotionProvider } from '@hermes/motion-components';
 import { createStore, initialState } from './model/store.js';
@@ -66,6 +66,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       walletRoot: params.get('walletRoot') === 'ambiguous' ? 'ambiguous' : params.get('walletRoot') === 'stalled' ? 'stalled' : undefined,
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       pendingAgentApproval: params.has('pendingAgentApproval'),
+      partnerWatch: ['ready', 'baseline', 'changed', 'failed', 'conflict', 'admin-paused', 'ambiguous', 'unavailable', 'readonly'].includes(params.get('partnerWatch') ?? '') ? params.get('partnerWatch') as 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly' : undefined,
       recovery: recovery === 'working' || recovery === 'retryable' || recovery === 'retry_scheduled' || recovery === 'blocked' || recovery === 'stopped' || recovery === 'idle' ? recovery : undefined,
       activity: params.get('activity') === 'completed-tool' ? 'completed-tool' : params.get('activity') === 'completed' ? 'completed' : undefined,
       seat: params.get('seat') === 'member' ? 'member' : 'admin',
@@ -82,6 +83,8 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
       turn: params.get('turn') === 'proposes_request' ? 'proposes_request' : params.get('turn') === 'waiting' ? 'waiting' : 'completed',
       communicationDraft: params.get('communicationDraft') === '1',
+      connectionTrouble: params.get('connections') === 'trouble',
+      uncertainSend: params.get('uncertainSend') === '1',
       workspaceName: readMockWorkspaceName(),
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
       libraryAdopt: params.get('libraryAdopt') === 'fail' ? 'fail' : 'ok',
@@ -91,6 +94,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       pausedMemberSetup: params.get('pausedMemberSetup') === '1',
       pendingInvitation: params.get('pendingInvitation') === '1',
       slack: params.get('slack') === 'unconfigured' ? 'unconfigured' : params.get('slack') === 'unavailable' ? 'unavailable' : params.get('slack') === 'connected' ? 'connected' : 'disconnected',
+      mail: params.get('mail') === 'sample' ? 'sample' : undefined,
       email: params.get('email') === 'unconfigured' ? 'unconfigured' : params.get('email') === 'unavailable' ? 'unavailable' : params.get('email') === 'connected' ? 'connected' : params.get('email') === 'microsoft' ? 'microsoft' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
       partnerWorkflowNative: params.get('workflowExecution') === 'native',
@@ -131,6 +135,15 @@ function MockOnboarding({ step, token }: { step: 'create-workspace' | 'join-work
       </div>
     );
   return <Onboarding route={step} token={token} fetchImpl={fetchImpl} />;
+}
+
+/** The design-system library (`?ui=library`), mock build only. */
+function MockDesignSystemLibrary() {
+  const [Library, setLibrary] = useState<ComponentType | null>(null);
+  useEffect(() => {
+    void import('./app/design-system/Library.js').then((module) => setLibrary(() => module.DesignSystemLibrary));
+  }, []);
+  return Library ? <Library /> : null;
 }
 
 function MockDemoAccess() {
@@ -493,6 +506,7 @@ function Root() {
     return <SignIn returnTo={route.kind === 'signin' ? route.returnTo : null} />;
   }
   if (route.kind === 'workspace') return <Bootstrap route={route} />;
+  if (__MOCK__ && new URL(window.location.href).searchParams.get('ui') === 'library') return <MockDesignSystemLibrary />;
   // Browser tests can exercise the real picker state machine while the rest of
   // the mock bundle still opens directly into its seeded workspace.
   if (__MOCK__ && new URL(window.location.href).searchParams.get('picker') === '1') return <WorkspacePicker />;

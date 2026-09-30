@@ -79,10 +79,11 @@ describe('model proxy preparation transaction boundaries', () => {
     expect(response.status).toBe(200);
     const begins = h.statements.filter((statement) => statement.sql === 'BEGIN');
     expect(begins).toHaveLength(budget ? 3 : 2);
-    expect(h.statements).toHaveLength(budget ? 15 : 11);
+    expect(h.statements).toHaveLength(budget ? 17 : 13);
     const groupedReads = h.statements.filter((statement) =>
-      statement.sql.includes('FROM runs') || statement.sql.includes('FROM catalog') || statement.sql.includes('FROM approval_continuations'));
-    expect(groupedReads).toHaveLength(4);
+      statement.sql.includes('FROM runs') || statement.sql.includes('FROM catalog')
+        || statement.sql.includes('FROM approval_continuations') || statement.sql.includes('FROM partner_watch_checks'));
+    expect(groupedReads).toHaveLength(6);
     expect(new Set(groupedReads.map((statement) => statement.transaction))).toEqual(new Set([1]));
     expect(h.statements.find((statement) => statement.sql === 'SELECT proxy_test_credential')?.transaction).toBe(2);
     if (budget) expect(h.statements.find((statement) => statement.sql.includes('FROM reserve_approval_model_budget'))?.transaction).toBe(3);

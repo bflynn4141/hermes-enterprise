@@ -50,7 +50,7 @@ MICROSOFT_MAIL_ENABLED="0"
 # MICROSOFT_REDIRECT_URI="http://localhost:8787/integrations/microsoft/oauth/callback"
 # MICROSOFT_TENANT="organizations"
 
-# Turnkey workspace wallets (C101). Enrollment requests only need the first
+# Turnkey workspace wallets (C103). Enrollment requests only need the first
 # flag. Provisioning creates a sub-organization per workspace, rooted in the
 # Admin's passkey, and needs a parent organization API key. Add this app's origin
 # to the parent organization's WebAuthn origins in Turnkey.

@@ -10,6 +10,7 @@
 // (decision C46) — `RecordsTable` is a database surface and a membership list
 // is not one.
 import { BrandIcon } from '../ui/brand-icons.js';
+import { AdminConnections } from './AdminConnections.js';
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
@@ -500,7 +501,7 @@ export function Members() {
                   setManageNotice(null);
                   setManageProblem(null);
                 }}>Keep</Button>
-                <Button
+                <Button danger
                   primary
                   disabled={pending === `member:remove:${person?.id ?? ''}`}
                   onClick={() => {
@@ -595,7 +596,7 @@ export function Members() {
               </div>}
               <div className="row">
                 <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
-                <Button link disabled={pending?.startsWith('member:')} onClick={() => {
+                <Button danger link disabled={pending?.startsWith('member:')} onClick={() => {
                   setConfirmRemove(true);
                   setManageNotice(null);
                   setManageProblem(null);
@@ -674,7 +675,8 @@ function LibraryConnections() {
   const [inbound, setInbound] = useState<InboundEmailConnection | null>(null);
   const [outbound, setOutbound] = useState<OutboundEmailConnection | null>(null);
   const [threadId, setThreadId] = useState('');
-  const [busy, setBusy] = useState<'connect' | 'import' | null>(null);
+  const [busy, setBusy] = useState<'connect' | 'import' | 'disconnect' | null>(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
   const callback = useCallbackResult('gmail_evidence');
   const [notice, setNotice] = useState<string | null>(() => (callback === 'connected'
     ? 'Read-only Gmail is connected.'
@@ -724,6 +726,22 @@ function LibraryConnections() {
       setBusy(null);
     }
   };
+  // Hermes erases its stored read access; saved conversations stay (docs/CONNECTORS.md).
+  const disconnect = async (): Promise<void> => {
+    setBusy('disconnect');
+    setNotice(null);
+    try {
+      await adapter.rest.disconnectGmailEvidence(state.workspace.id);
+      setDisconnectOpen(false);
+      setNotice('Read-only Gmail is disconnected. Saved conversations stay in your Library.');
+      load();
+    } catch (caught) {
+      setDisconnectOpen(false);
+      errorNotice(caught);
+    } finally {
+      setBusy(null);
+    }
+  };
   const importThread = async (): Promise<void> => {
     if (!state.agent.id || threadId.trim().length < 4) return;
     setBusy('import');
@@ -768,9 +786,12 @@ function LibraryConnections() {
             ? 'Hermes never lists or searches the mailbox. This is separate from the account Hermes sends from.'
             : 'Ask the person who runs Hermes for your company to turn it on.'}
         right={admin && inbound.configured ? (
-          <Button primary={!connected} disabled={busy !== null} onClick={() => void connect()}>
-            {busy === 'connect' ? 'Opening Google…' : connected ? 'Reconnect' : 'Connect'}
-          </Button>
+          <div className="sender-actions">
+            {connected && <Button danger disabled={busy !== null} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>}
+            <Button primary={!connected} disabled={busy !== null} onClick={() => void connect()}>
+              {busy === 'connect' ? 'Opening Google…' : connected ? 'Reconnect' : 'Connect'}
+            </Button>
+          </div>
         ) : undefined}
       >
         <div className="kv"><span className="grow">Access</span><span className="meta">Read only</span></div>
@@ -811,6 +832,15 @@ function LibraryConnections() {
         <div className="kv"><span className="grow">What gets sent</span><span className="meta">{outbound.mode === 'send_after_approval' ? 'Only emails a person approved, exactly as approved' : 'Nothing. Approved emails are saved as drafts'}</span></div>
         {admin && <div className="kv"><span className="grow">Waiting to send</span><span className="meta">{outbound.pending_messages}</span></div>}
       </Panel>
+      <Dialog
+        open={disconnectOpen}
+        title="Disconnect read-only Gmail?"
+        onClose={() => setDisconnectOpen(false)}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button danger primary disabled={busy !== null} onClick={() => void disconnect()}>{busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}</Button></>}
+      >
+        <p>Hermes deletes its read access to {inbound.address ?? 'this mailbox'} and can’t save more conversations from it. Conversations already saved stay in your Library.</p>
+        <p className="meta">To remove Hermes from the Google account as well, remove it in that account’s security settings.</p>
+      </Dialog>
     </div>
   );
 }
@@ -1185,6 +1215,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'Roles' && <AdminRoles roleId={id} />}
       {selected === 'Approvals' && <AdminApprovals routeKey={id} />}
       {selected === 'All agents' && <AdminAgents agentId={id} />}
+      {selected === 'All connections' && <AdminConnections />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailPage />}
       {selected === 'Wallets' && <AdminWallets />}
@@ -1223,6 +1254,8 @@ function EmailTab() {
   const [connection, setConnection] = useState<OutboundEmailConnection | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState<SenderProvider | null>(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const gmailResult = useCallbackResult('gmail');
   const microsoftResult = useCallbackResult('microsoft');
   const [notice, setNotice] = useState<string | null>(() => {
@@ -1263,6 +1296,32 @@ function EmailTab() {
           : error.reason === 'admin_required' ? EMPTY.adminRequired : `${SENDERS[provider].service} could not be opened. Nothing changed. Try again.`);
       }
       setBusy(null);
+    }
+  };
+
+  // Hermes deletes its stored access; approved email that hadn't gone out waits
+  // for a sending account again (docs/CONNECTORS.md).
+  const disconnect = async (): Promise<void> => {
+    if (!connection?.provider) return;
+    const { product } = SENDERS[connection.provider];
+    setDisconnecting(true);
+    try {
+      const result = await adapter.rest.disconnectOutboundEmail(state.workspace.id);
+      setDisconnectOpen(false);
+      setNotice(result.waiting > 0
+        ? `${product} is disconnected. ${result.waiting === 1 ? '1 approved email is' : `${result.waiting} approved emails are`} waiting for a sending account.`
+        : `${product} is disconnected.`);
+      load();
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        const url = adapter.auth.stepUpUrl(window.location.href, connection.provider);
+        if (url) { window.location.assign(url); return; }
+      }
+      setDisconnectOpen(false);
+      setNotice(error.reason === 'admin_required' ? EMPTY.adminRequired : `${product} could not be disconnected. Nothing changed. Try again.`);
+    } finally {
+      setDisconnecting(false);
     }
   };
 
@@ -1314,6 +1373,26 @@ function EmailTab() {
           </>
         )}
       </AdminSettingsCard>
+      {admin && current && connection?.status !== 'disconnected' && (
+        <AdminSettingsCard
+          title={`Disconnect ${current.product}`}
+          description="Outreach stops going out from this account. Emails already sent stay sent."
+          danger
+          footer={<>
+            <p className="meta">You will confirm before the account is disconnected.</p>
+            <Button danger disabled={busy !== null || disconnecting} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
+          </>}
+        />
+      )}
+      <Dialog
+        open={disconnectOpen}
+        title={`Disconnect ${current?.product ?? 'the sending account'}?`}
+        onClose={() => setDisconnectOpen(false)}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button danger primary disabled={disconnecting} onClick={() => void disconnect()}>{disconnecting ? 'Disconnecting…' : 'Disconnect'}</Button></>}
+      >
+        <p>Hermes deletes its access to {connection?.address ?? 'this account'}. Approved emails that haven’t gone out will wait until a sending account is connected again.</p>
+        <p className="meta">To remove Hermes from the {current?.service ?? 'provider'} account as well, remove it in that account’s security settings.</p>
+      </Dialog>
     </>
   );
 }
@@ -1509,7 +1588,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
           danger
           footer={<>
             <p className="meta">You will confirm before the workspace is disconnected.</p>
-            <Button disabled={busy} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
+            <Button danger disabled={busy} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
           </>}
         />
       )}
@@ -1517,7 +1596,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         open={disconnectOpen}
         title="Disconnect Slack?"
         onClose={() => setDisconnectOpen(false)}
-        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button danger primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
       >
         <p>New Slack messages will stop reaching Hermes immediately. Earlier conversations stay in Hermes.</p>
       </Dialog>
@@ -1737,7 +1816,7 @@ function OrganizationTab() {
               <span className="meta grow" style={{ maxWidth: 620 }}>
                 Everyone loses access right away. Everything is deleted after seven days; you can cancel until then.
               </span>
-              <Button
+              <Button danger
                 quiet
                 onClick={() => {
                   setDialog('delete');
@@ -1761,7 +1840,7 @@ function OrganizationTab() {
         actions={
           <>
             <Button onClick={() => setDialog(null)}>Keep it</Button>
-            <Button
+            <Button danger
               primary
               disabled={typed.trim() !== state.workspace.name}
               onClick={() =>
@@ -1937,7 +2016,7 @@ function UsageLimits() {
         <div className="kv">
           <span className="grow">Today</span>
           <span className="meta">{caps.daily_token_cap === null ? 'No limit' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} used today`}</span>
-          {caps.daily_token_cap !== null && <Button link onClick={() => void save({ daily_token_cap: null })}>Remove limit</Button>}
+          {caps.daily_token_cap !== null && <Button danger link onClick={() => void save({ daily_token_cap: null })}>Remove limit</Button>}
         </div>
         <div className="kv">
           <span className="grow">Running</span>
@@ -2285,7 +2364,7 @@ function ProviderKeysTab() {
                     Rotate
                   </Button>
                 )}
-                <Button
+                <Button danger
                   quiet
                   onClick={() => {
                     setTarget(key);
@@ -2350,7 +2429,7 @@ function ProviderKeysTab() {
         actions={
           <>
             <Button onClick={() => setDialog(null)}>Keep</Button>
-            <Button primary onClick={() => target && void guarded(() => adapter.rest.removeProviderKey(state.workspace.id, target.id))}>
+            <Button danger primary onClick={() => target && void guarded(() => adapter.rest.removeProviderKey(state.workspace.id, target.id))}>
               Remove
             </Button>
           </>
