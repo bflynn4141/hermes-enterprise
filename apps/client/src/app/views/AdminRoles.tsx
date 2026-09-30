@@ -13,6 +13,7 @@ import { AdminSettingsCard, AdminPageHeader } from './AdminDetailLayout.js';
 import { useWorkspaceLists } from './lists.js';
 import { approvalsForRole } from './approval-routes.js';
 import { useStepUp } from './use-step-up.js';
+import { RoleSpendingCard } from './RoleSpendingCard.js';
 import './admin-roles.css';
 
 export const ADMIN_ROLES_VIEW = 'Roles';
@@ -311,6 +312,8 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
         ? role.agents.map((agent) => <div key={agent.agent_id} className="kv"><span className="grow">{agent.name}</span><span className="meta">Works for {agent.principal.name}</span></div>)
         : <EmptyState compact icon="iris" title="No agents work in this role yet" />}
     </AdminSettingsCard>
+
+    <RoleSpendingCard key={`${state.workspace.id}:${state.user.id}:${role.id}`} roleId={role.id} roleName={role.name} />
 
     {!role.builtin && <AdminSettingsCard
       title="Delete role"

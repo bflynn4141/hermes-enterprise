@@ -12,6 +12,8 @@
 //   * an error carries the server's machine-readable `reason`, which is what
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
+  memberWalletAccessSchema, roleSpendingDraftSchema, type MemberWalletOperation, type MemberWalletStamp, type RoleSpendingDraftInput,
+  walletOverviewSchema, walletRecordSchema, walletRootChallengeSchema, walletRootSchema, type WalletEnrollmentInput, type WalletRootSubmit,
   bootstrapSchema,
   contextNoteSchema,
   agentPermissionsSchema,
@@ -472,6 +474,20 @@ export function createRest(options: RestOptions) {
     getDocument: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/documents/${id}`, documentEntitySchema),
     listDocuments: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
+    memberWalletAccess: (workspaceId: string, memberId: string) =>
+      request('GET', `${ws(workspaceId)}/members/${memberId}/wallet-access`, memberWalletAccessSchema),
+    proposeMemberWallet: (workspaceId: string, memberId: string, kind: MemberWalletOperation['kind']) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/proposals`, memberWalletAccessSchema, { kind }),
+    submitMemberWallet: (workspaceId: string, memberId: string, operationId: string, proposal_hash: string, stamp: MemberWalletStamp) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/submit`, memberWalletAccessSchema, { proposal_hash, stamp }),
+    cancelMemberWallet: (workspaceId: string, memberId: string, operationId: string) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/cancel`, memberWalletAccessSchema, {}),
+    reconcileMemberWallet: (workspaceId: string, memberId: string, operationId: string) =>
+      request('POST', `${ws(workspaceId)}/members/${memberId}/wallet-access/operations/${operationId}/reconcile`, memberWalletAccessSchema, {}),
+    getRoleSpendingDraft: (workspaceId: string, roleId: string) =>
+      request('GET', `${ws(workspaceId)}/roles/${roleId}/spending-policy`, roleSpendingDraftSchema),
+    putRoleSpendingDraft: (workspaceId: string, roleId: string, input: RoleSpendingDraftInput) =>
+      request('PUT', `${ws(workspaceId)}/roles/${roleId}/spending-policy`, roleSpendingDraftSchema, input),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
     runtimeDiscoveryGrants: (workspaceId: string) =>
@@ -686,6 +702,11 @@ export function createRest(options: RestOptions) {
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
+    wallets: (workspaceId: string) => request('GET', `${ws(workspaceId)}/wallets`, walletOverviewSchema),
+    requestWalletEnrollment: (workspaceId: string, input: WalletEnrollmentInput) => request('POST', `${ws(workspaceId)}/wallets/enrollment`, walletRecordSchema, input),
+    startWalletRoot: (workspaceId: string) => request('POST', `${ws(workspaceId)}/wallets/root/challenge`, walletRootChallengeSchema, {}),
+    submitWalletRoot: (workspaceId: string, input: WalletRootSubmit) => request('POST', `${ws(workspaceId)}/wallets/root`, walletRootSchema, input),
+    reconcileWalletRoot: (workspaceId: string) => request('POST', `${ws(workspaceId)}/wallets/root/reconcile`, walletRootSchema, {}),
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
     startMicrosoftOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/microsoft/oauth/start`, outboundEmailOAuthStartSchema, {}),

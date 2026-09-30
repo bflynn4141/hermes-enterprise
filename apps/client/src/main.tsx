@@ -62,6 +62,8 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
     }
     const backend = createMockBackend({
       agentless: params.get('agent') === 'none',
+      wallets: params.get('wallets') === 'enabled' ? 'enabled' : params.get('wallets') === 'fail' ? 'fail' : params.get('wallets') === 'reauth' ? 'reauth' : undefined,
+      walletRoot: params.get('walletRoot') === 'ambiguous' ? 'ambiguous' : params.get('walletRoot') === 'stalled' ? 'stalled' : undefined,
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       pendingAgentApproval: params.has('pendingAgentApproval'),
       partnerWatch: ['ready', 'baseline', 'changed', 'failed', 'conflict', 'admin-paused', 'ambiguous', 'unavailable', 'readonly'].includes(params.get('partnerWatch') ?? '') ? params.get('partnerWatch') as 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly' : undefined,
@@ -72,6 +74,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
       providerKeysLocked: params.get('providerKeys') === 'locked',
       runtimeCapacityStepUp: params.get('runtimeCapacity') === 'stepup',
+      roleSpendingConflictOnce: params.get('spending') === 'conflict',
       roleWritesStepUp: params.get('roles') === 'stepup',
       approvalWritesStepUp: params.get('approvals') === 'stepup',
       agentWritesStepUp: params.get('agents') === 'stepup',

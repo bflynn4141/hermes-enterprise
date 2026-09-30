@@ -14,6 +14,7 @@ import { AgentContextSettings } from './AgentContextSettings.js';
 import { AgentPermissions } from './AgentPermissions.js';
 import { InboxList, RequestReview } from './Inbox.js';
 import { AdminSettings, History, Members, Library, Settings } from './Workspace.js';
+import { MemberDetail } from './MemberDetail.js';
 import { SECTION_LABEL, agentName, describeRef } from '../selectors.js';
 import { TOGGLE_SHORTCUT } from '../panel.js';
 
@@ -26,8 +27,8 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
   const [crumb, sub] = describeRef(state, app);
   // Keep settings tabs mounted across section changes so keyboard focus and
   // scroll position survive navigation. Individual content panels still unmount.
-  const key = app.section === 'admin' || app.section === 'settings'
-    ? app.section
+  const key = app.section === 'admin' || app.section === 'settings' || (app.section === 'members' && app.id)
+    ? `${app.section}/${app.id ?? ''}`
     : `${app.section}/${app.view ?? ''}/${app.id ?? ''}/${app.sub ?? ''}/${app.step ?? ''}/${app.field ?? ''}`;
 
   const view = useMemo(() => {
@@ -41,7 +42,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
       return <AgentOverview />;
     }
     if (app.section === 'inbox') return app.view === 'request' ? <RequestReview id={app.id ?? null} /> : <InboxList />;
-    if (app.section === 'members') return <Members />;
+    if (app.section === 'members') return app.id ? <MemberDetail id={app.id} /> : <Members />;
     if (app.section === 'admin') return <AdminSettings view={app.view ?? 'Organization'} id={app.id ?? null} />;
     if (app.section === 'history') return <History />;
     if (app.section === 'library') return <Library view={app.view ?? 'handoffs'} id={app.id ?? null} />;
@@ -84,7 +85,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
         ))}
       </header>
       {/* Admin and Settings name their page in the breadcrumb and navigate in the page itself. */}
-      {!agentView && !requestView && app.section !== 'admin' && app.section !== 'settings' && <div className="pane-subheader">
+      {!agentView && !requestView && app.section !== 'admin' && app.section !== 'settings' && !(app.section === 'members' && app.id) && <div className="pane-subheader">
         <span className="truncate">{sub}</span>
         <span className="grow" />
       </div>}

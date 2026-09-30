@@ -155,6 +155,30 @@ export interface Env {
   MICROSOFT_TENANT?: string;
   /** Test seam for Microsoft identity and Graph calls. */
   MICROSOFT_FETCHER?: Fetcher;
+  /** Wallet enrollment requests (C103); alone it never contacts Turnkey. */
+  TURNKEY_WALLETS_ENABLED?: string;
+  /**
+   * Lets an Admin create the workspace's Turnkey sub-organization with their
+   * passkey as its only root. Off unless '1', TURNKEY_WALLETS_ENABLED is '1' and
+   * every Turnkey value is set.
+   */
+  TURNKEY_PROVISIONING_ENABLED?: string;
+  /** Owner-passkey member wallet provisioning; default off, never grants payment authority. */
+  TURNKEY_MEMBER_WALLETS_ENABLED?: string;
+  /** Hermes's parent Turnkey organization; it can read, never write, workspace sub-orgs. */
+  TURNKEY_PARENT_ORG_ID?: string;
+  /** Compressed P-256 public half of the parent API key (not secret). */
+  TURNKEY_API_PUBLIC_KEY?: string;
+  /** Turnkey API origin; https://api.turnkey.com when unset. Tests point it at a fake. */
+  TURNKEY_API_BASE_URL?: string;
+  /**
+   * WebAuthn relying party for workspace passkeys, e.g. the app's host. A
+   * passkey only works on this domain, and the same passkey later approves
+   * payments, so it must stay stable per deployment.
+   */
+  TURNKEY_PASSKEY_RP_ID?: string;
+  /** Test seam for Turnkey API calls. */
+  TURNKEY_FETCHER?: Fetcher;
   /** Dedicated exact-scope OAuth client for explicitly selected Gmail evidence. */
   GMAIL_EVIDENCE_ENABLED?: string;
   GMAIL_EVIDENCE_CLIENT_ID?: string;
@@ -179,6 +203,8 @@ export interface Env {
   R2_BUCKET: string;
 
   // --- Secrets (never in the repository; see .dev.vars.example) -------------
+  /** Private half of the parent Turnkey API key; only creates and reads sub-orgs. */
+  TURNKEY_API_PRIVATE_KEY?: string;
   WORKOS_API_KEY?: string;
   /** TypeSafe Jev API credential for the advisory Inbox classifier. */
   TYPESAFE_API_KEY?: string;

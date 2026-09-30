@@ -203,6 +203,7 @@ describe('wrangler.jsonc', () => {
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',
       'DEMO_ACCESS_PASSCODE',
+      'TURNKEY_API_PRIVATE_KEY',
       'localConnectionString',
     ]) {
       expect(text, `${secret} appears in wrangler.jsonc`).not.toContain(secret);

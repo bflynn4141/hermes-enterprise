@@ -1,3 +1,4 @@
+import { custodyConfigured, guardPaymentMemberChanges } from '../wallets/member-authority.js';
 // /w/:ws/roles — the workspace's roles and who holds them (decision C92).
 //
 // Admin only, like reviewer roles on the member list: who holds Finance is who
@@ -120,6 +121,7 @@ export async function putWorkspaceRoleMembers(c: Context<{ Bindings: Env }>): Pr
   const role = await inWorkspace(c, async (work) => {
     work.requireAdmin('changing who holds a role');
     requireStepUp(work.session);
+    await custodyConfigured(work.tx, work.workspaceId);
     const current = await requireRole(work, roleId);
     const active = await work.tx.query<{ user_id: string }>(
       `SELECT user_id FROM members WHERE workspace_id = $1 AND status = 'active' AND user_id = ANY ($2::uuid[])`,
@@ -128,6 +130,12 @@ export async function putWorkspaceRoleMembers(c: Context<{ Bindings: Env }>): Pr
     if (active.rows.length !== new Set(input.user_ids).size) {
       throw new RouteError('only active members can hold a role', 'unknown_member', 422);
     }
+    const holders = await work.tx.query<{ user_id: string; role: string; reviewer_roles: string[] }>(
+      "SELECT user_id,role,reviewer_roles FROM members WHERE workspace_id=$1 AND status='active'", [work.workspaceId]);
+    const requested = new Set(input.user_ids);
+    await guardPaymentMemberChanges(work.tx, work.workspaceId, holders.rows.map(before => ({ before,
+      after: { role: before.role, reviewer_roles: requested.has(before.user_id)
+        ? [...new Set([...before.reviewer_roles,current.slug])] : before.reviewer_roles.filter(slug => slug !== current.slug) } })));
     const { added, removed } = await setRoleHolders(work.tx, work.workspaceId, current.slug, input.user_ids);
     if (added.includes(work.userId) || removed.includes(work.userId)) {
       throw new RouteError('another Admin changes your own roles', 'self_change', 409);

@@ -2117,3 +2117,47 @@ tools, or multi-day run window is added. A scripted preview can validate the
 interface and mechanics; a real offline pilot and a useful reviewed result
 remain the prerequisite for expanding capacity. See [Partner watch](../PARTNER-WATCH.md)
 for activation and acceptance evidence requirements.
+
+## C103. Wallet enrollment precedes custody and mainnet execution
+
+Brian selected workspace, member, and agent wallets with mainnet approvals on
+September 28, 2026. The target is Base mainnet USDC. Each workspace will map to a
+Turnkey suborganization, with separate principal identities and wallets. Customer
+recovery owners, rather than ordinary Hermes Admin roles or a Hermes service key,
+will control the root quorum.
+
+This increment persists Admin-requested enrollment, scoped to a workspace and an
+active member or owned agent. It is default-off and stops at needs-owner-setup.
+It neither imports browser-supplied provider identities nor claims addresses have
+been provisioned. The agent database role receives no wallet permissions; a
+regular member can read only their own and their owned agents' enrollment.
+
+A pure transfer-intent module validates exact Base USDC transfer data and produces
+a canonical authorization digest. That module is not wired to an approval writer,
+provider signer, or payment executor. Future integration must preserve existing
+guarded decision routes and bind every signature to a verified source wallet,
+current permissions, immutable human authorization, and provider policy version.
+
+The staged approach makes setup reviewable while account access, customer-owner
+enrollment, provider policy enforcement, and first-transfer details remain
+unverified. It does not redefine enrollment as custody or approval as payment.
+See [Workspace wallets](../WALLETS.md) for the shipped boundary and
+[the implementation plan](../plans/2026-09-28-turnkey-workspace-wallets.md) for
+the remaining work.
+
+**Decided September 28, 2026 (evening).** Every agent payment needs a member with
+the finance role, and Turnkey enforces it: the agent wallet's policy consensus
+requires the agent and a finance member, and the Inbox approval is that member's
+passkey approval of the exact pending Turnkey activity. Member wallets ship in the
+first version. The first provider test uses Base Sepolia USDC transfers read
+through an uploaded ABI, and this enrollment increment merges only after that
+test's first live run passes.
+
+**Built September 28, 2026 (evening): the wallet owner.** An Admin's passkey
+becomes the only root of the workspace's Turnkey sub-organization, created by
+the parent organization with recovery channels disabled and verified by
+read-back before the UI says so. Why: custody has to be customer-held from the
+first provider object onward, and Hermes can prove it because the parent can
+read but never write a sub-organization. Uncertain creates are reconciled by
+unique name rather than retried, so a timeout cannot produce a second
+organization. See [Workspace wallets](../WALLETS.md#wallet-owner-setup).

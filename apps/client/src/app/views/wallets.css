@@ -1,0 +1,4 @@
+/* Keep enrollment changes immediate: a saved request is not provisioning progress. */
+.wallet-agent-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-block: 12px; }
+.wallet-agent-row > div { min-width: 0; overflow-wrap: anywhere; }
+.wallet-agent-row button { max-width: 100%; white-space: normal; text-align: start; }

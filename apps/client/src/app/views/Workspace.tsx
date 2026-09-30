@@ -36,8 +36,9 @@ import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
 import { AdminEmailInboxes } from './AdminEmailInboxes.js';
-import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
+import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs } from './MemberRoles.js';
 import { useStepUp } from './use-step-up.js';
+import { AdminWallets } from './Wallets.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -166,20 +167,14 @@ export function Members() {
   const [invite, setInvite] = useState(false);
   const [email, setEmail] = useState('');
   const [jobRole, setJobRole] = useState<MemberRoleTemplate>('partnerships-agent');
-  const [manage, setManage] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // The refusal behind `notice`, so a stale sign-in can offer a fresh one.
   const [noticeProblem, setNoticeProblem] = useState<unknown>(null);
   const [inviteProblem, setInviteProblem] = useState<unknown>(null);
-  const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   // Roles chosen in the Invite dialog, and the draft of a managed member's roles.
   const [inviteRoles, setInviteRoles] = useState<string[]>([]);
-  const [manageRoles, setManageRoles] = useState<string[]>([]);
-  // The one refusal the Manage dialog shows, whichever write it came from.
-  const [manageProblem, setManageProblem] = useState<{ action: ManageAction; error: unknown } | null>(null);
   const { needsSignIn, signIn } = useStepUp('workspace_roles');
   useEffect(() => { if (!admin && tab !== 'all') setTab('all'); }, [admin, tab]);
   // Role names for each person's role slugs. Admin only, like the slugs
@@ -217,26 +212,6 @@ export function Members() {
   // Withdrawn and accepted invitations are history, and History is where they
   // are read; this tab is the ones an Admin can still do something about.
   const invitations = lists.invitations.filter((row) => row.status === 'pending' || row.status === 'expired');
-  const person = manage ? all.find((member) => member.id === manage) ?? null : null;
-  const isYou = person?.user_id === state.user.id;
-  const heldRoles = person ? knownRoleSlugs(person.reviewer_roles, roles) : [];
-  const draftRoles = knownRoleSlugs(manageRoles, roles);
-  const rolesChanged = draftRoles.length !== heldRoles.length || draftRoles.some((slug) => !heldRoles.includes(slug));
-  const saveRoles = () => {
-    if (!person) return;
-    setPending(`member:roles:${person.id}`);
-    setManageNotice(null);
-    setManageProblem(null);
-    void adapter.rest
-      .setMemberRoles(state.workspace.id, person.id, draftRoles)
-      .then((next) => {
-        adapter.invalidateList('members');
-        setManageRoles(next.reviewer_roles);
-        setManageNotice('Roles updated.');
-      })
-      .catch((error: unknown) => setManageProblem({ action: 'roles', error }))
-      .finally(() => setPending(null));
-  };
   const invitationsChanged = () => {
     adapter.invalidateList('invitations');
     adapter.invalidateList('members');
@@ -324,13 +299,7 @@ export function Members() {
                       {roleNames.length > 0 && <span className="member-card-roles">{roleNames.join(', ')}</span>}
                       <span>{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
                     </div>
-                    {admin && <div className="member-card-actions"><Button onClick={() => {
-                      setNotice(null);
-                      setManageNotice(null);
-                      setManageProblem(null);
-                      setManageRoles(member.reviewer_roles);
-                      setManage(member.id);
-                    }}>Manage</Button></div>}
+                    {(admin || member.user_id === state.user.id) && <div className="member-card-actions"><Button onClick={() => nav({ section: 'members', id: member.id, sub: 'overview' })}>Manage</Button></div>}
                   </div>
                 );
               })}
@@ -480,135 +449,7 @@ export function Members() {
             {invitationFailureMessage(inviteProblem)}{' '}{needsSignIn(inviteProblem) && <Button link onClick={signIn}>Sign in again</Button>}
           </p>}
         </Dialog>
-        <Dialog
-          open={!!person}
-          title={person?.name ?? ''}
-          onClose={() => {
-            if (pending?.startsWith('member:')) return;
-            setManage(null);
-            setConfirmRemove(false);
-            setManageNotice(null);
-            setManageProblem(null);
-          }}
-          actions={
-            confirmRemove ? (
-              <>
-                <Button disabled={pending === `member:remove:${person?.id ?? ''}`} onClick={() => {
-                  setConfirmRemove(false);
-                  setManageNotice(null);
-                  setManageProblem(null);
-                }}>Keep</Button>
-                <Button danger
-                  primary
-                  disabled={pending === `member:remove:${person?.id ?? ''}`}
-                  onClick={() => {
-                    if (!person) return;
-                    setPending(`member:remove:${person.id}`);
-                    setManageNotice(null);
-                    setManageProblem(null);
-                    void adapter.rest
-                      .removeMember(state.workspace.id, person.id)
-                      .then(() => {
-                        adapter.invalidateList('members');
-                        setManage(null);
-                        setConfirmRemove(false);
-                        showAck('Member removed');
-                      })
-                      .catch((error: unknown) => setManageProblem({ action: 'remove', error }))
-                      .finally(() => setPending(null));
-                  }}
-                >
-                  {pending === `member:remove:${person?.id ?? ''}` ? 'Removing…' : 'Remove'}
-                </Button>
-              </>
-            ) : (
-              <Button disabled={pending?.startsWith('member:')} onClick={() => {
-                setManage(null);
-                setManageNotice(null);
-                setManageProblem(null);
-              }}>Done</Button>
-            )
-          }
-        >
-          <p className="meta">
-            {person?.email}{person ? ` · ${memberStatusLabel(person.status)}` : ''}
-          </p>
-          {isYou ? (
-            <>
-              <p>Your role is Admin. Another Admin changes it; you cannot remove yourself.</p>
-              {roles.length > 0 && person && <div className="member-approvals">
-                <p className="member-approvals-line">Roles: {roleNamesFor(person, roles).join(', ') || 'None'}. Another Admin changes your own roles.</p>
-                <CanApprove routes={routes} person={person} />
-              </div>}
-            </>
-          ) : confirmRemove ? (
-            <p>{person?.name} loses access to this workspace. Nothing outside it changes and no email is sent from here.</p>
-          ) : (
-            <>
-              <div className="col" role="radiogroup" aria-label="Role" style={{ gap: 4 }}>
-                {(['admin', 'member'] as const).map((role) => (
-                  <MenuItem
-                    key={role}
-                    role="radio"
-                    checked={person?.role === role}
-                    disabled={pending?.startsWith('member:')}
-                    sub={role === 'admin' ? 'Manages members, keys and settings' : 'Works with agents; approves only what their roles allow'}
-                    onClick={() => {
-                      if (!person) return;
-                      setPending(`member:role:${person.id}`);
-                      setManageNotice(null);
-                      setManageProblem(null);
-                      void adapter.rest
-                        .setMemberRole(state.workspace.id, person.id, role)
-                        .then(() => {
-                          adapter.invalidateList('members');
-                          setManageNotice('Role updated.');
-                        })
-                        .catch((error: unknown) => setManageProblem({ action: 'role', error }))
-                        .finally(() => setPending(null));
-                    }}
-                  >
-                    {role === 'admin' ? 'Admin' : 'Member'}
-                  </MenuItem>
-                ))}
-              </div>
-              {roles.length > 0 && person && <div className="member-approvals">
-                <RoleChecklist
-                  roles={roles}
-                  selected={draftRoles}
-                  disabled={pending?.startsWith('member:')}
-                  onChange={(next) => {
-                    setManageRoles(next);
-                    setManageNotice(null);
-                    setManageProblem(null);
-                  }}
-                />
-                <CanApprove routes={routes} person={{ role: person.role, reviewer_roles: draftRoles }} />
-                <div className="member-approvals-actions">
-                  <span />
-                  <Button disabled={!rolesChanged || pending?.startsWith('member:')} onClick={saveRoles}>
-                    {pending === `member:roles:${person.id}` ? 'Saving…' : 'Save roles'}
-                  </Button>
-                </div>
-              </div>}
-              <div className="row">
-                <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
-                <Button danger link disabled={pending?.startsWith('member:')} onClick={() => {
-                  setConfirmRemove(true);
-                  setManageNotice(null);
-                  setManageProblem(null);
-                }}>
-                  Remove…
-                </Button>
-              </div>
-            </>
-          )}
-          {manageNotice && <p className="meta" role="status">{manageNotice}</p>}
-          {manageProblem && <p className="meta action-error" role="alert">
-            {manageErrorMessage(manageProblem.action, manageProblem.error)}{' '}
-            {needsSignIn(manageProblem.error) && <Button link onClick={signIn}>Sign in again</Button>}
-          </p>}
-        </Dialog>
+
       </div>
     </div>
   );
@@ -1215,6 +1056,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
       {selected === 'All connections' && <AdminConnections />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailPage />}
+      {selected === 'Wallets' && <AdminWallets />}
       {selected === 'Provider keys' && <div className="admin-detail-page"><ProviderKeysTab /><ModelDefaults /></div>}
       {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
       {selected === 'Usage' && <div className="admin-detail-page"><UsageTab /><UsageLimits /></div>}
