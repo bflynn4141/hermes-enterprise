@@ -64,6 +64,30 @@ Verified so far against a faithful fake of Turnkey's API, a real browser passkey
 (Chrome's virtual authenticator) and the mock app; not yet against Turnkey
 itself.
 
+## Who may ask Turnkey to do what
+
+| Who | May submit | Never |
+| --- | --- | --- |
+| Hermes's parent key | Create a workspace sub-organization (parent policy: `ORGANIZATION` + `CREATE`, this user only); read sub-organizations | Anything inside a workspace |
+| Workspace owner's passkey | Everything inside the workspace: users, wallets, roles (tags), policies, root changes | Nothing is done with it without the owner's prompt |
+| Hermes service key inside a workspace (future) | Create wallets only | Users, tags, policies, root quorum, signing |
+
+The client enforces the first row in code (`PARENT_KEY_ACTIVITIES`); any other
+activity type, path or target organization is refused before a request is signed.
+
+Why users are owner-only: on September 28, 2026 a live test gave a Hermes key
+permission to create users (not to change tags) inside a disposable workspace.
+It created a user already holding the Finance tag, and that user approved an
+agent payment. Creating a user with tags is itself a role grant, so it needs the
+owner. The corrected policy passed a live regression the same night: Hermes could
+not create users, tagged or untagged, or grant or revoke Finance; the owner could.
+
+Approvals must go only to people who qualify. In the same test, an approval from
+a member without the Finance role turned the pending payment request into a
+rejected one, so a later Finance approval could not complete it. Hermes shows
+Approve only to members the payment policy accepts, and a wrongly rejected
+request needs a fresh one.
+
 ## Custody and approvals
 
 One Turnkey suborganization will represent a workspace. Workspace, member, and

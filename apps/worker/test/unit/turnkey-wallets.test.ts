@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { decompressP256, p1363ToDer, stampRequest } from '../../src/wallets/turnkey-stamp.js';
 import {
-  classifyActivity, createRootedSubOrganization, rootIsCustomerOwned, sameCredentialId, submitActivity, type TurnkeyConfig,
+  classifyActivity, createRootedSubOrganization, PARENT_KEY_ACTIVITIES, rootIsCustomerOwned, sameCredentialId, submitActivity,
+  TurnkeyAuthorityError, type TurnkeyConfig,
 } from '../../src/wallets/turnkey-client.js';
 import { turnkeySetupConfig } from '../../src/wallets/turnkey-config.js';
 import { clientDataMatches } from '../../src/routes/wallet-root.js';
@@ -92,11 +93,34 @@ describe('Turnkey activity outcomes', () => {
   it('treats transport errors and 5xx as ambiguous, 4xx as rejected, and never keeps provider text', async () => {
     const key = await turnkeyKey();
     const config = (fetcher: typeof fetch): TurnkeyConfig => ({ baseUrl: 'https://api.turnkey.test', parentOrgId: 'p', apiKey: key, fetch: fetcher });
-    const call = (fetcher: typeof fetch) => submitActivity(config(fetcher), '/x', 'T', 'org', {});
+    const call = (fetcher: typeof fetch) => submitActivity(config(fetcher), '/public/v1/submit/create_sub_organization',
+      'ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8', 'p', {});
     expect(await call((async () => { throw new TypeError('network down'); }) as typeof fetch)).toEqual({ kind: 'ambiguous', reason: 'transport' });
     expect(await call((async () => json({}, 503)) as typeof fetch)).toEqual({ kind: 'ambiguous', reason: 'http_503' });
     expect(await call((async () => json({ code: 7, message: 'secret detail' }, 400)) as typeof fetch)).toEqual({ kind: 'rejected', code: 'http_400_7' });
     expect(await call((async () => new Response('not json', { status: 200 })) as typeof fetch)).toEqual({ kind: 'ambiguous', reason: 'unparseable_response' });
+  });
+
+  it("never lets Hermes's key create users, change roles or policies, or act inside a workspace", async () => {
+    const key = await turnkeyKey();
+    let calls = 0;
+    const config: TurnkeyConfig = { baseUrl: 'https://api.turnkey.test', parentOrgId: 'parent', apiKey: key,
+      fetch: (async () => { calls++; return json({}); }) as typeof fetch };
+    expect([...PARENT_KEY_ACTIVITIES.keys()]).toEqual(['ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8']);
+    for (const [path, type] of [
+      ['/public/v1/submit/create_users', 'ACTIVITY_TYPE_CREATE_USERS_V4'],
+      ['/public/v1/submit/update_user_tag', 'ACTIVITY_TYPE_UPDATE_USER_TAG'],
+      ['/public/v1/submit/create_policy', 'ACTIVITY_TYPE_CREATE_POLICY_V3'],
+      ['/public/v1/submit/update_root_quorum', 'ACTIVITY_TYPE_UPDATE_ROOT_QUORUM'],
+      ['/public/v1/submit/sign_transaction', 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2'],
+      // An allowed type sent to another path, or aimed inside a workspace, is refused too.
+      ['/public/v1/submit/create_users', 'ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8'],
+    ]) {
+      await expect(submitActivity(config, path!, type!, 'parent', {})).rejects.toBeInstanceOf(TurnkeyAuthorityError);
+    }
+    await expect(submitActivity(config, '/public/v1/submit/create_sub_organization', 'ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8', 'workspace-org', {}))
+      .rejects.toBeInstanceOf(TurnkeyAuthorityError);
+    expect(calls).toBe(0);
   });
 
   it('creates a sub-organization with one passkey root and no Hermes key or email recovery', async () => {

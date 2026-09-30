@@ -75,8 +75,29 @@ export function classifyActivity(activity: TurnkeyActivity | undefined): SubmitO
   }
 }
 
+/**
+ * Everything Hermes's own parent key may ask Turnkey to do. Reads are separate
+ * (`query`). A live test on September 28, 2026 showed why this list stays this
+ * short: a Hermes key allowed to create users inside a workspace created one
+ * already holding the Finance role, and that user approved an agent payment.
+ * Users, roles (tags), policies and the root quorum inside a workspace change
+ * only with the workspace owner's passkey, never with this key.
+ */
+export const PARENT_KEY_ACTIVITIES: ReadonlyMap<string, string> = new Map([
+  ['ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8', '/public/v1/submit/create_sub_organization'],
+]);
+
+export class TurnkeyAuthorityError extends Error {
+  constructor(readonly type: string) {
+    super(`Hermes's parent key may not submit ${type}`);
+  }
+}
+
 export async function submitActivity(config: TurnkeyConfig, path: string, type: string, organizationId: string,
   parameters: Record<string, unknown>): Promise<SubmitOutcome> {
+  // Refuse before signing anything: a wrong type, path, or target organization
+  // is a programming error, not a provider outcome to reconcile.
+  if (PARENT_KEY_ACTIVITIES.get(type) !== path || organizationId !== config.parentOrgId) throw new TurnkeyAuthorityError(type);
   let response: Response;
   try {
     response = await post(config, path, { type, timestampMs: String(Date.now()), organizationId, parameters });
