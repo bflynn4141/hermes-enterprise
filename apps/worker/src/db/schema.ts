@@ -1293,6 +1293,43 @@ export const partnerSourceArtifacts = pgTable(
   (t) => [unique('partner_source_artifacts_run_key').on(t.runId, t.artifactKey)],
 );
 
+export const partnerWatchModelReservations = pgTable('partner_watch_model_reservations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  checkId: uuid('check_id').notNull(),
+  runId: uuid('run_id').notNull(),
+  runAttempt: integer('run_attempt').notNull(),
+  modelId: text('model_id').notNull(),
+  budgetDay: date('budget_day').notNull(),
+  inputTokenBound: bigint('input_token_bound', { mode: 'number' }).notNull(),
+  outputTokenBound: integer('output_token_bound').notNull(),
+  inputPrice: numeric('input_price').notNull(),
+  outputPrice: numeric('output_price').notNull(),
+  cachedInputPrice: numeric('cached_input_price').notNull(),
+  pricingVerifiedOn: date('pricing_verified_on').notNull(),
+  reservedCostUsd: numeric('reserved_cost_usd', { precision: 14, scale: 8 }).notNull(),
+  consumedCostUsd: numeric('consumed_cost_usd', { precision: 14, scale: 8 }),
+  status: text('status').notNull().default('reserved'),
+  inputTokens: bigint('input_tokens', { mode: 'number' }),
+  outputTokens: integer('output_tokens'),
+  cachedInputTokens: bigint('cached_input_tokens', { mode: 'number' }),
+  createdAt: now('created_at'),
+  settledAt: ts('settled_at'),
+});
+
+export const partnerWatchChecks=pgTable('partner_watch_checks',{
+  id:uuid('id').primaryKey().defaultRandom(),workspaceId:uuid('workspace_id').notNull(),agentId:uuid('agent_id').notNull(),
+  ownerUserId:uuid('owner_user_id').notNull(),assignmentId:uuid('assignment_id').notNull(),assignmentRevision:integer('assignment_revision').notNull(),
+  screeningRunId:uuid('screening_run_id').notNull().unique(),sourceId:text('source_id').notNull(),sourceScopeSha256:text('source_scope_sha256').notNull(),
+  maxApiRequests:integer('max_api_requests').notNull(),apiRequestsUsed:integer('api_requests_used').notNull().default(0),
+  maxCostUsdPerRun:numeric('max_cost_usd_per_run',{precision:8,scale:6}).notNull(),maxCostUsdPerDay:numeric('max_cost_usd_per_day',{precision:8,scale:6}).notNull(),
+  maxModelCalls:integer('max_model_calls').notNull(),status:text('status').notNull().default('checking'),
+  candidateFingerprints:jsonb('candidate_fingerprints').notNull().default({}),changedCandidateIds:uuid('changed_candidate_ids').array().notNull().default([]),
+  selectedCandidateId:uuid('selected_candidate_id'),previousScreeningRunId:uuid('previous_screening_run_id'),changeSummary:jsonb('change_summary').notNull().default([]),
+  runId:uuid('run_id').unique(),reviewId:uuid('review_id').unique(),errorCode:text('error_code'),checkedAt:now('checked_at'),completedAt:ts('completed_at'),cancelledAt:ts('cancelled_at'),
+});
+
 export const partnerCandidates = pgTable(
   'partner_candidates',
   {
@@ -1697,6 +1734,10 @@ export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
   inboundMessageId: uuid('inbound_message_id'),
   inReplyTo: text('in_reply_to'),
   referencesHeader: text('references_header'),
+  // 0082: a person settled an uncertain send after checking the mailbox.
+  settledOutcome: text('settled_outcome'),
+  settledBy: uuid('settled_by'),
+  settledAt: ts('settled_at'),
 });
 
 // 0076: role inboxes that receive forwarded mail (decision C98).
@@ -2535,6 +2576,8 @@ export const ALL_TABLES = {
   onboarding_sample_events: onboardingSampleEvents,
   partner_screening_runs: partnerScreeningRuns,
   partner_source_artifacts: partnerSourceArtifacts,
+  partner_watch_checks:partnerWatchChecks,
+  partner_watch_model_reservations: partnerWatchModelReservations,
   partner_candidates: partnerCandidates,
   partner_contact_enrichments: partnerContactEnrichments,
   partner_engagements: partnerEngagements,

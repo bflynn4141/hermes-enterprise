@@ -324,9 +324,9 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
         {confirmDelete
           ? <div className="admin-roles-actions">
             <Button disabled={deleting} onClick={() => setConfirmDelete(false)}>Keep</Button>
-            <Button primary disabled={deleting} onClick={remove}>{deleting ? 'Deleting…' : 'Delete'}</Button>
+            <Button danger primary disabled={deleting} onClick={remove}>{deleting ? 'Deleting…' : 'Delete'}</Button>
           </div>
-          : <Button disabled={role.members.length > 0} onClick={() => { setDeleteProblem(null); setConfirmDelete(true); }}>Delete role</Button>}
+          : <Button danger disabled={role.members.length > 0} onClick={() => { setDeleteProblem(null); setConfirmDelete(true); }}>Delete role</Button>}
       </>}
     />}
   </>;

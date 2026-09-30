@@ -11,6 +11,7 @@ import {
 import type { RuntimeCallRecord } from '../../src/runtime/store.js';
 import type { Env } from '../../src/env.js';
 import { FakeAgentDb } from './engine/fake-db.js';
+import { RuntimeBudgetError } from '../../src/runtime/budget.js';
 import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 
 const workspaceId = FakeAgentDb.WORKSPACE_ID;
@@ -484,6 +485,56 @@ describe('workspace model credential proxy', () => {
       modelId: selected, provider: 'nous_portal', keyId: 'key-1', status: 'error',
     }));
   });
+  it('blocks a paused watch before resolving credentials or calling the provider', async () => {
+    const store = { ...makeModelDb(), assertPartnerWatchAuthority: vi.fn(async () => {
+      throw new RuntimeBudgetError('partner_watch_budget_authorization_stale');
+    }) };
+    const fetcher = vi.fn<typeof fetch>();
+    const response = await proxyRuntimeModel(env, store, workspaceId, agentId,
+      { model: 'nousresearch/hermes-4', messages: [] }, fetcher);
+    expect(await response.json()).toMatchObject({ error: { code: 'partner_watch_budget_authorization_stale' } });
+    expect(store.resolveCredential).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('reserves a watch before dispatch, strips native/paid tools and holds ambiguous errors', async () => {
+    const order: string[] = [];
+    const store = {
+      ...makeModelDb(), assertPartnerWatchAuthority: vi.fn(async () => true),
+      runtimeBudgetForRun: async () => ({
+        kind: 'partner_watch' as const, budgetId: 'check-1', authorizationState: 'admitted', state: 'active', modelId: selected,
+        maxOutputTokensPerCall: 2048, contextLength: 32_000, pricingVerifiedOn: '2026-09-15',
+        pricing: { input: 1, output: 2, cachedInput: 0.25 },
+      }),
+      reserveRuntimeBudget: vi.fn(async () => { order.push('reserve'); return { kind: 'partner_watch' as const, reservationId: 'r-1', budgetId: 'check-1' }; }),
+      reconcileRuntimeBudget: vi.fn(async () => undefined),
+    };
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      order.push('dispatch');
+      const sent = JSON.parse(String(init?.body));
+      expect(sent.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(['get_partner_candidate','propose_approval']);
+      expect(sent.tool_choice).toBe('auto');
+      return new Response('upstream failed after accepting request', { status: 503 });
+    });
+    const tools = ['get_partner_candidate','propose_approval','suggest_reply','execute_shell','agentcash_fetch'].map((name) => ({ type: 'function', function: { name } }));
+    await proxyRuntimeModel(env, store, workspaceId, agentId,
+      { model: 'nousresearch/hermes-4', messages: [], tools, tool_choice: { function: { name: 'execute_shell' } } }, fetcher);
+    expect(order).toEqual(['reserve','dispatch']);
+    expect(store.reserveRuntimeBudget).toHaveBeenCalledWith(expect.objectContaining({ kind: 'partner_watch', runAttempt: 1, inputTokenBound: 29_952, outputTokenBound: 2048 }));
+    expect(store.reconcileRuntimeBudget).toHaveBeenCalledWith({ kind: 'partner_watch', reservationId: 'r-1', resolution: 'unresolved' });
+  });
+  it('refuses a watch with unknown prices before accessing credentials', async () => {
+    const store = {
+      ...makeModelDb(), assertPartnerWatchAuthority: async () => true,
+      runtimeBudgetForRun: async () => ({
+        kind: 'partner_watch' as const, budgetId: 'check-1', authorizationState: 'admitted', state: 'active', modelId: selected,
+        maxOutputTokensPerCall: 2048, contextLength: 32_000, pricingVerifiedOn: null, pricing: null,
+      }), reserveRuntimeBudget: vi.fn(), reconcileRuntimeBudget: vi.fn(),
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    const response = await proxyRuntimeModel(env, store, workspaceId, agentId, { model: 'nousresearch/hermes-4', messages: [] }, fetcher);
+    expect(await response.json()).toMatchObject({ error: { code: 'partner_watch_budget_price_unknown' } });
+    expect(store.resolveCredential).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+  });
   it('reserves an approved plan before fetch and reconciles final streamed usage', async () => {
     const store = {
       ...makeModelDb(),
@@ -560,5 +611,25 @@ describe('Hermes model metadata contract', () => {
         { id: 'fixture/invalid', object: 'model', created: 0, owned_by: 'openrouter' },
       ],
     });
+  });
+});
+
+
+describe('partner watch tool fences', () => {
+  it('blocks all writes other than the narrowly validated approval draft before execution', async () => {
+    const store = Object.assign(db(), { assertPartnerWatchAuthority: async () => true });
+    const initialTurns = store.turns.length;
+    for (const name of ['suggest_reply','suggest_handoff','ask_for_context','fetch_url','list_requests']) {
+      await expect(dispatchRuntimeCall(store, workspaceId, agentId, call(name)))
+        .rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
+    }
+    expect(store.turns).toHaveLength(initialTurns);
+  });
+  it('rechecks watch authority before replaying even an already completed tool call', async () => {
+    const store = Object.assign(db(), { assertPartnerWatchAuthority: async () => false });
+    await dispatchRuntimeCall(store, workspaceId, agentId, call());
+    store.assertPartnerWatchAuthority = async () => { throw new RuntimeBudgetError('partner_watch_budget_authorization_stale'); };
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call()))
+      .rejects.toMatchObject({ reason: 'partner_watch_budget_authorization_stale' });
   });
 });

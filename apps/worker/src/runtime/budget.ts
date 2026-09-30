@@ -6,7 +6,10 @@
 // happen before fetch. If a provider accepted a call but its usage cannot be
 // recovered, the upper bound remains consumed rather than being released.
 
+export type RuntimeBudgetKind = 'partner_watch';
+
 export interface RuntimeBudgetContext {
+  readonly kind?: RuntimeBudgetKind;
   readonly budgetId: string | null;
   readonly authorizationState: string;
   readonly state: string | null;
@@ -22,6 +25,7 @@ export interface RuntimeBudgetContext {
 }
 
 export interface RuntimeBudgetReservation {
+  readonly kind?: RuntimeBudgetKind;
   readonly reservationId: string;
   readonly budgetId: string;
 }
@@ -37,6 +41,8 @@ export type RuntimeBudgetResolution = 'completed' | 'rejected' | 'unresolved' | 
 export interface RuntimeBudgetDb {
   runtimeBudgetForRun?(runId: string): Promise<RuntimeBudgetContext | null>;
   reserveRuntimeBudget?(input: {
+    kind?: RuntimeBudgetKind;
+    runAttempt?: number;
     runId: string;
     modelId: string;
     inputTokenBound: number;
@@ -44,6 +50,7 @@ export interface RuntimeBudgetDb {
     reservedCostUsd: number;
   }): Promise<RuntimeBudgetReservation>;
   reconcileRuntimeBudget?(input: {
+    kind?: RuntimeBudgetKind;
     reservationId: string;
     resolution: RuntimeBudgetResolution;
     usage?: RuntimeUsage;
@@ -95,15 +102,19 @@ export function inputTokenUpperBound(value: Record<string, unknown>): number {
   return encoded + 128 * (messages + tools + 1);
 }
 
+function budgetFailure(context: RuntimeBudgetContext, reason: string): RuntimeBudgetError {
+  return new RuntimeBudgetError(`${context.kind === 'partner_watch' ? 'partner_watch' : 'approval'}_budget_${reason}`);
+}
+
 function checkedPricing(context: RuntimeBudgetContext): {
   input: number;
   output: number;
   cachedInput: number;
 } {
-  if (!context.pricingVerifiedOn || !context.pricing) throw new RuntimeBudgetError('approval_budget_price_unknown');
+  if (!context.pricingVerifiedOn || !context.pricing) throw budgetFailure(context, 'price_unknown');
   const { input, output, cachedInput } = context.pricing;
   if (!finiteNonNegative(input) || !finiteNonNegative(output)) {
-    throw new RuntimeBudgetError('approval_budget_price_unknown');
+    throw budgetFailure(context, 'price_unknown');
   }
   return {
     input,
@@ -154,16 +165,16 @@ export async function prepareRuntimeBudget(
   const context = await db.runtimeBudgetForRun?.(runId);
   if (context === null || context === undefined) return null;
   if (context.authorizationState !== 'admitted') {
-    throw new RuntimeBudgetError('approval_budget_authorization_stale');
+    throw budgetFailure(context, 'authorization_stale');
   }
-  if (!context.budgetId) throw new RuntimeBudgetError('approval_budget_missing');
-  if (context.state !== 'active') throw new RuntimeBudgetError('approval_budget_exhausted');
-  if (context.modelId !== modelId) throw new RuntimeBudgetError('approval_budget_model_mismatch');
+  if (!context.budgetId) throw budgetFailure(context, 'missing');
+  if (context.state !== 'active') throw budgetFailure(context, 'exhausted');
+  if (context.modelId !== modelId) throw budgetFailure(context, 'model_mismatch');
   if (!db.reserveRuntimeBudget || !db.reconcileRuntimeBudget) {
-    throw new RuntimeBudgetError('approval_budget_store_unavailable');
+    throw budgetFailure(context, 'store_unavailable');
   }
 
-  if (!context.maxOutputTokensPerCall) throw new RuntimeBudgetError('approval_budget_output_bound_required');
+  if (!context.maxOutputTokensPerCall) throw budgetFailure(context, 'output_bound_required');
   if (forwarded.stream === true) {
     const existing = object(forwarded.stream_options) ? forwarded.stream_options : {};
     forwarded.stream_options = { ...existing, include_usage: true };
@@ -176,12 +187,17 @@ export async function prepareRuntimeBudget(
   // changing a caller that believed it had more room.
   if (requested === null) forwarded.max_tokens = outputTokenBound;
   if (outputTokenBound > context.maxOutputTokensPerCall) {
-    throw new RuntimeBudgetError('approval_budget_output_bound_exceeded');
+    throw budgetFailure(context, 'output_bound_exceeded');
   }
-  const inputTokenBound = inputTokenUpperBound(forwarded);
-  if (!context.contextLength || inputTokenBound + outputTokenBound > context.contextLength) {
-    throw new RuntimeBudgetError('approval_budget_context_bound_unknown');
+  const estimatedInputBound = inputTokenUpperBound(forwarded);
+  if (!context.contextLength || estimatedInputBound + outputTokenBound > context.contextLength) {
+    throw budgetFailure(context, 'context_bound_unknown');
   }
+  // Watch admission uses the entire catalog context ceiling. Hidden provider
+  // chat framing cannot turn a tokenizer estimate into an overspend. Approved
+  // continuations retain their existing reviewed token-admission behavior.
+  const inputTokenBound = context.kind === 'partner_watch'
+    ? context.contextLength - outputTokenBound : estimatedInputBound;
   const reservedCostUsd = maximumRuntimeCostUsd(context, inputTokenBound, outputTokenBound);
   return { context, inputTokenBound, outputTokenBound, reservedCostUsd };
 }

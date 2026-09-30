@@ -18,6 +18,8 @@ import { matchesManagedRuntimeAttestation, type ManagedRuntimeIdentity } from '.
 import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 
 export interface RuntimePersistence extends AgentDb {
+  /** Persisted enterprise authority may refuse a native success (e.g. missing required review). */
+  terminalOutcome?(runId: string): Promise<{ status: 'completed' | 'stopped' | 'error'; error: RunErrorInput | null } | null>;
   /** Collapse a serial runtime phase into one tenant-scoped database transaction. */
   withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
   /**
@@ -595,10 +597,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       // before its polling loop receives /stop. A confirmed terminal failure
       // after the person's Stop is still stopped work, not a retry prompt.
       const stoppedStatus = status.status === 'cancelled' || (!completed && (stopped || await db.stopRequested(run.id)));
-      const finalStatus = completed ? 'completed' : stoppedStatus ? 'stopped' : 'error';
+      let finalStatus: 'completed' | 'stopped' | 'error' = completed ? 'completed' : stoppedStatus ? 'stopped' : 'error';
       await nativeToolControl.close(finalStatus !== 'completed');
       const classified = finalStatus === 'error' ? classifyHermesFailure(status) : null;
-      const error: RunErrorInput | null = classified?.error ?? null;
+      let error: RunErrorInput | null = classified?.error ?? null;
       if (classified) {
         try {
           deps.onTerminalFailure?.({
@@ -629,12 +631,14 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: parsed.text, blocks: parsed.blocks, status: completed ? 'complete' : 'incomplete', workedMs });
       await db.appendTurn({ runId: run.id, turn: run.maxTurns + run.attempt, seq: 0, toolCallId: `hermes-final-${run.attempt}`, role: 'assistant', providerMessage: { role: 'assistant', content: parsed.text } });
       const activeMs = await db.addActiveMs(run.id, workedMs);
-      await db.finishStep({ ...progress, state: finalStatus === 'error' ? 'failed' : 'done' });
       await db.setRunStatus(run.id, finalStatus, { error, waitingFor: null, waitingLabel: null });
+      const persisted = await db.terminalOutcome?.(run.id);
+      if (persisted) { finalStatus = persisted.status; error = persisted.error; }
+      await db.finishStep({ ...progress, state: finalStatus === 'error' ? 'failed' : 'done' });
       return db.emit([
         ...guidanceEvents,
         { kind: 'run.step', payload: { run_id: run.id, attempt: run.attempt, turn: 0, step_id: 'hermes', label: 'Thinking', state: finalStatus === 'error' ? 'failed' : 'done', tool_call_id: null } },
-        { kind: 'message.final', payload: { message_id: messageId, session_id: run.sessionId, run_id: run.id, turn: 0, attempt: run.attempt, text: parsed.text, blocks: parsed.blocks, incomplete: !completed, worked_ms: workedMs } },
+        { kind: 'message.final', payload: { message_id: messageId, session_id: run.sessionId, run_id: run.id, turn: 0, attempt: run.attempt, text: parsed.text, blocks: parsed.blocks, incomplete: finalStatus !== 'completed', worked_ms: workedMs } },
         { kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: finalStatus, active_ms: activeMs, error } },
       ].map((event) => ({ ...event, sessionId: run.sessionId })));
       }));

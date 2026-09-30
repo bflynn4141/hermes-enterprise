@@ -38,8 +38,10 @@ directories.
 - Only the guarded decision route records a human decision. The `agent`
   database role must never gain permission to decide, admit, grant, or enqueue
   privileged work.
-- Keep decisions separate from effects. This repository does not execute real
-  outreach, payment, access grants, or signatures.
+- Keep decisions separate from effects. Nothing leaves the system except
+  through an approved outbox or effect record with a recorded outcome. Approved
+  email is the only real executor today; payment, access grants and signatures
+  are never executed.
 - Write state, audit records, outbox events, and durable jobs in the same
   transaction. Make every external operation idempotent and retryable.
 - Treat SQL migrations as immutable after merge. Keep Drizzle types as a mirror,

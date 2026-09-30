@@ -29,11 +29,17 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   quiet?: boolean;
   small?: boolean;
   link?: boolean;
+  /**
+   * An action that deletes, disconnects or replaces something (docs/DESIGN.md,
+   * Design system rules). Red outline where it is offered; with `primary`,
+   * solid red on the confirmation that carries it out.
+   */
+  danger?: boolean;
 }
 
-export function Button({ primary, quiet, small, link, className = '', children, ...rest }: ButtonProps) {
+export function Button({ primary, quiet, small, link, danger, className = '', children, ...rest }: ButtonProps) {
   return (
-    <button type="button" className={`btn ${primary ? 'primary' : ''} ${quiet ? 'quiet' : ''} ${small ? 'small' : ''} ${link ? 'link' : ''} ${className}`} {...rest}>
+    <button type="button" className={`btn ${primary ? 'primary' : ''} ${quiet ? 'quiet' : ''} ${small ? 'small' : ''} ${link ? 'link' : ''} ${danger ? 'danger' : ''} ${className}`} {...rest}>
       {children}
     </button>
   );
@@ -518,9 +524,70 @@ export function Skeleton({ rows = 3, label = 'Loading' }: { rows?: number; label
   );
 }
 
-/** A short status label. `tone` is ok, warn or muted (the default). */
-export function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: 'ok' | 'warn' | 'muted' | string }) {
-  return <span className={`pill pill-${tone}`}>{children}</span>;
+/** A short status label. `tone` is ok, warn, info, danger or muted (the default); `icon` is a stroke icon before the words. */
+export function Pill({ children, tone = 'muted', icon }: { children: ReactNode; tone?: 'ok' | 'warn' | 'info' | 'danger' | 'muted' | string; icon?: string }) {
+  return <span className={`pill pill-${tone}`}>{icon && <Icon name={icon} size={12} strokeWidth={2} />}{children}</span>;
+}
+
+export type StatusTone = 'ok' | 'working' | 'ready' | 'warn' | 'problem' | 'muted';
+
+/**
+ * A state as a coloured dot and, usually, its word (Vercel Geist's StatusDot).
+ * ok is green (connected, receiving), ready is the accent (waiting for a
+ * person), warn amber (paused), problem red, muted grey. Only `working` moves,
+ * and not under reduced motion. `hint` is the one sentence of why, on hover.
+ */
+export function StatusDot({ tone, label, hint }: { tone: StatusTone; label?: string; hint?: string }) {
+  return <span className="status-dot" data-tone={tone} title={hint}>
+    <span className="status-dot-mark" aria-hidden="true" />
+    {label ? <span className="status-dot-label">{label}</span> : <span className="sr-only">{hint ?? tone}</span>}
+  </span>;
+}
+
+/**
+ * A value people copy, such as an email address (AI Elements' Snippet): the
+ * value in monospace and a copy button that turns into a check for a moment.
+ * `label` names the value for screen readers ("Iris's address").
+ */
+export function Snippet({ value, label, className = '' }: { value: string; label: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = (): void => {
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1600);
+    }, () => undefined);
+  };
+  return (
+    <span className={`snippet ${className}`}>
+      {/* An address breaks before its @ when it must, not mid-word. */}
+      <code>{value.includes('@') ? <>{value.slice(0, value.indexOf('@'))}<wbr />{value.slice(value.indexOf('@'))}</> : value}</code>
+      <button type="button" className="snippet-copy" aria-label={copied ? 'Copied' : `Copy ${label}`} onClick={copy} data-copied={copied || undefined}>
+        <Icon name={copied ? 'check' : 'copy'} size={15} strokeWidth={1.8} />
+      </button>
+      <span className="sr-only" role="status">{copied ? 'Copied' : ''}</span>
+    </span>
+  );
+}
+
+/**
+ * One row of a list (shadcn's Item, Vercel's Entity): something to recognise
+ * it by, a title with one line under it, and at most two controls. More
+ * actions than that belong on the record's own page.
+ */
+export function Item({ media, title, description, actions, className = '' }: { media?: ReactNode; title: ReactNode; description?: ReactNode; actions?: ReactNode; className?: string }) {
+  return (
+    <div className={`item ${className}`}>
+      {media && <div className="item-media">{media}</div>}
+      <div className="item-content">
+        <div className="item-title">{title}</div>
+        {description && <div className="item-description">{description}</div>}
+      </div>
+      {actions && <div className="item-actions">{actions}</div>}
+    </div>
+  );
 }
 
 /**

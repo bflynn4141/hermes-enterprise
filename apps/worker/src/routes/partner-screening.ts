@@ -56,6 +56,7 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
       503,
     );
   }
+  if(configured.config.github_watch) throw new RouteError('Use the watch’s Run now control so its source and model allowances stay attached.','partner_watch_use_wake',409);
   const authentication = configured.config.source === 'agentcash_people'
     ? 'wallet' as const
     : c.env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;

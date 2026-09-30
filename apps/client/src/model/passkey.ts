@@ -1,4 +1,4 @@
-// Creates the Admin's workspace-owner passkey (C101).
+// Creates the Admin's workspace-owner passkey (C103).
 //
 // The Worker issues a single-use challenge; the browser's authenticator creates
 // a passkey for the deployment's relying party and returns an attestation. The

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { partnerSourceMatrixSchema, type PartnerSourceMatrix } from '@hermes/shared';
+import { partnerSourceMatrixSchema, partnerWatchSettingsSchema, type PartnerSourceMatrix } from '@hermes/shared';
 import type { Env } from '../env.js';
 
 const weightsSchema = z
@@ -33,6 +33,7 @@ export const partnerAgentConfigSchema = z
     max_api_requests: z.number().int().min(1).max(30).default(12),
     minimum_rate_remaining: z.number().int().min(0).max(1000).default(5),
     max_spend_usd: z.number().min(0).max(0.2).default(0),
+    github_watch: partnerWatchSettingsSchema.optional(),
     people_search: z
       .object({
         current_position_seniority_level: z
@@ -57,6 +58,9 @@ export const partnerAgentConfigSchema = z
     message: 'at least one search query or explicit intake URL is required',
   })
   .superRefine((config, context) => {
+    if(config.github_watch && (config.github_watch.max_cost_usd_per_day<config.github_watch.max_cost_usd_per_run || config.source!=='github')) {
+      context.addIssue({code:'custom',message:'A free GitHub watch must have a daily allowance covering one run.'});
+    }
     if (config.source === 'github') {
       if (config.source_purpose !== 'organization_partner_research' || !config.organization_only) {
         context.addIssue({ code: 'custom', message: 'GitHub discovery must remain organization-only.' });
@@ -221,6 +225,7 @@ export function configSnapshot(config: PartnerAgentConfig): Record<string, unkno
     max_api_requests: config.max_api_requests,
     minimum_rate_remaining: config.minimum_rate_remaining,
     max_spend_usd: config.max_spend_usd,
+    ...(config.github_watch ? { github_watch: config.github_watch } : {}),
     people_search: config.people_search,
   };
 }

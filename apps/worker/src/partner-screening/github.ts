@@ -73,6 +73,7 @@ export interface GitHubDiscoveryResult {
 
 interface GitHubClientOptions {
   readonly fetcher: PartnerFetch;
+  readonly beforeRequest?: () => Promise<void>;
   readonly token?: string;
   readonly maxRequests: number;
   readonly minimumRateRemaining: number;
@@ -146,6 +147,7 @@ export class GitHubPublicApi {
       );
     }
     const url = `https://api.github.com${path}`;
+    await this.options.beforeRequest?.();
     const headers = new Headers({
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2026-03-10',
@@ -229,7 +231,7 @@ const searchArtifactContent = (query: string, parsed: z.infer<typeof searchSchem
 
 export async function discoverGitHubOrganizations(
   config: PartnerAgentConfig,
-  options: { fetcher: PartnerFetch; token?: string; now?: () => Date },
+  options: { fetcher: PartnerFetch; token?: string; now?: () => Date; beforeRequest?: () => Promise<void> },
 ): Promise<GitHubDiscoveryResult> {
   const now = options.now ?? (() => new Date());
   const client = new GitHubPublicApi({
@@ -238,6 +240,7 @@ export async function discoverGitHubOrganizations(
     maxRequests: config.max_api_requests,
     minimumRateRemaining: config.minimum_rate_remaining,
     now,
+    beforeRequest: options.beforeRequest,
   });
   const artifacts: SourceArtifactInput[] = [];
   const organizations = new Map<string, {

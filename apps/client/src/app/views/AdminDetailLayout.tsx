@@ -3,7 +3,7 @@ import { ADMIN } from '@hermes/shared';
 import { ADMIN_SETTINGS_GROUPS, adminSectionOf } from '../../model/constants.js';
 import { useNav } from '../store-context.js';
 import { BrandIcon, type BrandName } from '../ui/brand-icons.js';
-import { Pill, Tabs } from '../ui/primitives.js';
+import { Pill, StatusDot, Tabs } from '../ui/primitives.js';
 
 /**
  * Every Admin page: its own address, its section in the rail, its siblings as
@@ -105,7 +105,7 @@ export function AdminSettingsCard({ title, description, children, footer, danger
         {brand && <BrandIcon name={brand} size={28} />}
         <div className="admin-settings-card-heading">
           <div className="admin-settings-card-title"><h3>{title}</h3>{badge && (badge.tone === 'ok'
-            ? <span className="connection-ok">{badge.label}</span>
+            ? <StatusDot tone="ok" label={badge.label} />
             : <Pill tone={badge.tone}>{badge.label}</Pill>)}</div>
           {description && <p>{description}</p>}
         </div>

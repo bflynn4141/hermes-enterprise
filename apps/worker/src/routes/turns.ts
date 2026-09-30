@@ -16,6 +16,7 @@
 // from the row at the next step boundary.
 import { autoTitleFrom } from '@hermes/shared';
 import type { Context } from 'hono';
+import { requestRunStop } from '../runs/stop.js';
 import { captureContext } from '../context-snapshot.js';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
@@ -672,26 +673,11 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
     }
     // One transaction: the flag and the status. A reader that saw `stopping`
     // without the flag would resume the run.
-    await work.tx.query(
-      `UPDATE runs SET stop_requested = true, status = 'stopping', recovery_cancelled=true, recovery_next_at=NULL WHERE workspace_id = $1 AND id = $2`,
-      [work.workspaceId, runId],
-    );
     // A Stop pauses the queue rather than dropping it: the human's queued
     // messages are still theirs, and a Stop that ate them is a Stop people
     // learn not to press.
-    await work.tx.query(
-      `UPDATE run_queue SET status = 'paused' WHERE workspace_id = $1 AND run_id = $2 AND status = 'queued'`,
-      [work.workspaceId, runId],
-    );
-    work.jobs.push(
-      ...(await publishEvents(work.tx, work.workspaceId, [
-        {
-          kind: 'run.status',
-          sessionId,
-          payload: { run_id: runId, attempt: run.attempt, status: 'stopping' },
-        },
-      ])),
-    );
+    work.jobs.push(...await requestRunStop(work.tx,work.workspaceId,runId));
+    await work.tx.query('UPDATE partner_watch_checks SET cancelled_at=now() WHERE workspace_id=$1 AND run_id=$2 AND cancelled_at IS NULL AND review_id IS NULL',[work.workspaceId,runId]);
     const native = await work.tx.query<{ runtime_run_id: string | null }>(
       `SELECT runtime_run_id FROM runs WHERE id = $1 AND runtime_kind = 'hermes' AND runtime_attempt = attempt`, [runId]);
     const nativeId = native.rows[0]?.runtime_run_id ?? null;

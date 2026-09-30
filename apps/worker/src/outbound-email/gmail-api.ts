@@ -20,9 +20,24 @@ export interface GmailTokenBundle {
 }
 
 export class GmailApiError extends Error {
-  constructor(message: string, readonly status: number, readonly retryable: boolean) {
+  /**
+   * `grantRevoked`: the OAuth server answered `invalid_grant`, so the stored
+   * refresh token will never work again and a person must reconnect. Any other
+   * failure (a bad client secret, an outage) says nothing about the account.
+   */
+  constructor(message: string, readonly status: number, readonly retryable: boolean, readonly grantRevoked = false) {
     super(message);
     this.name = 'GmailApiError';
+  }
+}
+
+/** The OAuth `error` field of a failed token response, if it has one (RFC 6749 section 5.2). */
+export async function oauthErrorCode(response: Response): Promise<string | null> {
+  try {
+    const body = await response.json() as { error?: unknown };
+    return typeof body.error === 'string' ? body.error : null;
+  } catch {
+    return null;
   }
 }
 
@@ -32,7 +47,10 @@ async function tokenRequest(body: URLSearchParams, fetcher: typeof fetch): Promi
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
   });
-  if (!response.ok) throw new GmailApiError('gmail_oauth_exchange_failed', response.status, response.status >= 500 || response.status === 429);
+  if (!response.ok) {
+    const code = await oauthErrorCode(response);
+    throw new GmailApiError('gmail_oauth_exchange_failed', response.status, response.status >= 500 || response.status === 429, code === 'invalid_grant');
+  }
   return tokenSchema.parse(await response.json());
 }
 

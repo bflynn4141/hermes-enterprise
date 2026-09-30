@@ -97,6 +97,19 @@ describe('renderHistoryRow', () => {
     expect(row.status).toBe('Not sent');
   });
 
+  it('asks a person to check the mailbox after an interrupted send', () => {
+    const row = renderHistoryRow(base({
+      kind: 'outbound_email.ambiguous',
+      actor_type: 'system',
+      actor_name: null,
+      request_kind: 'approval',
+      request_label: 'Reply to Priya Raman',
+    }));
+    expect(row.text).toBe('Reply to Priya Raman may or may not have been sent');
+    expect(row.detail).toMatch(/Check the mailbox/);
+    expect(HISTORY_NEEDS_PERSON).toContain(row.status);
+  });
+
   it('marks finished work finished and waiting work as needing a person', () => {
     const pending = renderHistoryRow(base({ request_kind: 'invoice', request_status: 'pending', request_label: 'Robin' }));
     expect(pending.status).toBe('Needs review');

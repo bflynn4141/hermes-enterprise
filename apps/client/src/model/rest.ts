@@ -43,6 +43,8 @@ import {
   type InboundEmailListItem,
   type InboundEmailView,
   agentRecoveryViewSchema,
+  partnerWatchSchema,
+  type PartnerWatchUpdate,
   agentProvisioningResponseSchema,
   catalogPageSchema,
   errorBodySchema,
@@ -121,6 +123,13 @@ import {
   type CreateSharedIntelligenceProposal,
   type CreateSharedIntelligenceGoal,
   type SharedIntelligenceTriageDecision,
+  emailSendListSchema,
+  type EmailSendList,
+  type SettleEmailSendInput,
+  connectorListSchema,
+  type ConnectorList,
+  mailboxDisconnectSchema,
+  type MailboxDisconnect,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -399,6 +408,10 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt, ...(expectedSettings ? { expected_settings: expectedSettings } : {}) }) as Promise<RunView>,
+    partnerWatch: (workspaceId: string, agentId: string) =>
+      request('GET', `${ws(workspaceId)}/partner-screening/agents/${agentId}/watch`, partnerWatchSchema),
+    updatePartnerWatch: (workspaceId: string, agentId: string, body: PartnerWatchUpdate) =>
+      request('PATCH', `${ws(workspaceId)}/partner-screening/agents/${agentId}/watch`, partnerWatchSchema, body),
     agentRecovery: (workspaceId: string, agentId: string, runId?: string) =>
       request('GET', `${ws(workspaceId)}/agents/${agentId}/recovery${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`, agentRecoveryViewSchema),
     wakeAgent: (workspaceId: string, agentId: string, body: AgentWakeInput) =>
@@ -440,6 +453,10 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/revisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    getEmailSends: (workspaceId: string, requestId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/email-sends`, emailSendListSchema) as Promise<EmailSendList>,
+    settleEmailSend: (workspaceId: string, requestId: string, sendId: string, body: SettleEmailSendInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/email-sends/${sendId}/settlement`, emailSendListSchema, body, { requestedFrom: 'inbox' }) as Promise<EmailSendList>,
     routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
@@ -678,6 +695,9 @@ export function createRest(options: RestOptions) {
     rotateProviderKey: (workspaceId: string, id: string, key: string) =>
       request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
+    disconnectOutboundEmail: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/email`, mailboxDisconnectSchema) as Promise<MailboxDisconnect>,
+    disconnectGmailEvidence: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/email/evidence`, mailboxDisconnectSchema) as Promise<MailboxDisconnect>,
+    connections: (workspaceId: string) => request('GET', `${ws(workspaceId)}/connections`, connectorListSchema) as Promise<ConnectorList>,
     slackConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/slack`, slackConnectionSchema),
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
