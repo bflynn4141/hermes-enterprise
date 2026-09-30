@@ -260,6 +260,13 @@
         // before any delivery. Enabled on staging for the Finance rehearsal.
         "HERMES_MEMBER_PROVISIONING_ENABLED": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
+        // Turnkey workspace wallets (C103): Admins create the owner passkey and
+        // member wallets against Hermes's parent org. The parent org id and API
+        // key pair are Worker secrets. Signing and payments are not built yet.
+        "TURNKEY_WALLETS_ENABLED": "1",
+        "TURNKEY_PROVISIONING_ENABLED": "1",
+        "TURNKEY_MEMBER_WALLETS_ENABLED": "1",
+        "TURNKEY_PASSKEY_RP_ID": "staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.
         // 25af3af (#191) adds the email intake tools for inbox agents (C98);
