@@ -64,6 +64,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       agentless: params.get('agent') === 'none',
       wallets: params.get('wallets') === 'enabled' ? 'enabled' : params.get('wallets') === 'fail' ? 'fail' : params.get('wallets') === 'reauth' ? 'reauth' : undefined,
       walletRoot: params.get('walletRoot') === 'ambiguous' ? 'ambiguous' : params.get('walletRoot') === 'stalled' ? 'stalled' : undefined,
+      walletDemo: params.get('walletDemo') === 'funded' ? 'funded' : params.get('walletDemo') === 'partial' ? 'partial' : undefined,
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       pendingAgentApproval: params.has('pendingAgentApproval'),
       partnerWatch: ['ready', 'baseline', 'changed', 'failed', 'conflict', 'admin-paused', 'ambiguous', 'unavailable', 'readonly'].includes(params.get('partnerWatch') ?? '') ? params.get('partnerWatch') as 'ready' | 'baseline' | 'changed' | 'failed' | 'conflict' | 'admin-paused' | 'ambiguous' | 'unavailable' | 'readonly' : undefined,

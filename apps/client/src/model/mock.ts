@@ -140,6 +140,8 @@ interface MockOptions {
   wallets?: 'enabled' | 'fail' | 'reauth';
   /** `ambiguous`: Turnkey's answer to the owner-passkey setup is lost once, so the Admin must check setup. */
   walletRoot?: 'ambiguous' | 'stalled';
+  /** Sample data: a verified owner and two funded member wallets, for reviewing balances. `partial`: one can't be read. */
+  walletDemo?: 'funded' | 'partial';
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
@@ -1555,6 +1557,35 @@ export function createMockBackend(input: MockOptions = {}) {
       return json(current);
     }
 
+    if (options.walletDemo && walletRoot.status === 'not_started') {
+      walletRoot = { status: 'verified', available: true, owner_name: 'Maya Chen', verified_at: iso(-60) };
+      for (const [index, member] of members.filter(m => m.status === 'active').slice(0, 2).entries()) {
+        memberWallets.set(member.id, { member_id: member.id, wallet_status: 'ready', address: `0x${String(index + 1).repeat(40)}`,
+          payment_review: { allowed: null, confirmed_at: null }, owner: { member_id: MAYA_MEMBER, name: 'Maya Chen', is_current_user: seat === 'admin' },
+          capability: { available: true, reason: null }, payment_capability: { available: false, reason: 'member_authenticator_and_policy_required' },
+          operation: null, can_manage: seat === 'admin' });
+      }
+    }
+    if (p('/wallets/balances') && method === 'GET') {
+      // Sample balances: fixed amounts per address, never fetched from a chain.
+      const sample: Record<number, import('@hermes/shared').WalletAsset[]> = {
+        0: [{ symbol: 'USDC', name: 'USD Coin', decimals: 6, amount: '1250000000', usd: '1250.00' }, { symbol: 'ETH', name: 'Ether', decimals: 18, amount: '500000000000000000', usd: '1325.51' }, { symbol: 'DEGEN', name: 'Degen', decimals: 18, amount: '12000000000000000000', usd: '0.09' }],
+        1: [{ symbol: 'USDC', name: 'USD Coin', decimals: 6, amount: '10500000', usd: '10.50' }],
+      };
+      const ready = [...memberWallets.values()].filter(w => w.wallet_status === 'ready' && w.address && (seat === 'admin' || members.find(m => m.id === w.member_id)?.user_id === viewerUserId));
+      const accounts = walletRoot.status !== 'verified' || !options.wallets ? [] : ready.map((w, index) => {
+        const unavailable = options.walletDemo === 'partial' && index === 1;
+        const assets = unavailable ? [] : sample[index] ?? [];
+        const cents = assets.reduce((total, a) => total + Math.round(Number(a.usd ?? 0) * 100), 0);
+        return { principal_id: mockUuid(8900 + index), kind: 'member' as const, member_id: w.member_id, agent_id: null,
+          label: members.find(m => m.id === w.member_id)?.name ?? 'Member', address: w.address!.toLowerCase(),
+          status: unavailable ? 'unavailable' as const : 'ok' as const, usd: unavailable ? null : (cents / 100).toFixed(2), assets };
+      });
+      const readable = accounts.filter(a => a.status === 'ok');
+      const total = readable.reduce((sum, a) => sum + Math.round(Number(a.usd) * 100), 0);
+      return json({ available: walletRoot.status === 'verified' && Boolean(options.wallets), network: 'Base',
+        usd: readable.length ? (total / 100).toFixed(2) : null, partial: readable.length < accounts.length, read_at: accounts.length ? iso(0) : null, accounts });
+    }
     if (p('/wallets') && method === 'GET') return json({ enabled: Boolean(options.wallets), chain_id: 8453, asset: 'USDC', setup_status: walletRecords.length ? 'awaiting_owner_enrollment' : 'not_configured', can_manage: seat === 'admin', items: seat === 'admin' ? walletRecords : walletRecords.filter(row => row.member_id === members.find(member => member.user_id === viewerUserId)?.id),
       root: options.wallets ? walletRoot : { status: 'not_started', available: false, owner_name: null, verified_at: null } });
     // Owner passkey setup (C103). Reasons and messages match the Worker's.

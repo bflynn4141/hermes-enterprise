@@ -64,6 +64,32 @@ Verified so far against a faithful fake of Turnkey's API, a real browser passkey
 (Chrome's virtual authenticator) and the mock app; not yet against Turnkey
 itself.
 
+## Balances
+
+Once the wallet owner is verified, **Admin → Wallets → Balances** shows the
+workspace total and each wallet's Base balance, short address (copy gives the
+full address) and tokens on demand. Admins see every wallet; a member sees their
+own and their agents' (`GET /w/:ws/wallets/balances`).
+
+- Balances come from **Zerion** when `ZERION_API_KEY` is set (the default for
+  now): Base positions, simple and non-spam, in USD. Only public wallet addresses
+  are sent. Each address is cached for 60 seconds so the free developer plan
+  (2,000 requests a day, 3 a second) covers a busy page.
+- Without a Zerion key, they come from Turnkey's balances query
+  (`get_wallet_address_balances`, `eip155:8453`) with the parent's read access.
+  Turnkey refuses that query on its free plan ("requires a Pay As You Go, Pro, or
+  Enterprise billing org"), so it is the path once Turnkey billing is on.
+- No database transaction is held while either provider answers.
+- Amounts stay in atomic units and are formatted with integer math. USD values
+  are Turnkey's display figures; totals add them in exact cents.
+- A wallet Turnkey can't read right now shows **Unavailable**, is left out of the
+  total, and the card says so. It is never shown as zero.
+- Tokens worth under $1 sit behind the **Small balances** switch.
+
+The layout follows Splits' account screens (one large total with smaller cents,
+rows of name, short address and balance, tokens on demand, a small-balances
+switch), as shown on Splits' public Treasury page.
+
 ## Where it is on
 
 - **Staging** (from September 30, 2026): wallet owner setup and member wallets

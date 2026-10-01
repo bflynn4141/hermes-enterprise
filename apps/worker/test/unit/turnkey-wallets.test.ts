@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { decompressP256, p1363ToDer, stampRequest } from '../../src/wallets/turnkey-stamp.js';
 import {
-  classifyActivity, createRootedSubOrganization, PARENT_KEY_ACTIVITIES, rootIsCustomerOwned, sameCredentialId, submitActivity,
+  classifyActivity, createRootedSubOrganization, PARENT_KEY_ACTIVITIES, readBaseBalances, rootIsCustomerOwned, sameCredentialId, submitActivity,
   TurnkeyAuthorityError, type TurnkeyConfig,
 } from '../../src/wallets/turnkey-client.js';
 import { turnkeySetupConfig } from '../../src/wallets/turnkey-config.js';
@@ -195,3 +195,23 @@ describe('Turnkey setup configuration', () => {
     expect(config({ TURNKEY_API_BASE_URL: 'http://127.0.0.1:9911' })?.turnkey.baseUrl).toBe('http://127.0.0.1:9911');
   });
 });
+
+describe('Turnkey balance reads', () => {
+  it('asks for Base balances in the workspace org and drops malformed entries', async () => {
+    const key = await turnkeyKey();
+    const { fetcher, seen } = fakeTurnkey(() => json({ balances: [
+      { symbol: 'USDC', name: 'USD Coin', decimals: 6, balance: '1500000', display: { usd: '1.50' } },
+      { symbol: 'ETH', name: 'Ether', decimals: 18, balance: '1e18', display: { usd: '2000' } },
+      { symbol: 'BAD', decimals: -1, balance: '1' },
+      { symbol: 'NOPRICE', name: 'No price', decimals: 0, balance: '7', display: { usd: 'n/a' } },
+    ] }));
+    const assets = await readBaseBalances({ baseUrl: 'https://api.turnkey.test', parentOrgId: 'parent', apiKey: key, fetch: fetcher }, 'workspace-org', '0xabc');
+    expect(seen[0]!.path).toBe('/public/v1/query/get_wallet_address_balances');
+    expect(seen[0]!.body).toEqual({ organizationId: 'workspace-org', address: '0xabc', caip2: 'eip155:8453' });
+    expect(assets).toEqual([
+      { symbol: 'USDC', name: 'USD Coin', decimals: 6, balance: '1500000', usd: '1.50' },
+      { symbol: 'NOPRICE', name: 'No price', decimals: 0, balance: '7', usd: null },
+    ]);
+  });
+});
+
