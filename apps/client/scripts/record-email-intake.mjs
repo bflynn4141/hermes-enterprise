@@ -324,7 +324,7 @@ async function story(page, base, chapter) {
   await pause(page, 2_600);
   const address = (await app.locator('.email-inbox-address code').first().textContent())?.trim();
   if (!address) throw new Error('no inbox address on screen');
-  await moveTo(page, app.locator('.email-inbox-address code').first());
+  await moveTo(page, app.locator('.email-inbox-address').first());
   await say('An address partners can use', 'Partners email Iris directly, or the team routes a shared address such as partners@ to it.');
   await pause(page, 3_200);
 

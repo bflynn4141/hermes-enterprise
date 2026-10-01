@@ -591,8 +591,14 @@ export function createRest(options: RestOptions) {
     setEmailInboxStatus: (workspaceId: string, id: string, status: 'active' | 'paused') =>
       request('PATCH', `${ws(workspaceId)}/email/inboxes/${id}`, emailInboxSchema, { status }) as Promise<EmailInbox>,
     deleteEmailInbox: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/email/inboxes/${id}`),
-    listInboxMessages: (workspaceId: string, id: string) =>
-      request('GET', `${ws(workspaceId)}/email/inboxes/${id}/messages`, inboundEmailListSchema) as Promise<InboundEmailList>,
+    listInboxMessages: (workspaceId: string, id: string, query: { q?: string; sort?: 'recent' | 'priority'; limit?: number } = {}) => {
+      const params = new URLSearchParams();
+      if (query.q?.trim()) params.set('q', query.q.trim());
+      if (query.sort) params.set('sort', query.sort);
+      if (query.limit) params.set('limit', String(query.limit));
+      const search = params.size ? `?${params}` : '';
+      return request('GET', `${ws(workspaceId)}/email/inboxes/${id}/messages${search}`, inboundEmailListSchema) as Promise<InboundEmailList>;
+    },
     getInboundEmail: (workspaceId: string, id: string) =>
       request('GET', `${ws(workspaceId)}/email/messages/${id}`, inboundEmailViewSchema) as Promise<InboundEmailView>,
     /** Asks the inbox agent to read a message again after a failed attempt. Returns its updated row. */

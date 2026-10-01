@@ -9,9 +9,10 @@
 // holder of its role). Pausing and replacing need a recent sign-in, like every
 // other Admin change to who can act.
 import { useCallback, useEffect, useState } from 'react';
-import { REQ, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
+import { INBOUND_EMAIL_LIST_MAX, REQ, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
-import { Avatar, Button, Dialog, EmptyState, Item, Pill, Skeleton, Snippet, StatusDot, type StatusTone } from '../ui/primitives.js';
+import { Avatar, Button, Dialog, EmptyState, Item, Pill, SearchField, Skeleton, Snippet, StatusDot, ToggleGroup, type StatusTone } from '../ui/primitives.js';
+import { fullTime, timeAgo } from '../ui/time.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { sortRoles } from './AdminRoles.js';
 import { useStepUp } from './use-step-up.js';
@@ -20,8 +21,13 @@ import './email-message.css';
 
 export const ADMIN_EMAIL_INBOXES_VIEW = 'Inboxes';
 
-type MailTone = 'quiet' | 'working' | 'ready' | 'problem';
-const DOT_TONE: Record<MailTone, StatusTone> = { quiet: 'muted', working: 'working', ready: 'ready', problem: 'problem' };
+type MailTone = 'quiet' | 'working' | 'ready' | 'done' | 'problem';
+const DOT_TONE: Record<MailTone, StatusTone> = { quiet: 'muted', working: 'working', ready: 'ready', done: 'ok', problem: 'problem' };
+/** Rows in the first page of an agent's email, and how many more "Show more" adds. */
+const FIRST_PAGE = 10;
+const MORE = 25;
+/** An agent with more email than this gets search and sorting. */
+const TOOLS_FROM = 5;
 
 /**
  * One email's state in the words of docs/DESIGN.md, with a sentence when a
@@ -32,7 +38,12 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
   switch (message.status) {
     case 'received': return { text: `Waiting for ${agent}`, tone: 'working', note: null };
     case 'triaging': return { text: 'Reading', tone: 'working', note: null };
-    case 'suggested': return { text: 'Ready for review', tone: 'ready', note: null };
+    // A server from before C100's list sorting does not say; read that as still waiting.
+    case 'suggested': return message.review === 'done'
+      ? { text: 'Reviewed', tone: 'done', note: null }
+      : message.review === 'changes_requested'
+      ? { text: 'Changes requested', tone: 'ready', note: 'A reviewer asked for changes. Nothing was sent.' }
+      : { text: 'Ready for review', tone: 'ready', note: null };
     case 'no_action': return message.problem === 'inbox_paused'
       ? { text: 'Inbox paused', tone: 'quiet', note: 'It arrived while the inbox was paused, so nobody read it.' }
       : { text: 'No reply suggested', tone: 'quiet', note: message.can_retry ? `You can ask ${agent} to read it again. Nothing will be sent without approval.` : null };
@@ -51,15 +62,6 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
     default: return { text: 'Updated', tone: 'quiet', note: null };
   }
 }
-
-const receivedAt = (value: string): string => {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return '';
-  const today = new Date();
-  return date.toDateString() === today.toDateString()
-    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-};
 
 export function inboxErrorMessage(error: unknown): string {
   switch ((error as { reason?: string } | null)?.reason) {
@@ -104,7 +106,36 @@ export function useAgentAddress(agentId: string): string | null | undefined {
 }
 
 export function CopyAddress({ address, name }: { address: string; name?: string }) {
-  return <Snippet className="email-inbox-address" value={address} label={name ? `${name}’s address` : 'the address'} />;
+  return <Snippet compact className="email-inbox-address" value={address} label={name ? `${name}’s email address` : 'the email address'} copiedText="Copied email address" />;
+}
+
+/**
+ * A status a person can act on, as the status itself: "Couldn't read it"
+ * becomes "Try again" under the pointer or keyboard focus, in the same space,
+ * and says why on hover. Touch screens, which have no hover, show the action.
+ */
+function RetryStatus({ message, tone, text, note, subject, busy, disabled, onRetry }: {
+  message: InboundEmailListItem; tone: StatusTone; text: string; note: string | null; subject: string;
+  busy: boolean; disabled: boolean; onRetry: () => void;
+}) {
+  const action = message.problem === 'daily_limit' ? 'Read it now' : 'Try again';
+  return (
+    <button type="button" className="email-status-action" disabled={disabled} title={note ?? undefined}
+      aria-label={`${text}. ${action}: ${subject}`} onClick={onRetry}>
+      <span className="when-idle"><StatusDot tone={tone} label={busy ? 'Asking…' : text} /></span>
+      <span className="when-active" aria-hidden="true"><Icon name="replace" size={14} strokeWidth={1.8} />{action}</span>
+    </button>
+  );
+}
+
+/** Waits `ms` after the last change before passing a value on, so typing does not send a request per key. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
 }
 
 function RecentMail({ inbox }: { inbox: EmailInbox }) {
@@ -113,7 +144,14 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   const nav = useNav();
   const [list, setList] = useState<InboundEmailList | null | 'hidden'>(null);
   const [loadError, setLoadError] = useState(false);
-  const load = useCallback(() => adapter.rest.listInboxMessages(state.workspace.id, inbox.id), [adapter, state.workspace.id, inbox.id]);
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<'recent' | 'priority'>('recent');
+  const [limit, setLimit] = useState(FIRST_PAGE);
+  const q = useSettled(search.trim(), 300);
+  // A new search or order starts from the first page again.
+  useEffect(() => setLimit(FIRST_PAGE), [q, sort]);
+  const load = useCallback(() => adapter.rest.listInboxMessages(state.workspace.id, inbox.id, { q, sort, limit }),
+    [adapter, state.workspace.id, inbox.id, q, sort, limit]);
   const polling = useEmailPolling(load,
     (result) => { setList(result); setLoadError(false); },
     (error) => {
@@ -132,7 +170,7 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
     try {
       const next = await adapter.rest.retryInboundEmail(state.workspace.id, message.id);
       setList((current) => current && current !== 'hidden'
-        ? { messages: current.messages.map((row) => row.id === next.id ? next : row) }
+        ? { ...current, messages: current.messages.map((row) => row.id === next.id ? next : row) }
         : current);
     } catch (caught) {
       setRetryProblem({ id: message.id, error: caught });
@@ -144,41 +182,57 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   const refreshProblem = loadError && <p className="email-inbox-facts" role="status">Couldn’t refresh recent email. We’ll try again. <Button small disabled={retrying !== null} onClick={polling.refresh}>Try now</Button></p>;
   if (list === null) return refreshProblem || null;
   if (list === 'hidden') return <p className="email-inbox-facts">Only the people in this role and {inbox.agent.name}’s owner can read this inbox’s email.</p>;
-  if (list.messages.length === 0) return <>{refreshProblem}<EmptyState compact icon="inbox" title="No email yet" detail="Send one to the address above to try it." /></>;
-  return <>{refreshProblem}<ul className="email-inbox-messages" aria-label={`Recent email at ${inbox.label}`}>
-    {list.messages.slice(0, 5).map((message) => {
-      const requestId = message.request_ids[0];
-      const subject = message.subject || '(no subject)';
-      const stateWords = mailState(message, inbox.agent.name);
-      const flagged = message.sender.warnings.some((warning) => warning.severity === 'caution');
-      const sender = message.sender.name ?? message.sender.address;
-      const toDo = message.brief?.action_items.filter((item) => item.owner === 'us').length ?? 0;
-      return <li key={message.id} data-tone={stateWords.tone}>
-        <Item
-          media={<Avatar person={{ name: sender }} size={32} />}
-          title={requestId
-            ? <button type="button" className="email-inbox-subject" onClick={() => nav(REQ(requestId))}>{subject}</button>
-            : <span className="email-inbox-subject">{subject}</span>}
-          description={<>
-            <span className="email-inbox-sender">{sender}</span>
-            {toDo > 0 && <Pill tone="info" icon="check">{toDo} to do</Pill>}
-            {flagged && <Pill tone="warn" icon="shield">Check the sender</Pill>}
-          </>}
-          actions={<span className="email-inbox-message-side">
-            <time dateTime={message.received_at}>{receivedAt(message.received_at)}</time>
-            <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} />
-          </span>}
-        />
-        {(stateWords.note || message.can_retry) && <span className="email-inbox-note">
-          {stateWords.note && <span>{stateWords.note}</span>}
-          {message.can_retry && <Button small disabled={retrying !== null} aria-label={`${message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}: ${subject}`} onClick={() => void retry(message)}>
-            {retrying === message.id ? 'Asking…' : message.problem === 'daily_limit' ? 'Read it now' : 'Try again'}
-          </Button>}
-        </span>}
-        {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
-      </li>;
-    })}
-  </ul></>;
+  const searching = q !== '' || search !== '';
+  if (list.messages.length === 0 && !searching) return <>{refreshProblem}<EmptyState compact icon="inbox" title="No email yet" detail="Send one to the address above to try it." /></>;
+  const total = list.total ?? list.messages.length;
+  return <>
+    {refreshProblem}
+    {(inbox.message_count > TOOLS_FROM || searching) && <div className="email-inbox-tools">
+      <SearchField label={`Search ${inbox.agent.name}’s email`} value={search} onChange={setSearch} />
+      <ToggleGroup label="Sort email" value={sort} onChange={setSort} options={[['recent', 'Recent'], ['priority', 'Priority']]} />
+    </div>}
+    {list.messages.length === 0
+      ? <EmptyState compact icon="inbox" title="No matching email" detail="Try a sender, an address or words from the subject." />
+      : <ul className="email-inbox-messages" aria-label={`Recent email at ${inbox.label}`}>
+        {list.messages.map((message) => {
+          const requestId = message.request_ids[0];
+          const subject = message.subject || '(no subject)';
+          const stateWords = mailState(message, inbox.agent.name);
+          const flagged = message.sender.warnings.some((warning) => warning.severity === 'caution');
+          const sender = message.sender.name ?? message.sender.address;
+          const toDo = message.brief?.action_items.filter((item) => item.owner === 'us').length ?? 0;
+          return <li key={message.id} data-tone={stateWords.tone}>
+            <div className="email-row">
+              <span className="email-row-sender" title={`${sender} <${message.sender.address}>`}><Avatar person={{ name: sender }} size={26} /></span>
+              <span className="email-row-main">
+                {requestId
+                  ? <button type="button" className="email-inbox-subject" title={subject} onClick={() => nav(REQ(requestId))}>{subject}</button>
+                  : <span className="email-inbox-subject" title={subject}>{subject}</span>}
+                <span className="sr-only">, from {sender}</span>
+              </span>
+              <span className="email-row-todo">{toDo > 0 && <Pill tone="info" icon="check">{toDo} to do</Pill>}</span>
+              <span className="email-row-status">
+                {message.can_retry
+                  ? <RetryStatus message={message} tone={DOT_TONE[stateWords.tone]} text={stateWords.text} note={stateWords.note} subject={subject}
+                    busy={retrying === message.id} disabled={retrying !== null} onRetry={() => void retry(message)} />
+                  : flagged && message.status === 'suggested' && message.review !== 'done'
+                  ? <StatusDot tone="warn" label="Check the sender" hint={`Ready for review. ${message.sender.warnings.find((warning) => warning.severity === 'caution')?.detail ?? ''}`.trim()} />
+                  : <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} hint={stateWords.note ?? undefined} />}
+              </span>
+              <time dateTime={message.received_at} title={fullTime(message.received_at)}>
+                <span className="time-full">{timeAgo(message.received_at)}</span>
+                <span className="time-short" aria-hidden="true">{timeAgo(message.received_at, Date.now(), { compact: true })}</span>
+              </time>
+            </div>
+            {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
+          </li>;
+        })}
+      </ul>}
+    {total > list.messages.length && <div className="email-inbox-more">
+      <span>{list.messages.length} of {total}</span>
+      <Button small onClick={() => setLimit((current) => Math.min(current + MORE, INBOUND_EMAIL_LIST_MAX))} disabled={limit >= INBOUND_EMAIL_LIST_MAX}>Show more</Button>
+    </div>}
+  </>;
 }
 
 /** Agent email, the first section of Admin → Email (C100). */
@@ -249,7 +303,8 @@ export function AdminEmailInboxes() {
               media={<span className="email-agent-mark"><Glass name={inbox.kind === 'agent' ? 'iris' : 'inbox'} size={24} /></span>}
               title={<><h4>{name}</h4>{active
                 ? <StatusDot tone="ok" label="Receiving" />
-                : <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />}</>}
+                : <StatusDot tone="warn" label="Paused" hint="New email is turned away until you resume." />}
+                <CopyAddress address={inbox.address} name={name} /></>}
               description={<>
                 <span className="email-agent-fact"><Icon name="users" size={14} />{inbox.kind === 'agent' ? reviewers(inbox) : `Read by ${inbox.agent.name}`}</span>
                 <span className="email-agent-fact"><Icon name="mail" size={14} />{inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</span>
@@ -263,7 +318,6 @@ export function AdminEmailInboxes() {
                 </Button>
               </>}
             />
-            <CopyAddress address={inbox.address} name={name} />
             <RecentMail inbox={inbox} />
           </li>;
         })}

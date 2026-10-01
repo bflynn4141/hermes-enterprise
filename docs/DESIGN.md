@@ -73,11 +73,13 @@ One vocabulary for the Inbox list, Admin → Role inboxes and the email chat:
 | Stored, not read yet | Waiting for Iris |
 | Agent reading | Reading |
 | A reply or hand-off is waiting for people | Ready for review (Inbox rows: "Reply ready") |
+| A reviewer asked for changes | Changes requested |
+| Someone decided the reply or hand-off | Reviewed (green) |
 | Agent decided nothing is needed | No reply suggested |
 | Waiting for an automatic retry | Trying again soon |
 | Could not be read | Couldn't read it, with the reason and Try again |
 | Arrived while the inbox was paused | Inbox paused |
-| A flagged sender, on any row | Check the sender |
+| A flagged sender, on any row | Check the sender (in a list, it replaces Ready for review as the status, in amber) |
 
 The agent's name is used where it is known ("Iris"); otherwise "the agent".
 
@@ -190,11 +192,10 @@ connectors, Merge Agent Handler, Paragon and Notion AI.
   one card per agent: its mark, name and a status dot (Receiving, or amber
   Paused), who reviews its mail and how many emails it has as two icon facts
   ("Partnerships reviews", "Owner reviews"), Pause, a red Replace address, and
-  the address as a Snippet. Recent email are rows with the sender's initials,
-  the subject, "2 to do" and "Check the sender" pills, and the state as a
-  status dot. Sentences appear only where someone must act (a failed read).
-  The Outreach account card is only for outreach from a Google or Microsoft
-  mailbox (C100).
+  the address as a compact copy button beside the name. Its email is a
+  searchable, sortable list of one-line rows (see Design system rules, long
+  lists). The Outreach account card is only for outreach from a Google or
+  Microsoft mailbox (C100).
 - **Organization connections and personal links stay distinct.** The Slack
   install and the Gmail sending account belong to the workspace; a person's
   Slack identity link is theirs.
@@ -230,6 +231,27 @@ primitive there when you add it to `ui/primitives.tsx`.
   `danger` for something wrong.
 - **A value people copy is a `Snippet`**: the value in monospace and a copy
   icon that becomes a check (AI Elements' Snippet), not a separate Copy button.
+  A value copied more than it is read, like an agent's address, is a
+  `Snippet compact`: one small copy button beside the name it belongs to,
+  which opens to show the value on hover or focus and then says "Copied email
+  address". The row around it must not wrap, so the opening value cannot move
+  the button out from under the pointer.
+- **A list that can grow to hundreds is one line per row, in fixed columns**
+  so marks, status dots and times line up down the list. An email row is the
+  sender's initials (name and address on hover, not a column), the subject
+  (ellipsis, full text on hover), to-dos, status and time. A status someone
+  can act on is the action itself: "Couldn't read it" turns into "Try again"
+  in the same space on hover or focus, with the reason as its tooltip (touch
+  screens show the action). On a phone, to-dos and statuses become their
+  icons, times their largest unit ("20h ago"), with the words kept for
+  screen readers. Past five rows it gets a
+  `SearchField` and a `ToggleGroup` of Recent and Priority, nothing more;
+  pages load 10 and then 25 at a time behind "Show more", which says "10 of
+  184". Priority means what waits for a person first: a flagged sender's
+  review, other reviews, a failed read, then work in progress, then the rest.
+- **Times in lists are relative** (`timeAgo`): "Just now", "4m ago",
+  "1d 1h 1m ago", leaving out zero units, then the date from a week on; the
+  exact time is the tooltip.
 - **A list row is an `Item`**: media to recognise it by, a title and one line,
   and at most two controls (shadcn's Item, Geist's Entity). Prefer icons with
   a word ("Owner reviews", "4 emails") over a sentence of facts.

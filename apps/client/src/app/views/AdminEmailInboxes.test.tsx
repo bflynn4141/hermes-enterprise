@@ -10,6 +10,16 @@ describe('mailState', () => {
     expect(state.note).toContain('Nothing will be sent without approval');
   });
 
+  it('tells a decided email from one whose reviewer asked for changes', () => {
+    const suggested = (review: 'waiting' | 'changes_requested' | 'done' | undefined) =>
+      mailState({ status: 'suggested', can_retry: false, problem: null, retrying: false, review } as InboundEmailListItem, 'Iris');
+    expect(suggested('waiting')).toMatchObject({ text: 'Ready for review', tone: 'ready' });
+    expect(suggested('changes_requested')).toMatchObject({ text: 'Changes requested', tone: 'ready' });
+    expect(suggested('done')).toMatchObject({ text: 'Reviewed', tone: 'done' });
+    // An older server does not say; that reads as still waiting.
+    expect(suggested(undefined)).toMatchObject({ text: 'Ready for review' });
+  });
+
   it('says a message past the daily limit is waiting for a person, not broken (C100)', () => {
     const state = mailState({ status: 'failed', can_retry: true, problem: 'daily_limit', retrying: false } as InboundEmailListItem, 'Iris');
     expect(state).toMatchObject({ text: 'Waiting for you', tone: 'quiet' });

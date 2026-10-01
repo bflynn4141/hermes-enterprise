@@ -599,6 +599,31 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .snippet-copy:hover { color: var(--body); background: rgba(255,255,255,.06); }
 .snippet-copy:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 1px; }
 .snippet-copy[data-copied] { color: var(--ok); }
+/* Snippet compact: a copy button that opens to show its value on hover or focus. */
+.snippet-chip { all: unset; box-sizing: border-box; overflow: hidden; display: inline-flex; align-items: center; max-width: 100%; height: 28px; padding: 0 7px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255,255,255,.035); color: var(--muted); cursor: pointer; white-space: nowrap; transition: color 150ms ease-out, border-color 150ms ease-out, background-color 150ms ease-out; }
+.snippet-chip:hover { color: var(--body); border-color: var(--line-strong); background: rgba(255,255,255,.06); }
+.snippet-chip:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 2px; }
+.snippet-chip :is(.snippet-chip-value, .snippet-chip-done) { display: inline-block; min-width: 0; max-width: 0; margin-left: 0; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: max-width 240ms var(--ease-out), margin-left 240ms var(--ease-out), opacity 160ms ease-out; }
+.snippet-chip code { font-size: 12.5px; line-height: 18px; color: var(--body); }
+.snippet-chip-done { font-size: 13px; line-height: 18px; color: var(--ok); }
+.snippet-chip:is(:hover, :focus-visible):not([data-copied]) .snippet-chip-value { max-width: 32em; margin-left: 8px; opacity: 1; }
+.snippet-chip[data-copied] { color: var(--ok); border-color: rgba(92,201,139,.4); }
+.snippet-chip[data-copied] .snippet-chip-done { max-width: 14em; margin-left: 8px; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .snippet-chip, .snippet-chip :is(.snippet-chip-value, .snippet-chip-done) { transition: none; } }
+/* ToggleGroup: Recent / Priority and similar list options. */
+.toggle-group { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(21,16,71,.52); flex-shrink: 0; }
+.toggle-group button { min-height: 30px; padding: 4px 11px; border-radius: 6px; color: var(--muted); font-size: 12.5px; line-height: 18px; white-space: nowrap; transition: color 150ms ease-out, background-color 150ms ease-out; }
+.toggle-group button:hover { color: var(--body); }
+.toggle-group button[aria-pressed="true"] { color: var(--body); background: var(--selected); }
+.toggle-group button:focus-visible { outline: 2px solid var(--focus-line); outline-offset: 1px; }
+/* SearchField: a search box with its icon. */
+.search-field { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03); color: var(--muted); }
+.search-field:focus-within { border-color: var(--focus-line); box-shadow: var(--focus-halo); }
+.search-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--body); font: inherit; font-size: 13.5px; }
+.search-field input::placeholder { color: var(--muted); }
+.search-field input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.search-field input::-webkit-search-cancel-button { filter: invert(.8); }
+@media (prefers-reduced-motion: reduce) { .toggle-group button { transition: none; } }
 /* Item (shadcn): media, a title with one line, and at most two controls. */
 .item { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .item-media { display: inline-grid; place-items: center; flex-shrink: 0; }

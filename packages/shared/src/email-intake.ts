@@ -211,11 +211,35 @@ export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
   retrying: z.boolean().default(false),
   /** `daily_limit`: the agent read its daily number of emails; a person can have it read this one now (C100). */
   problem: z.enum(['provider_busy', 'needs_setup', 'no_owner', 'inbox_paused', 'daily_limit', 'other']).nullable().default(null),
+  /**
+   * Where its suggestions stand: `waiting` for a decision, `changes_requested`
+   * by a reviewer, or `done` once every one is decided. Absent when the agent
+   * suggested nothing, and from servers before the list could sort by priority.
+   */
+  review: z.enum(['waiting', 'changes_requested', 'done']).optional(),
 });
 export type InboundEmailListItem = z.infer<typeof inboundEmailListItemSchema>;
 
+/** The most rows one page of an inbox's email may hold. */
+export const INBOUND_EMAIL_LIST_MAX = 500;
+
+/**
+ * Which of an inbox's emails to list. `recent` is newest first; `priority`
+ * puts what waits for a person first (a flagged sender, then other reviews,
+ * then a failed read), then work in progress, then the rest, newest first
+ * within each. `q` matches the subject, sender name or sender address.
+ */
+export const inboundEmailListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  sort: z.enum(['recent', 'priority']).default('recent'),
+  limit: z.coerce.number().int().min(1).max(INBOUND_EMAIL_LIST_MAX).default(25),
+});
+export type InboundEmailListQuery = z.infer<typeof inboundEmailListQuerySchema>;
+
 export const inboundEmailListSchema = z.object({
-  messages: z.array(inboundEmailListItemSchema).max(100),
+  messages: z.array(inboundEmailListItemSchema).max(INBOUND_EMAIL_LIST_MAX),
+  /** How many emails match, of which `messages` is the first page. Absent from older servers. */
+  total: z.number().int().nonnegative().optional(),
 }).strict();
 export type InboundEmailList = z.infer<typeof inboundEmailListSchema>;
 
