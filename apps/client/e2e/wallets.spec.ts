@@ -169,3 +169,36 @@ test('an uncertain member wallet outcome reconciles without another owner signat
   await expect(card.getByText('Ready', { exact: true })).toBeVisible();
   expect((await passkey.credentials())[0]?.signCount).toBe(before[0]?.signCount);
 });
+
+test('balances: one total, each wallet with its address, tokens on demand', async ({ page }, testInfo) => {
+  await page.goto('/?wallets=enabled&walletDemo=funded#admin/Wallets');
+  const card = page.getByRole('region', { name: 'Balances', exact: true });
+  await expect(card.getByLabel('$2,586.10', { exact: true })).toBeVisible();
+  const first = card.locator('.wallet-account').first();
+  await expect(first.getByText('$2,575.60', { exact: true })).toBeVisible();
+  await expect(first.getByRole('button', { name: /^Copy .* wallet address$/ })).toBeVisible();
+  await first.getByRole('button', { name: /^Show .* tokens$/ }).click();
+  await expect(first.getByText('1,250 USDC')).toBeVisible();
+  await expect(first.getByText('0.5 ETH')).toBeVisible();
+  await expect(first.getByText('1 small balance hidden')).toBeVisible();
+  await card.getByRole('switch', { name: 'Show small balances' }).click();
+  await expect(first.getByText('12 DEGEN')).toBeVisible();
+  await card.screenshot({ path: testInfo.outputPath('wallet-balances-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(card.getByLabel('$2,586.10', { exact: true })).toBeVisible();
+  await card.screenshot({ path: testInfo.outputPath('wallet-balances-narrow.png') });
+});
+
+test('balances: an unreadable wallet is never shown as zero', async ({ page }) => {
+  await page.goto('/?wallets=enabled&walletDemo=partial#admin/Wallets');
+  const card = page.getByRole('region', { name: 'Balances', exact: true });
+  await expect(card.getByLabel('$2,575.60', { exact: true })).toBeVisible();
+  await expect(card.getByText("1 wallet couldn't be read just now; the total leaves it out.")).toBeVisible();
+  await expect(card.locator('.wallet-account').nth(1).getByText('Unavailable', { exact: true })).toBeVisible();
+});
+
+test('balances stay hidden until the wallet owner is verified', async ({ page }) => {
+  await page.goto('/?wallets=enabled#admin/Wallets');
+  await expect(page.getByRole('region', { name: 'Wallet owner', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Balances', exact: true })).toHaveCount(0);
+});

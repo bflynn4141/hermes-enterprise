@@ -216,3 +216,21 @@ export function rootIsCustomerOwned(readBack: RootReadBack, expected: { rootUser
     && user!.apiKeyCount === 0
     && user!.credentialIds.length === 1 && sameCredentialId(user!.credentialIds[0]!, expected.credentialId);
 }
+
+export type TurnkeyAssetBalance = { symbol: string; name: string; decimals: number; balance: string; usd: string | null };
+
+/**
+ * Non-zero Base balances for one wallet address in a workspace sub-organization,
+ * read with the parent's read access (a query: no signature, no cost). Turnkey's
+ * USD figure is for display only; amounts stay in atomic units.
+ */
+export async function readBaseBalances(config: TurnkeyConfig, organizationId: string, address: string): Promise<TurnkeyAssetBalance[]> {
+  const { balances } = await query<{ balances?: { symbol?: string; name?: string; decimals?: number; balance?: string; display?: { usd?: string } }[] }>(
+    config, '/public/v1/query/get_wallet_address_balances', { organizationId, address, caip2: 'eip155:8453' });
+  return (balances ?? []).flatMap((b) => {
+    if (typeof b.symbol !== 'string' || typeof b.balance !== 'string' || !/^\d+$/.test(b.balance)
+      || typeof b.decimals !== 'number' || !Number.isInteger(b.decimals) || b.decimals < 0 || b.decimals > 36) return [];
+    const usd = typeof b.display?.usd === 'string' && /^\d+(\.\d+)?$/.test(b.display.usd) ? b.display.usd : null;
+    return [{ symbol: b.symbol.slice(0, 16), name: (b.name ?? b.symbol).slice(0, 64), decimals: b.decimals, balance: b.balance, usd }];
+  });
+}

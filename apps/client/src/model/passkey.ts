@@ -25,6 +25,15 @@ function toBase64url(buffer: ArrayBuffer): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/**
+ * Ask the browser to offer this device's own authenticator first (Touch ID on a
+ * Mac, Face ID or fingerprint on a phone) instead of opening with the "use a
+ * phone or security key" chooser. A hint, not a restriction: security keys and
+ * phones still work for people who choose them (WebAuthn Level 3 `hints`;
+ * browsers without it ignore the field).
+ */
+const TOUCH_ID_FIRST = { hints: ['client-device'] } as Record<string, unknown>;
+
 export async function createWorkspacePasskey(challenge: WalletRootChallenge): Promise<WalletRootSubmit['attestation']> {
   if (typeof window === 'undefined' || !window.PublicKeyCredential || !navigator.credentials?.create) {
     throw new PasskeyError('unsupported');
@@ -42,6 +51,7 @@ export async function createWorkspacePasskey(challenge: WalletRootChallenge): Pr
         authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
         attestation: 'none',
         timeout: 5 * 60 * 1000,
+        ...TOUCH_ID_FIRST,
       },
     });
   } catch (error) {
@@ -66,7 +76,7 @@ export async function signWorkspaceOperation(request: NonNullable<MemberWalletOp
     credential = await navigator.credentials.get({ publicKey: {
       challenge: fromBase64url(request.challenge), rpId: request.rp_id,
       allowCredentials: [{ type: 'public-key', id: fromBase64url(request.credential_id) }],
-      userVerification: 'required', timeout: 120_000,
+      userVerification: 'required', timeout: 120_000, ...TOUCH_ID_FIRST,
     } });
   } catch (error) {
     throw new PasskeyError(error instanceof DOMException && error.name === 'NotAllowedError' ? 'cancelled' : 'failed');

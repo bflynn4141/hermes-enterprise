@@ -13,7 +13,7 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   memberWalletAccessSchema, roleSpendingDraftSchema, type MemberWalletOperation, type MemberWalletStamp, type RoleSpendingDraftInput,
-  walletOverviewSchema, walletRecordSchema, walletRootChallengeSchema, walletRootSchema, type WalletEnrollmentInput, type WalletRootSubmit,
+  walletOverviewSchema, walletRecordSchema, walletBalancesSchema, walletRootChallengeSchema, walletRootSchema, type WalletEnrollmentInput, type WalletRootSubmit,
   bootstrapSchema,
   contextNoteSchema,
   agentPermissionsSchema,
@@ -703,6 +703,7 @@ export function createRest(options: RestOptions) {
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     wallets: (workspaceId: string) => request('GET', `${ws(workspaceId)}/wallets`, walletOverviewSchema),
+    walletBalances: (workspaceId: string) => request('GET', `${ws(workspaceId)}/wallets/balances`, walletBalancesSchema),
     requestWalletEnrollment: (workspaceId: string, input: WalletEnrollmentInput) => request('POST', `${ws(workspaceId)}/wallets/enrollment`, walletRecordSchema, input),
     startWalletRoot: (workspaceId: string) => request('POST', `${ws(workspaceId)}/wallets/root/challenge`, walletRootChallengeSchema, {}),
     submitWalletRoot: (workspaceId: string, input: WalletRootSubmit) => request('POST', `${ws(workspaceId)}/wallets/root`, walletRootSchema, input),

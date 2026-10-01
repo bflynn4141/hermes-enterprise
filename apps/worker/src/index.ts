@@ -1,6 +1,7 @@
 import { getRoleSpendingDraft, putRoleSpendingDraft } from './routes/role-spending.js';
 import { getMemberWalletAccess, proposeMemberWallet, submitMemberWalletOperation, cancelMemberWalletOperation, reconcileMemberWalletOperation } from './routes/member-wallets.js';
 import { listWallets, requestWalletEnrollment } from './routes/wallets.js';
+import { listWalletBalances } from './routes/wallet-balances.js';
 import { reconcileWalletRoot, startWalletRoot, submitWalletRoot } from './routes/wallet-root.js';
 // The Worker.
 //
@@ -568,6 +569,7 @@ app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/submit', subm
 app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/cancel', cancelMemberWalletOperation);
 app.post('/w/:ws/members/:id/wallet-access/operations/:operationId/reconcile', reconcileMemberWalletOperation);
 app.get('/w/:ws/wallets', listWallets);
+app.get('/w/:ws/wallets/balances', listWalletBalances);
 app.post('/w/:ws/wallets/enrollment', requestWalletEnrollment);
 app.post('/w/:ws/wallets/root/challenge', startWalletRoot);
 app.post('/w/:ws/wallets/root', submitWalletRoot);

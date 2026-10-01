@@ -53,3 +53,53 @@ export type WalletRoot = z.infer<typeof walletRootSchema>;
 export type WalletRootChallenge = z.infer<typeof walletRootChallengeSchema>;
 export type WalletRootSubmit = z.infer<typeof walletRootSubmitSchema>;
 export type WalletEnrollmentInput = z.infer<typeof walletEnrollmentInputSchema>;
+
+/** One token held by a wallet on Base. `amount` is atomic units; `usd` is Turnkey's display value. */
+export const walletAssetSchema = z.object({
+  symbol: z.string().min(1).max(16), name: z.string().max(64),
+  decimals: z.number().int().min(0).max(36),
+  amount: z.string().regex(/^\d+$/),
+  usd: z.string().regex(/^\d+(\.\d+)?$/).nullable(),
+});
+export const walletBalanceAccountSchema = z.object({
+  principal_id: z.uuid(), kind: z.enum(['workspace', 'member', 'agent']),
+  member_id: z.uuid().nullable(), agent_id: z.uuid().nullable(), label: z.string(),
+  address: z.string().regex(/^0x[0-9a-f]{40}$/),
+  /** `unavailable`: Turnkey could not be read just now; never shown as zero. */
+  status: z.enum(['ok', 'unavailable']),
+  usd: z.string().regex(/^\d+\.\d{2}$/).nullable(),
+  assets: z.array(walletAssetSchema),
+});
+export const walletBalancesSchema = z.object({
+  available: z.boolean(), network: z.literal('Base'),
+  /** Sum of readable accounts; null when none could be read. */
+  usd: z.string().regex(/^\d+\.\d{2}$/).nullable(),
+  partial: z.boolean(),
+  read_at: z.iso.datetime().nullable(),
+  accounts: z.array(walletBalanceAccountSchema),
+});
+export type WalletAsset = z.infer<typeof walletAssetSchema>;
+export type WalletBalanceAccount = z.infer<typeof walletBalanceAccountSchema>;
+export type WalletBalances = z.infer<typeof walletBalancesSchema>;
+
+/** Adds decimal USD strings exactly, in cents; display values only. */
+export function sumUsd(values: readonly (string | null)[]): string | null {
+  const present = values.filter((value): value is string => value !== null);
+  if (!present.length) return null;
+  const cents = present.reduce((total, value) => {
+    const [whole, fraction = ''] = value.split('.');
+    return total + BigInt(whole!) * 100n + BigInt((fraction + '00').slice(0, 2)) + (Number(fraction[2] ?? '0') >= 5 ? 1n : 0n);
+  }, 0n);
+  return `${cents / 100n}.${(cents % 100n).toString().padStart(2, '0')}`;
+}
+
+/** Formats an atomic amount with its decimals, trimming trailing zeros (no floating point). */
+export function formatTokenAmount(amount: string, decimals: number, maxFraction = 6): string {
+  const value = BigInt(amount);
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const fraction = (value % base).toString().padStart(decimals, '0').slice(0, maxFraction).replace(/0+$/, '');
+  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (!fraction && whole === 0n && value > 0n) return `<0.${'0'.repeat(maxFraction - 1)}1`;
+  return fraction ? `${grouped}.${fraction}` : grouped;
+}

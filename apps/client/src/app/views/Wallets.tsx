@@ -5,6 +5,7 @@ import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import './wallets.css';
 import { useStepUp } from './use-step-up.js';
 import { AdminPageHeader, AdminSettingsCard } from './AdminDetailLayout.js';
+import { WalletBalancesCard } from './WalletBalances.js';
 import { createWorkspacePasskey, PasskeyError } from '../../model/passkey.js';
 
 export function walletError(error: unknown): string {
@@ -154,6 +155,7 @@ export function AdminWallets() {
   const requested = data?.items.some(item => item.kind === 'workspace');
   return <div className="admin-detail-page">
     <AdminPageHeader title="Wallets" />
+    <WalletBalancesCard active={Boolean(data?.enabled && data.root.status === 'verified')} />
     <WalletOwnerCard wallets={wallets} />
     <AdminSettingsCard title="Workspace wallets" description="Separate workspace, member and agent wallets, with customer-controlled ownership."
       footer={wallets.reauth ? <Button onClick={wallets.signIn}>Sign in again</Button> : error ? <Button disabled={busy} onClick={() => void load()}>Refresh status</Button> : data?.enabled && data.can_manage && !requested ?

@@ -549,7 +549,8 @@ export function StatusDot({ tone, label, hint }: { tone: StatusTone; label?: str
  * value in monospace and a copy button that turns into a check for a moment.
  * `label` names the value for screen readers ("Iris's address").
  */
-export function Snippet({ value, label, className = '' }: { value: string; label: string; className?: string }) {
+/** `display` shows a shortened form (an address as 0x12…cdef) while Copy still copies the whole value. */
+export function Snippet({ value, label, className = '', display }: { value: string; label: string; className?: string; display?: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -563,7 +564,8 @@ export function Snippet({ value, label, className = '' }: { value: string; label
   return (
     <span className={`snippet ${className}`}>
       {/* An address breaks before its @ when it must, not mid-word. */}
-      <code>{value.includes('@') ? <>{value.slice(0, value.indexOf('@'))}<wbr />{value.slice(value.indexOf('@'))}</> : value}</code>
+      {display !== undefined ? <code title={value}>{display}</code>
+        : <code>{value.includes('@') ? <>{value.slice(0, value.indexOf('@'))}<wbr />{value.slice(value.indexOf('@'))}</> : value}</code>}
       <button type="button" className="snippet-copy" aria-label={copied ? 'Copied' : `Copy ${label}`} onClick={copy} data-copied={copied || undefined}>
         <Icon name={copied ? 'check' : 'copy'} size={15} strokeWidth={1.8} />
       </button>
