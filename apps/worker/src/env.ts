@@ -179,6 +179,8 @@ export interface Env {
   TURNKEY_PASSKEY_RP_ID?: string;
   /** Test seam for Turnkey API calls. */
   TURNKEY_FETCHER?: Fetcher;
+  /** Test seam for Zerion balance reads. */
+  ZERION_FETCHER?: Fetcher;
   /** Dedicated exact-scope OAuth client for explicitly selected Gmail evidence. */
   GMAIL_EVIDENCE_ENABLED?: string;
   GMAIL_EVIDENCE_CLIENT_ID?: string;
@@ -203,6 +205,11 @@ export interface Env {
   R2_BUCKET: string;
 
   // --- Secrets (never in the repository; see .dev.vars.example) -------------
+  /**
+   * Zerion API key for wallet balances (free developer plan to start). When set,
+   * balances come from Zerion instead of Turnkey. Only public addresses are sent.
+   */
+  ZERION_API_KEY?: string;
   /** Private half of the parent Turnkey API key; only creates and reads sub-orgs. */
   TURNKEY_API_PRIVATE_KEY?: string;
   WORKOS_API_KEY?: string;

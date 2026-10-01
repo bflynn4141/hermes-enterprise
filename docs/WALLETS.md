@@ -71,9 +71,15 @@ workspace total and each wallet's Base balance, short address (copy gives the
 full address) and tokens on demand. Admins see every wallet; a member sees their
 own and their agents' (`GET /w/:ws/wallets/balances`).
 
-- Balances come from Turnkey's balances query (`get_wallet_address_balances`,
-  `eip155:8453`), read with the parent's read access: no signature, no cost, no
-  database transaction held while it runs.
+- Balances come from **Zerion** when `ZERION_API_KEY` is set (the default for
+  now): Base positions, simple and non-spam, in USD. Only public wallet addresses
+  are sent. Each address is cached for 60 seconds so the free developer plan
+  (2,000 requests a day, 3 a second) covers a busy page.
+- Without a Zerion key, they come from Turnkey's balances query
+  (`get_wallet_address_balances`, `eip155:8453`) with the parent's read access.
+  Turnkey refuses that query on its free plan ("requires a Pay As You Go, Pro, or
+  Enterprise billing org"), so it is the path once Turnkey billing is on.
+- No database transaction is held while either provider answers.
 - Amounts stay in atomic units and are formatted with integer math. USD values
   are Turnkey's display figures; totals add them in exact cents.
 - A wallet Turnkey can't read right now shows **Unavailable**, is left out of the

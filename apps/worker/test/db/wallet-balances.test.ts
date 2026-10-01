@@ -103,4 +103,25 @@ describe('wallet balances', () => {
     expect(await balancesOf(off, verified)).toMatchObject({ available: false, accounts: [] });
     expect(turnkey.calls).toHaveLength(0);
   });
+
+  it('reads from Zerion when its key is set, never calling Turnkey', async () => {
+    const fx = await seedWorkspace(); await seedWallets(fx);
+    const turnkey = fakeTurnkey({ [ADMIN_ADDRESS]: [usdc('1', '0.01')] });
+    const zerionCalls: string[] = [];
+    const zerion = { fetch: async (request: Request) => {
+      const address = new URL(request.url).pathname.split('/')[3]!;
+      zerionCalls.push(address);
+      return Response.json({ data: address === ADMIN_ADDRESS ? [{ attributes: { quantity: { int: '2000000', decimals: 6 }, value: 2,
+        fungible_info: { symbol: 'USDC', name: 'USD Coin' } }, relationships: { chain: { data: { id: 'base' } } } }] : [] });
+    } } as Fetcher;
+    const env = makeEnv({
+      TURNKEY_WALLETS_ENABLED: '1', TURNKEY_PROVISIONING_ENABLED: '1', TURNKEY_PARENT_ORG_ID: PARENT,
+      TURNKEY_API_PUBLIC_KEY: key.publicKey, TURNKEY_API_PRIVATE_KEY: key.privateKey, TURNKEY_PASSKEY_RP_ID: 'localhost',
+      TURNKEY_FETCHER: turnkey.fetcher, ZERION_API_KEY: 'zk_test', ZERION_FETCHER: zerion,
+    }).env;
+    const result = await balancesOf(env, fx);
+    expect(result).toMatchObject({ available: true, usd: '2.00', partial: false });
+    expect(zerionCalls.sort()).toEqual([ADMIN_ADDRESS, MEMBER_ADDRESS]);
+    expect(turnkey.calls).toHaveLength(0);
+  });
 });

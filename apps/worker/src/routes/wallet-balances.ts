@@ -1,14 +1,16 @@
 // Wallet balances (C103). Lists the verified wallet addresses a person may see
-// (Admins: all; members: their own and their agents') with their Base balances,
-// read from Turnkey with the parent's read access. No database transaction is
-// open while Turnkey answers. An address Turnkey can't read now is reported as
+// (Admins: all; members: their own and their agents') with their Base balances.
+// Balances come from Zerion when ZERION_API_KEY is set, otherwise from Turnkey
+// (whose balances API needs a paid plan). No database transaction is open while
+// the provider answers. An address that can't be read now is reported as
 // unavailable, never as zero.
 import type { Context } from 'hono';
 import { sumUsd, walletBalancesSchema, type WalletBalanceAccount } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { inWorkspace } from './tenant.js';
 import { turnkeySetupConfig } from '../wallets/turnkey-config.js';
-import { readBaseBalances } from '../wallets/turnkey-client.js';
+import { readBaseBalances, type TurnkeyAssetBalance } from '../wallets/turnkey-client.js';
+import { readZerionBaseBalances, zerionFetcher } from '../wallets/zerion.js';
 
 type AccountRow = {
   principal_id: string; kind: 'workspace' | 'member' | 'agent'; member_id: string | null; agent_id: string | null;
@@ -31,8 +33,17 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
   return results;
 }
 
+/** The balance source for this deployment, or null when none is configured. */
+function balanceReader(env: Env, config: ReturnType<typeof turnkeySetupConfig>): ((orgId: string, address: string) => Promise<TurnkeyAssetBalance[]>) | null {
+  const zerionKey = env.ZERION_API_KEY?.trim();
+  if (zerionKey) return (_orgId, address) => readZerionBaseBalances(zerionKey, address, zerionFetcher(env));
+  if (config) return (orgId, address) => readBaseBalances(config.turnkey, orgId, address);
+  return null;
+}
+
 export async function listWalletBalances(c: Context<{ Bindings: Env }>): Promise<Response> {
   const config = turnkeySetupConfig(c.env);
+  const read = balanceReader(c.env, config);
   const visible = await inWorkspace(c, async (work) => {
     if (!config) return { orgId: null, rows: [] as AccountRow[] };
     const { rows: configs } = await work.tx.query<{ provider_org_id: string | null }>(
@@ -58,12 +69,12 @@ export async function listWalletBalances(c: Context<{ Bindings: Env }>): Promise
     return { orgId, rows };
   });
 
-  const accounts: WalletBalanceAccount[] = config && visible.orgId
+  const accounts: WalletBalanceAccount[] = read && visible.orgId
     ? await mapLimited(visible.rows, CONCURRENCY, async (row) => {
       const base = { principal_id: row.principal_id, kind: row.kind, member_id: row.member_id, agent_id: row.agent_id,
         label: row.label ?? (row.kind === 'agent' ? 'Agent' : 'Member'), address: row.address.toLowerCase() };
       try {
-        const balances = await readBaseBalances(config.turnkey, visible.orgId!, row.address);
+        const balances = await read(visible.orgId!, row.address);
         const assets = balances.map((b) => ({ symbol: b.symbol, name: b.name, decimals: b.decimals, amount: b.balance, usd: b.usd }));
         return { ...base, status: 'ok' as const, usd: sumUsd(assets.map((a) => a.usd)) ?? '0.00', assets };
       } catch {
@@ -74,7 +85,7 @@ export async function listWalletBalances(c: Context<{ Bindings: Env }>): Promise
   const readable = accounts.filter((a) => a.status === 'ok');
   c.header('Cache-Control', 'no-store');
   return c.json(walletBalancesSchema.parse({
-    available: Boolean(config && visible.orgId),
+    available: Boolean(read && visible.orgId),
     network: 'Base',
     usd: readable.length ? sumUsd(readable.map((a) => a.usd)) : null,
     partial: readable.length < accounts.length,

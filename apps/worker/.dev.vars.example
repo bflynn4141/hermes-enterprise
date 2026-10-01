@@ -60,6 +60,9 @@ TURNKEY_PROVISIONING_ENABLED="0"
 # TURNKEY_API_PUBLIC_KEY=""
 # TURNKEY_API_PRIVATE_KEY=""
 # TURNKEY_PASSKEY_RP_ID="localhost"
+# Wallet balances come from Zerion when this is set (free developer key at
+# https://dashboard.zerion.io); otherwise from Turnkey, which needs a paid plan.
+# ZERION_API_KEY=""
 
 # Optional selected-thread evidence intake. Use a separate Google OAuth client;
 # never reuse the outreach sender client or its secret.
