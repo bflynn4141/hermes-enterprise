@@ -51,6 +51,12 @@ before C100 (`kind = 'role'`) keep working and reply as before.
    as a refusal is `ambiguous` and never retried. Without the binding it is
    simulated where effects are simulated. A reply to an older role address is
    sent through a connected Gmail or Microsoft 365 sender, or waits for one.
+   While the agent's address is paused, an approved reply waits ("Waiting:
+   Iris's address is paused") and resuming the address sends it. A send that
+   cannot happen says why on the approval: the recipient asked not to be
+   emailed, or the address is no longer the agent's. Every outcome refreshes
+   an open approval. An uncertain send from an agent address asks the
+   reviewer to check with the recipient, since the address has no Sent folder.
 
 ## When the agent could not read a message
 

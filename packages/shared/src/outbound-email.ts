@@ -34,6 +34,8 @@ export const emailSendSchema = z.object({
   recipient_name: z.string().max(200),
   recipient_address: z.string().max(320),
   sender_address: z.string().max(320),
+  /** `agent`: sent from an agent's own address (C100), which has no Sent folder to check. Absent from older servers. */
+  via: z.enum(['account', 'agent']).optional(),
   state: z.enum(['pending_connection', 'queued', 'sending', 'sent', 'simulated', 'failed', 'ambiguous', 'cancelled']),
   sent_at: z.iso.datetime().nullable(),
   /** Set when a person, not the provider, settled an uncertain send. */

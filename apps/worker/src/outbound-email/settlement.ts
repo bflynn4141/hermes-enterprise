@@ -20,6 +20,7 @@ interface SendRow {
   recipient_name: string;
   recipient_address: string;
   sender_address: string;
+  via_agent: boolean;
   state: EmailSendList['sends'][number]['state'];
   sent_at: Date | null;
   settled_outcome: 'sent' | 'not_sent' | null;
@@ -60,7 +61,7 @@ async function viewerFor(tx: Tx, workspaceId: string, userId: string): Promise<S
 async function sendRows(tx: Tx, workspaceId: string, requestId: string): Promise<SendRow[]> {
   const result = await tx.query<SendRow>(
     `SELECT o.id, o.authorization_revision, o.recipient_name, o.recipient_address, o.sender_address,
-            o.state, o.sent_at, o.settled_outcome, o.settled_at, u.name AS settled_by_name
+            (o.sender_inbox_id IS NOT NULL AND o.account_id IS NULL) AS via_agent, o.state, o.sent_at, o.settled_outcome, o.settled_at, u.name AS settled_by_name
        FROM outbound_email_outbox o
        LEFT JOIN users u ON u.id = o.settled_by
       WHERE o.workspace_id=$1 AND o.request_id=$2
@@ -84,6 +85,7 @@ export async function listEmailSends(tx: Tx, workspaceId: string, requestId: str
       recipient_name: row.recipient_name,
       recipient_address: row.recipient_address,
       sender_address: row.sender_address,
+      via: row.via_agent ? 'agent' : 'account',
       state: row.state,
       sent_at: row.sent_at ? row.sent_at.toISOString() : null,
       settled: row.settled_outcome && row.settled_at

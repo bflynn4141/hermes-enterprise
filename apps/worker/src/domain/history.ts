@@ -662,7 +662,7 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
 
     case 'outbound_email.ambiguous':
       text = `${capitalize(subject)} may or may not have been sent`;
-      detail = 'The send was interrupted. Check the mailbox before sending it again';
+      detail = 'The send was interrupted. Check whether it arrived before sending it again';
       status = 'Needs attention';
       ref = requestRef;
       break;

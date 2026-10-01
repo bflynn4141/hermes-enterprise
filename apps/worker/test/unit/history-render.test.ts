@@ -97,7 +97,7 @@ describe('renderHistoryRow', () => {
     expect(row.status).toBe('Not sent');
   });
 
-  it('asks a person to check the mailbox after an interrupted send', () => {
+  it('asks a person to check whether an interrupted send arrived', () => {
     const row = renderHistoryRow(base({
       kind: 'outbound_email.ambiguous',
       actor_type: 'system',
@@ -106,7 +106,8 @@ describe('renderHistoryRow', () => {
       request_label: 'Reply to Priya Raman',
     }));
     expect(row.text).toBe('Reply to Priya Raman may or may not have been sent');
-    expect(row.detail).toMatch(/Check the mailbox/);
+    // An agent address has no mailbox to check (C100), so the wording fits either sender.
+    expect(row.detail).toMatch(/Check whether it arrived/);
     expect(HISTORY_NEEDS_PERSON).toContain(row.status);
   });
 

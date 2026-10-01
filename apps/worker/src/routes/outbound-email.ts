@@ -2,7 +2,8 @@ import type { Context } from 'hono';
 import { mailboxDisconnectSchema, outboundEmailConnectionSchema, outboundEmailOAuthStartSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
+import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
+import { releaseWaitingSends } from '../outbound-email/outbox.js';
 import { exchangeGmailCode, gmailProfile, type GmailTokenBundle } from '../outbound-email/gmail-api.js';
 import { gmailAuthorizeUrl, gmailConfig, gmailFetcher } from '../outbound-email/gmail-config.js';
 import { signGmailOAuthState, verifyGmailOAuthState } from '../outbound-email/gmail-security.js';
@@ -147,31 +148,8 @@ async function completeSendingOAuth(
           RETURNING id`,
         [state.workspace_id, address, account.id],
       );
-      const jobIds: string[] = [];
-      for (const row of pending.rows) {
-        const jobId = await enqueueJob(tx, state.workspace_id, 'outbound_email_send', `outbound-email:${row.id}`, { outbox_id: row.id });
-        if (jobId) {
-          jobIds.push(jobId);
-          continue;
-        }
-        // Older approvals consumed this key while waiting for a mailbox.
-        // Revive only completed jobs for the unsent rows locked above. Keep
-        // active jobs and sent/uncertain deliveries outside this recovery.
-        const revived = await tx.query<{ id: string }>(
-          `UPDATE jobs SET done_at=NULL, locked_until=NULL, last_error=NULL, next_at=now()
-            WHERE workspace_id=$1 AND kind='outbound_email_send' AND key=$2 AND done_at IS NOT NULL
-            RETURNING id`,
-          [state.workspace_id, `outbound-email:${row.id}`],
-        );
-        for (const job of revived.rows) {
-          await tx.query(
-            `INSERT INTO job_ready (job_id,workspace_id,next_at) VALUES ($1,$2,now())
-             ON CONFLICT (job_id) DO UPDATE SET next_at=EXCLUDED.next_at`,
-            [job.id,state.workspace_id],
-          );
-          jobIds.push(job.id);
-        }
-      }
+      // Older approvals may have used this key while waiting for a mailbox.
+      const jobIds = await releaseWaitingSends(tx, state.workspace_id, pending.rows.map((row) => row.id));
       await tx.query(
         `INSERT INTO events (workspace_id,actor_type,actor_user_id,kind)
          VALUES ($1,'user',$2,$3)`,
