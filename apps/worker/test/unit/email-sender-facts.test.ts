@@ -115,6 +115,20 @@ describe('domain comparisons', () => {
     expect(mentionsPaymentChange('IBAN: GB00 0000')).toBe(true);
     expect(mentionsPaymentChange('Attached is invoice NW-2026-09, due in 30 days.')).toBe(false);
   });
+
+  it('recognises a request to pay a different account, and account or routing numbers', () => {
+    // The staging test email's wording, which the phrase list alone missed.
+    expect(mentionsPaymentChange('Our CFO asked that you wire the $12,500 pilot deposit today to our new account instead of the one in the contract. Account 000123456, routing 110000000.')).toBe(true);
+    expect(mentionsPaymentChange('Please send the payment to our new account this time.')).toBe(true);
+    expect(mentionsPaymentChange('Transfer the balance to a different account.')).toBe(true);
+    expect(mentionsPaymentChange('Routing 021000021, account 12345678.')).toBe(true);
+    expect(mentionsPaymentChange('Acct #: 4455 6677 88')).toBe(true);
+    // Ordinary partner mail stays unflagged.
+    expect(mentionsPaymentChange('We set up a new account for you in the partner portal.')).toBe(false);
+    expect(mentionsPaymentChange('Your new account manager, Sam, takes over next month.')).toBe(false);
+    expect(mentionsPaymentChange('September invoice NW-2026-09 ($4,800) is still open on our side. Could you check where it is?')).toBe(false);
+    expect(mentionsPaymentChange('Account 12 of 40 renewed this quarter.')).toBe(false);
+  });
 });
 
 describe('emailTriagePrompt', () => {
