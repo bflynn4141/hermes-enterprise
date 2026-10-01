@@ -802,17 +802,17 @@ export function createMockBackend(input: MockOptions = {}) {
         return {
           id: mockUuid(1_710 + index), received_at: at(90 + index * 233), subject: `${SAMPLE_SUBJECTS[index % SAMPLE_SUBJECTS.length]} #${180 - index}`,
           sender: sender(name, address), status: reviewed ? 'suggested' : 'no_action', request_ids: [], can_retry: false, retrying: false, problem: null,
-          brief: null, awaiting_review: reviewed && index < 3,
+          brief: null, ...(reviewed ? { review: index < 3 ? 'waiting' as const : 'done' as const } : {}),
         };
       }),
     ];
-    return rows.map((row, index) => index < 2 ? { ...row, awaiting_review: true } : row);
+    return rows.map((row, index) => index < 2 ? { ...row, review: 'waiting' as const } : row);
   };
   const listSampleMail = (query: URLSearchParams): { messages: InboundEmailListItem[]; total: number } => {
     const q = (query.get('q') ?? '').trim().toLowerCase();
     const rank = (row: InboundEmailListItem): number =>
-      row.awaiting_review && row.sender.warnings.some((warning) => warning.severity === 'caution') ? 0
-        : row.awaiting_review ? 1 : row.status === 'failed' ? 2 : row.status === 'received' || row.status === 'triaging' ? 3 : 4;
+      row.review && row.review !== 'done' && row.sender.warnings.some((warning) => warning.severity === 'caution') ? 0
+        : row.review && row.review !== 'done' ? 1 : row.status === 'failed' ? 2 : row.status === 'received' || row.status === 'triaging' ? 3 : 4;
     const rows = sampleMail()
       .filter((row) => !q || [row.subject, row.sender.name ?? '', row.sender.address].some((text) => text.toLowerCase().includes(q)))
       .sort((a, b) => (query.get('sort') === 'priority' ? rank(a) - rank(b) : 0) || b.received_at.localeCompare(a.received_at));

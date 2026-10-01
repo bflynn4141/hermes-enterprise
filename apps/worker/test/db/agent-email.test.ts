@@ -374,11 +374,23 @@ describe('every agent has its own email address (C100)', () => {
       const recent = await list();
       expect(recent.messages.map((message) => message.id)).toEqual([reading, flagged, quiet, failed, review]);
       expect(recent.total).toBe(5);
-      expect(recent.messages.find((message) => message.id === review)?.awaiting_review).toBe(true);
-      expect(recent.messages.find((message) => message.id === quiet)?.awaiting_review).toBe(false);
+      const reviewOf = (rows: typeof recent.messages, id: string) => rows.find((message) => message.id === id)?.review;
+      expect(reviewOf(recent.messages, review)).toBe('waiting');
+      expect(reviewOf(recent.messages, quiet)).toBeUndefined();
 
       const priority = await list('?sort=priority');
       expect(priority.messages.map((message) => message.id)).toEqual([flagged, review, failed, reading, quiet]);
+
+      // Sent back for changes still needs a person: it says so and keeps its place in the priority order.
+      await scoped(fx.workspaceId, `UPDATE requests SET status='changes_requested' WHERE id = ANY(SELECT unnest(request_ids) FROM inbound_email_messages WHERE id=$1)`, [review]);
+      const sentBack = await list('?sort=priority');
+      expect(reviewOf(sentBack.messages, review)).toBe('changes_requested');
+      expect(sentBack.messages.map((message) => message.id)).toEqual([flagged, review, failed, reading, quiet]);
+      // Decided is done, and drops below what still needs someone.
+      await scoped(fx.workspaceId, `UPDATE requests SET status='approved' WHERE id = ANY(SELECT unnest(request_ids) FROM inbound_email_messages WHERE id=$1)`, [review]);
+      const decided = await list('?sort=priority');
+      expect(reviewOf(decided.messages, review)).toBe('done');
+      expect(decided.messages.map((message) => message.id)).toEqual([flagged, failed, reading, quiet, review]);
 
       // Search is literal (a % or _ is not a wildcard) and matches the subject, sender name or address.
       expect((await list(`?q=${encodeURIComponent('100%_d')}`)).messages.map((message) => message.id)).toEqual([reading]);

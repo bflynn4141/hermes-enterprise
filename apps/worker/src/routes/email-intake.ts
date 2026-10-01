@@ -241,9 +241,16 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
   return c.body(null, 204);
 }
 
-/** A suggestion from `m` still waits for someone's decision. */
-const AWAITING_REVIEW_SQL = `EXISTS (SELECT 1 FROM requests q
-    WHERE q.workspace_id = m.workspace_id AND q.id = ANY(m.request_ids) AND q.status = 'pending')`;
+/** A suggestion from `m` is in one of `statuses`. */
+const suggestionIn = (...statuses: string[]): string => `EXISTS (SELECT 1 FROM requests q
+    WHERE q.workspace_id = m.workspace_id AND q.id = ANY(m.request_ids) AND q.status IN (${statuses.map((s) => `'${s}'`).join(', ')}))`;
+/** Still needs a person: waiting for a decision, or sent back for changes. */
+const AWAITING_REVIEW_SQL = suggestionIn('pending', 'changes_requested');
+const REVIEW_SQL = `CASE
+    WHEN ${suggestionIn('pending')} THEN 'waiting'
+    WHEN ${suggestionIn('changes_requested')} THEN 'changes_requested'
+    WHEN cardinality(m.request_ids) > 0 THEN 'done'
+  END`;
 const FLAGGED_SQL = `EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(m.sender_facts->'warnings', '[]'::jsonb)) w
     WHERE w->>'severity' = 'caution')`;
 /** `priority` order: a flagged review, other reviews, a failed read, work in progress, the rest. */
@@ -274,13 +281,13 @@ async function listItems(
   const params = [work.workspaceId, id, searchPattern(query.q)];
   const rows = await work.tx.query<{
     id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; brief: unknown;
-    can_retry: boolean; retrying: boolean; problem: string | null; awaiting_review: boolean;
+    can_retry: boolean; retrying: boolean; problem: string | null; review: 'waiting' | 'changes_requested' | 'done' | null;
   }>(
     `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, m.brief, ${DERIVED_EMAIL_STATUS_SQL} AS status,
             ${EMAIL_RETRYABLE_SQL} AS can_retry,
             (m.status = 'received' AND m.triage_attempt > 1 AND NOT ${EMAIL_RETRYABLE_SQL}) AS retrying,
             ${EMAIL_PROBLEM_SQL} AS problem,
-            ${AWAITING_REVIEW_SQL} AS awaiting_review
+            ${REVIEW_SQL} AS review
        FROM inbound_email_messages m
        JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
        LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
@@ -304,7 +311,7 @@ async function listItems(
     can_retry: row.can_retry,
     retrying: row.retrying,
     problem: row.problem,
-    awaiting_review: row.awaiting_review,
+    ...(row.review ? { review: row.review } : {}),
   }));
   return { items, total: counted?.rows[0]?.total ?? items.length };
 }

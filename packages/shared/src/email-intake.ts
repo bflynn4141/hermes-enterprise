@@ -211,8 +211,12 @@ export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
   retrying: z.boolean().default(false),
   /** `daily_limit`: the agent read its daily number of emails; a person can have it read this one now (C100). */
   problem: z.enum(['provider_busy', 'needs_setup', 'no_owner', 'inbox_paused', 'daily_limit', 'other']).nullable().default(null),
-  /** A suggestion from this email still waits for someone's decision. Absent from servers before the list could sort by priority. */
-  awaiting_review: z.boolean().optional(),
+  /**
+   * Where its suggestions stand: `waiting` for a decision, `changes_requested`
+   * by a reviewer, or `done` once every one is decided. Absent when the agent
+   * suggested nothing, and from servers before the list could sort by priority.
+   */
+  review: z.enum(['waiting', 'changes_requested', 'done']).optional(),
 });
 export type InboundEmailListItem = z.infer<typeof inboundEmailListItemSchema>;
 

@@ -64,6 +64,7 @@ One vocabulary for the Inbox list, Admin → Role inboxes and the email chat:
 | Stored, not read yet | Waiting for Iris |
 | Agent reading | Reading |
 | A reply or hand-off is waiting for people | Ready for review (Inbox rows: "Reply ready") |
+| A reviewer asked for changes | Changes requested |
 | Someone decided the reply or hand-off | Reviewed (green) |
 | Agent decided nothing is needed | No reply suggested |
 | Waiting for an automatic retry | Trying again soon |

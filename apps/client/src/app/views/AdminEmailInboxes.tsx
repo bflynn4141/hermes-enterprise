@@ -39,8 +39,10 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
     case 'received': return { text: `Waiting for ${agent}`, tone: 'working', note: null };
     case 'triaging': return { text: 'Reading', tone: 'working', note: null };
     // A server from before C100's list sorting does not say; read that as still waiting.
-    case 'suggested': return message.awaiting_review === false
+    case 'suggested': return message.review === 'done'
       ? { text: 'Reviewed', tone: 'done', note: null }
+      : message.review === 'changes_requested'
+      ? { text: 'Changes requested', tone: 'ready', note: 'A reviewer asked for changes. Nothing was sent.' }
       : { text: 'Ready for review', tone: 'ready', note: null };
     case 'no_action': return message.problem === 'inbox_paused'
       ? { text: 'Inbox paused', tone: 'quiet', note: 'It arrived while the inbox was paused, so nobody read it.' }
@@ -213,7 +215,7 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
                 {message.can_retry
                   ? <RetryStatus message={message} tone={DOT_TONE[stateWords.tone]} text={stateWords.text} note={stateWords.note} subject={subject}
                     busy={retrying === message.id} disabled={retrying !== null} onRetry={() => void retry(message)} />
-                  : flagged && message.status === 'suggested' && message.awaiting_review !== false
+                  : flagged && message.status === 'suggested' && message.review !== 'done'
                   ? <StatusDot tone="warn" label="Check the sender" hint={`Ready for review. ${message.sender.warnings.find((warning) => warning.severity === 'caution')?.detail ?? ''}`.trim()} />
                   : <StatusDot tone={DOT_TONE[stateWords.tone]} label={stateWords.text} hint={stateWords.note ?? undefined} />}
               </span>
