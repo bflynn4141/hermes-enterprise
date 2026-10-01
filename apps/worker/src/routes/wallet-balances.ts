@@ -19,7 +19,10 @@ type AccountRow = {
 
 /** Reads balances for at most this many addresses per request, a few at a time. */
 const MAX_ACCOUNTS = 100;
-const CONCURRENCY = 6;
+/** Zerion's free key rate-limits parallel reads, so it goes one at a time. */
+const CONCURRENCY = { zerion: 1, turnkey: 6 } as const;
+/** Each wallet returns its most valuable tokens; the total still counts every token. */
+const MAX_ASSETS = 50;
 
 async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -34,11 +37,19 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
 }
 
 /** The balance source for this deployment, or null when none is configured. */
-function balanceReader(env: Env, config: ReturnType<typeof turnkeySetupConfig>): ((orgId: string, address: string) => Promise<TurnkeyAssetBalance[]>) | null {
+type Reader = { concurrency: number; read: (orgId: string, address: string) => Promise<TurnkeyAssetBalance[]> };
+
+function balanceReader(env: Env, config: ReturnType<typeof turnkeySetupConfig>): Reader | null {
   const zerionKey = env.ZERION_API_KEY?.trim();
-  if (zerionKey) return (_orgId, address) => readZerionBaseBalances(zerionKey, address, zerionFetcher(env));
-  if (config) return (orgId, address) => readBaseBalances(config.turnkey, orgId, address);
+  if (zerionKey) return { concurrency: CONCURRENCY.zerion, read: (_orgId, address) => readZerionBaseBalances(zerionKey, address, zerionFetcher(env)) };
+  if (config) return { concurrency: CONCURRENCY.turnkey, read: (orgId, address) => readBaseBalances(config.turnkey, orgId, address) };
   return null;
+}
+
+/** Most valuable first; tokens without a price sort last, by symbol. */
+function byValue(a: { usd: string | null; symbol: string }, b: { usd: string | null; symbol: string }): number {
+  if (a.usd === null || b.usd === null) return a.usd === null && b.usd === null ? a.symbol.localeCompare(b.symbol) : a.usd === null ? 1 : -1;
+  return Number(b.usd) - Number(a.usd) || a.symbol.localeCompare(b.symbol);
 }
 
 export async function listWalletBalances(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -70,15 +81,16 @@ export async function listWalletBalances(c: Context<{ Bindings: Env }>): Promise
   });
 
   const accounts: WalletBalanceAccount[] = read && visible.orgId
-    ? await mapLimited(visible.rows, CONCURRENCY, async (row) => {
+    ? await mapLimited(visible.rows, read.concurrency, async (row) => {
       const base = { principal_id: row.principal_id, kind: row.kind, member_id: row.member_id, agent_id: row.agent_id,
         label: row.label ?? (row.kind === 'agent' ? 'Agent' : 'Member'), address: row.address.toLowerCase() };
       try {
-        const balances = await read(visible.orgId!, row.address);
-        const assets = balances.map((b) => ({ symbol: b.symbol, name: b.name, decimals: b.decimals, amount: b.balance, usd: b.usd }));
-        return { ...base, status: 'ok' as const, usd: sumUsd(assets.map((a) => a.usd)) ?? '0.00', assets };
+        const balances = await read.read(visible.orgId!, row.address);
+        const all = balances.map((b) => ({ symbol: b.symbol, name: b.name, decimals: b.decimals, amount: b.balance, usd: b.usd })).sort(byValue);
+        return { ...base, status: 'ok' as const, usd: sumUsd(all.map((a) => a.usd)) ?? '0.00',
+          assets: all.slice(0, MAX_ASSETS), assets_omitted: Math.max(0, all.length - MAX_ASSETS) };
       } catch {
-        return { ...base, status: 'unavailable' as const, usd: null, assets: [] };
+        return { ...base, status: 'unavailable' as const, usd: null, assets: [], assets_omitted: 0 };
       }
     })
     : [];

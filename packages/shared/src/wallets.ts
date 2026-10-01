@@ -68,7 +68,9 @@ export const walletBalanceAccountSchema = z.object({
   /** `unavailable`: Turnkey could not be read just now; never shown as zero. */
   status: z.enum(['ok', 'unavailable']),
   usd: z.string().regex(/^\d+\.\d{2}$/).nullable(),
-  assets: z.array(walletAssetSchema),
+  /** The most valuable tokens, at most 50; `usd` still counts every token. */
+  assets: z.array(walletAssetSchema).max(50),
+  assets_omitted: z.number().int().min(0).default(0),
 });
 export const walletBalancesSchema = z.object({
   available: z.boolean(), network: z.literal('Base'),

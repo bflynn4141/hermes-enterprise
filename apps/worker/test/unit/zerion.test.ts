@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readZerionBaseBalances, ZerionError } from '../../src/wallets/zerion.js';
+import { readZerionBaseBalances, setZerionRetryDelayForTests, ZerionError } from '../../src/wallets/zerion.js';
 
 const position = (chain: string, symbol: string, int: string, decimals: number, value: number | null) => ({
   type: 'positions', id: `${symbol}-${chain}`,
@@ -38,5 +38,17 @@ describe('Zerion balance reads', () => {
   it('throws on errors so the wallet shows Unavailable, not zero', async () => {
     await expect(readZerionBaseBalances('k', '0x1', (async () => new Response('', { status: 429 })) as typeof fetch)).rejects.toBeInstanceOf(ZerionError);
     await expect(readZerionBaseBalances('k', '0x1', (async () => { throw new TypeError('offline'); }) as typeof fetch)).rejects.toBeInstanceOf(ZerionError);
+  });
+
+  it('waits and retries when Zerion rate-limits, then gives up as unavailable', async () => {
+    setZerionRetryDelayForTests(1);
+    let calls = 0;
+    const flaky = (async () => { calls++; return calls < 3 ? new Response('', { status: 429 }) : Response.json({ data: [position('base', 'USDC', '1000000', 6, 1)] }); }) as typeof fetch;
+    expect(await readZerionBaseBalances('k', '0x1', flaky)).toHaveLength(1);
+    expect(calls).toBe(3);
+    calls = 0;
+    const always = (async () => { calls++; return new Response('', { status: 429 }); }) as typeof fetch;
+    await expect(readZerionBaseBalances('k', '0x1', always)).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(3);
   });
 });

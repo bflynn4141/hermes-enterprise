@@ -71,7 +71,8 @@ describe('wallet balances', () => {
     expect(result).toMatchObject({ available: true, network: 'Base', usd: '2586.01', partial: false });
     const byAddress = [...result.accounts].sort((a, b) => a.address.localeCompare(b.address));
     expect(byAddress.map((a) => [a.address, a.status, a.usd])).toEqual([[ADMIN_ADDRESS, 'ok', '2575.51'], [MEMBER_ADDRESS, 'ok', '10.50']]);
-    expect(byAddress[0]!.assets[0]).toEqual({ symbol: 'USDC', name: 'USD Coin', decimals: 6, amount: '1250000000', usd: '1250.00' });
+    expect(byAddress[0]!.assets.map((a) => a.symbol)).toEqual(['ETH', 'USDC']);
+    expect(byAddress[0]!.assets.find((a) => a.symbol === 'USDC')).toEqual({ symbol: 'USDC', name: 'USD Coin', decimals: 6, amount: '1250000000', usd: '1250.00' });
     // Read inside the workspace org on Base, with Hermes's (read-only) parent key.
     expect(turnkey.calls.every((call) => call.organizationId === org && call.caip2 === 'eip155:8453' && call.stamped)).toBe(true);
   });
@@ -123,5 +124,30 @@ describe('wallet balances', () => {
     expect(result).toMatchObject({ available: true, usd: '2.00', partial: false });
     expect(zerionCalls.sort()).toEqual([ADMIN_ADDRESS, MEMBER_ADDRESS]);
     expect(turnkey.calls).toHaveLength(0);
+  });
+
+  it('reads Zerion one wallet at a time and keeps the 50 most valuable tokens per wallet', async () => {
+    const fx = await seedWorkspace(); await seedWallets(fx);
+    let inFlight = 0, maxInFlight = 0;
+    const many = Array.from({ length: 60 }, (_, i) => ({ attributes: { quantity: { int: '1000000', decimals: 6 }, value: i + 1,
+      fungible_info: { symbol: `T${i}`, name: `Token ${i}` } }, relationships: { chain: { data: { id: 'base' } } } }));
+    const zerion = { fetch: async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight--;
+      return Response.json({ data: many });
+    } } as unknown as Fetcher;
+    const env = makeEnv({ TURNKEY_WALLETS_ENABLED: '1', TURNKEY_PROVISIONING_ENABLED: '1', TURNKEY_PARENT_ORG_ID: PARENT,
+      TURNKEY_API_PUBLIC_KEY: key.publicKey, TURNKEY_API_PRIVATE_KEY: key.privateKey, TURNKEY_PASSKEY_RP_ID: 'localhost',
+      ZERION_API_KEY: 'zk_test', ZERION_FETCHER: zerion }).env;
+    const result = await balancesOf(env, fx);
+    expect(maxInFlight).toBe(1);
+    const account = result.accounts[0]!;
+    expect(account.assets).toHaveLength(50);
+    expect(account.assets_omitted).toBe(10);
+    expect(account.assets[0]!.symbol).toBe('T59');
+    // 1 + 2 + ... + 60 = 1,830 dollars per wallet: the total counts every token, not just the 50 shown.
+    expect(account.usd).toBe('1830.00');
+    expect(result.usd).toBe('3660.00');
   });
 });

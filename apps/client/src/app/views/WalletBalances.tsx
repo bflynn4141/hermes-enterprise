@@ -72,7 +72,7 @@ function AccountRow({ account, showSmall }: { account: WalletBalanceAccount; sho
       description={<Snippet value={account.address} display={shortAddress(account.address)} label={`${account.label}'s wallet address`} className="wallet-address" />}
       actions={<>
         <span className="wallet-account-balance">{account.status === 'ok' && account.usd !== null ? usdText(account.usd) : 'Unavailable'}</span>
-        {account.status === 'ok' && account.assets.length > 0 && <IconButton name="chevron" className={open ? 'wallet-open' : ''} label={open ? `Hide ${account.label}'s tokens` : `Show ${account.label}'s tokens`}
+        {account.status === 'ok' && (account.assets.length > 0 || account.assets_omitted > 0) && <IconButton name="chevron" className={open ? 'wallet-open' : ''} label={open ? `Hide ${account.label}'s tokens` : `Show ${account.label}'s tokens`}
           aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} />}
       </>}
     />
@@ -80,6 +80,7 @@ function AccountRow({ account, showSmall }: { account: WalletBalanceAccount; sho
       <div className="wallet-assets">
         {assets.map((asset) => <AssetRow key={asset.symbol} asset={asset} />)}
         {hidden > 0 && <p className="meta">{hidden === 1 ? '1 small balance hidden' : `${hidden} small balances hidden`}</p>}
+        {account.assets_omitted > 0 && <p className="meta">{account.assets_omitted === 1 ? 'and 1 more token' : `and ${account.assets_omitted.toLocaleString('en-US')} more tokens`} worth less, counted in the total</p>}
       </div>
     </Disclosure>
   </div>;

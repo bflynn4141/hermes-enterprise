@@ -8,6 +8,10 @@ import type { TurnkeyAssetBalance } from './turnkey-client.js';
 
 const ZERION_BASE = 'https://api.zerion.io';
 const CACHE_SECONDS = 60;
+const RETRIES_ON_429 = 2;
+let retryDelayMs = 1200;
+/** Test seam: shortens the wait between 429 retries. */
+export function setZerionRetryDelayForTests(ms: number): void { retryDelayMs = ms; }
 
 export class ZerionError extends Error {
   constructor(readonly status: number | null) {
@@ -41,13 +45,19 @@ export async function readZerionBaseBalances(apiKey: string, address: string, fe
   const cacheKey = new Request(`https://zerion-cache.hermes.invalid/${address.toLowerCase()}`);
   let response = cache ? await cache.match(cacheKey) : undefined;
   if (!response) {
-    try {
-      response = await fetcher(url.toString(), {
-        headers: { accept: 'application/json', authorization: `Basic ${btoa(`${apiKey}:`)}` },
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch {
-      throw new ZerionError(null);
+    // The free key answers 429 sooner than its advertised 3 a second; wait and
+    // retry a couple of times before reporting the wallet as unavailable.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await fetcher(url.toString(), {
+          headers: { accept: 'application/json', authorization: `Basic ${btoa(`${apiKey}:`)}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch {
+        throw new ZerionError(null);
+      }
+      if (response.status !== 429 || attempt >= RETRIES_ON_429) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
     }
     if (!response.ok) throw new ZerionError(response.status);
     if (cache) {
