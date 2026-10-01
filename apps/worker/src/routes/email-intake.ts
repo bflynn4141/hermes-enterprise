@@ -40,6 +40,7 @@ import { DERIVED_EMAIL_STATUS_SQL, EMAIL_PROBLEM_SQL, EMAIL_RETRYABLE_SQL, loadI
 import { inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
 import { addressToken, ensureAgentInboxes, grantInboxAuthority, inboxCapabilityScope as capabilityScope, intakeDomain } from '../inbound-email/agent-address.js';
 import { emailCautionResourceKey, emailInboxResourceKey } from '@hermes/shared';
+import { releaseWaitingSends } from '../outbound-email/outbox.js';
 import { RouteError } from './errors.js';
 import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
 
@@ -192,6 +193,21 @@ export async function patchEmailInbox(c: Context<{ Bindings: Env }>): Promise<Re
       [work.workspaceId, inboxId, parsed.data.status],
     );
     if (changed.rowCount !== 1) throw new RouteError('no such inbox', 'unknown_inbox', 404);
+    if (parsed.data.status === 'active') {
+      // Replies approved while the address was paused go out now. A reply
+      // approved before C100 held paused addresses waits for a mailbox the
+      // agent address will never have; it is linked to the address and sent too.
+      const waiting = await work.tx.query<{ id: string }>(
+        `UPDATE outbound_email_outbox o SET sender_inbox_id=i.id, state='queued', last_error=NULL
+           FROM email_inboxes i
+          WHERE i.workspace_id=$1 AND i.id=$2 AND i.kind='agent'
+            AND o.workspace_id=i.workspace_id AND o.account_id IS NULL AND o.sender_address=i.address
+            AND (o.state='pending_connection' OR (o.state='queued' AND o.attempt_count=0))
+          RETURNING o.id`,
+        [work.workspaceId, inboxId],
+      );
+      work.jobs.push(...await releaseWaitingSends(work.tx, work.workspaceId, waiting.rows.map((row) => row.id)));
+    }
     await auditInbox(work, 'settings.changed');
     const row = await work.tx.query<InboxRow>(`${INBOX_SELECT} WHERE i.workspace_id=$1 AND i.id=$2`, [work.workspaceId, inboxId]);
     return inboxView(row.rows[0]!);

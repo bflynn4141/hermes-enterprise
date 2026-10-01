@@ -349,16 +349,100 @@ describe('every agent has its own email address (C100)', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('cancels instead of sending when the address stopped being the agent\'s', async () => {
+  const effectOf = async (fx: Seeded, requestId: string) => (await scoped<{ effect_status: string; effect_reason: string | null }>(fx.workspaceId,
+    'SELECT effect_status, effect_reason FROM approval_requests WHERE request_id=$1', [requestId]))[0]!;
+  const refreshes = async (fx: Seeded, requestId: string) => (await scoped<{ n: number }>(fx.workspaceId,
+    `SELECT count(*)::int AS n FROM stream_events WHERE workspace_id=$1 AND kind='entity.updated' AND payload->>'entity_id'=$2`, [fx.workspaceId, requestId]))[0]!.n;
+  const setInbox = (fx: Seeded, status: 'active' | 'paused') => asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}`,
+    { method: 'PATCH', headers: INBOX_HEADERS, body: { status } });
+  const runQueuedSends = async (fx: Seeded) => {
+    for (const row of await scoped<{ id: string }>(fx.workspaceId, `SELECT id FROM outbound_email_outbox WHERE workspace_id=$1 AND state='queued'`, [fx.workspaceId])) {
+      await sendJob(fx, row.id);
+    }
+  };
+
+  it('holds a reply while the agent\'s address is paused, says why, and sends it on resume', async () => {
     sent.length = 0;
     const fx = await seedAgent();
     // Queue the reply, then pause the address before the job gets to it.
-    const { outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
     await scoped(fx.workspaceId, `UPDATE email_inboxes SET status='paused' WHERE id=$1`, [fx.inboxId]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+    expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [outbox.id])).toEqual([{ state: 'queued' }]);
+    expect(await effectOf(fx, requestId)).toMatchObject({ effect_status: 'waiting' });
+    expect((await effectOf(fx, requestId)).effect_reason).toMatch(/paused/u);
+    const resumed = await setInbox(fx, 'active');
+    expect(resumed.status, await resumed.clone().text()).toBe(200);
+    await runQueuedSends(fx);
+    expect(sent).toHaveLength(1);
+    expect(await effectOf(fx, requestId)).toMatchObject({ effect_status: 'executed' });
+  });
+
+  it('links a reply approved while the address is paused to the agent, and releases one stuck before this fix', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    await scoped(fx.workspaceId, `UPDATE email_inboxes SET status='paused' WHERE id=$1`, [fx.inboxId]);
+    const { requestId, outbox } = await approvedReply(fx);
+    expect(outbox).toMatchObject({ state: 'queued', sender_inbox_id: fx.inboxId });
+    // A row from before the fix: waiting for a mailbox the agent address will never have.
+    const stuck = await approvedReply(fx);
+    await scoped(fx.workspaceId, `UPDATE outbound_email_outbox SET state='pending_connection', sender_inbox_id=NULL WHERE id=$1`, [stuck.outbox.id]);
+    expect(sent).toHaveLength(0);
+    expect((await setInbox(fx, 'active')).status).toBe(200);
+    await runQueuedSends(fx);
+    expect(sent).toHaveLength(2);
+    expect(await effectOf(fx, requestId)).toMatchObject({ effect_status: 'executed' });
+    expect(await effectOf(fx, stuck.requestId)).toMatchObject({ effect_status: 'executed' });
+  });
+
+  it('cancels, and tells the reviewer, when the address stopped being the agent\'s', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    await scoped(fx.workspaceId, `UPDATE email_inboxes SET address=$2 WHERE id=$1`, [fx.inboxId, `iris-replaced@${DOMAIN}`]);
+    const before = await refreshes(fx, requestId);
     await sendJob(fx, outbox.id);
     expect(sent).toHaveLength(0);
     expect(await scoped(fx.workspaceId, 'SELECT state, last_error FROM outbound_email_outbox WHERE id=$1', [outbox.id]))
       .toEqual([{ state: 'cancelled', last_error: 'sender_account_mismatch' }]);
+    expect(await effectOf(fx, requestId)).toMatchObject({ effect_status: 'failed' });
+    expect((await effectOf(fx, requestId)).effect_reason).toMatch(/^Nothing was sent/u);
+    expect(await refreshes(fx, requestId)).toBeGreaterThan(before);
+  });
+
+  it('tells the reviewer when the recipient asked not to be emailed', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    await scoped(fx.workspaceId, `INSERT INTO contact_suppressions (workspace_id, address, reason) VALUES ($1, 'priya@northwind.example', 'unsubscribe') ON CONFLICT DO NOTHING`, [fx.workspaceId]);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(0);
+    expect(await effectOf(fx, requestId)).toMatchObject({ effect_status: 'failed' });
+    expect((await effectOf(fx, requestId)).effect_reason).toMatch(/priya@northwind\.example.*asked not to be emailed/u);
+  });
+
+  it('refreshes the open approval when a real send finishes, and never points an agent address at a Sent folder', async () => {
+    sent.length = 0;
+    const fx = await seedAgent();
+    const { requestId, outbox } = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    const before = await refreshes(fx, requestId);
+    await sendJob(fx, outbox.id);
+    expect(sent).toHaveLength(1);
+    expect(await refreshes(fx, requestId)).toBeGreaterThan(before);
+
+    // An unexpected answer from the email service is uncertain; an agent address has no mailbox to check.
+    const uncertain = await approvedReply(fx, 'E_RATE_LIMIT_EXCEEDED');
+    nextSendError = Object.assign(new Error('E_INTERNAL: upstream reset'), { code: 'E_INTERNAL' });
+    const beforeUncertain = await refreshes(fx, uncertain.requestId);
+    await sendJob(fx, uncertain.outbox.id);
+    expect(await scoped(fx.workspaceId, 'SELECT state FROM outbound_email_outbox WHERE id=$1', [uncertain.outbox.id])).toEqual([{ state: 'ambiguous' }]);
+    const reason = (await effectOf(fx, uncertain.requestId)).effect_reason ?? '';
+    expect(reason).not.toMatch(/Check the (mailbox|Sent folder)/u);
+    expect(reason).toMatch(/ask .*whether it arrived/u);
+    expect(await refreshes(fx, uncertain.requestId)).toBeGreaterThan(beforeUncertain);
+    const sends = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/requests/${uncertain.requestId}/email-sends`);
+    expect(((await sends.json()) as { sends: { via?: string }[] }).sends[0]?.via).toBe('agent');
   });
 
   it('on a members-only deployment, does not email someone who was only invited', async () => {

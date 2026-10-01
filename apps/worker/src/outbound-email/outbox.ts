@@ -1,6 +1,39 @@
 import { hasCaution, senderFactsSchema, type ApprovalPayload } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
+import { enqueueJob } from '../jobs.js';
 import { RouteError } from '../routes/errors.js';
+
+/**
+ * Start the send job for each approved email that was waiting (for a mailbox,
+ * or for a paused agent address) and can go now. Its job key may already have
+ * been used while it waited: a finished job is revived; an active one is left.
+ * Returns the job ids to run after commit.
+ */
+export async function releaseWaitingSends(tx: Tx, workspaceId: string, outboxIds: readonly string[]): Promise<string[]> {
+  const jobIds: string[] = [];
+  for (const id of outboxIds) {
+    const jobId = await enqueueJob(tx, workspaceId, 'outbound_email_send', `outbound-email:${id}`, { outbox_id: id });
+    if (jobId) {
+      jobIds.push(jobId);
+      continue;
+    }
+    const revived = await tx.query<{ id: string }>(
+      `UPDATE jobs SET done_at=NULL, locked_until=NULL, last_error=NULL, next_at=now()
+        WHERE workspace_id=$1 AND kind='outbound_email_send' AND key=$2 AND done_at IS NOT NULL
+        RETURNING id`,
+      [workspaceId, `outbound-email:${id}`],
+    );
+    for (const job of revived.rows) {
+      await tx.query(
+        `INSERT INTO job_ready (job_id,workspace_id,next_at) VALUES ($1,$2,now())
+         ON CONFLICT (job_id) DO UPDATE SET next_at=EXCLUDED.next_at`,
+        [job.id, workspaceId],
+      );
+      jobIds.push(job.id);
+    }
+  }
+  return jobIds;
+}
 
 export interface QueuedEmailOutbox {
   readonly ids: readonly string[];
@@ -38,9 +71,11 @@ export async function queueApprovedEmail(
     [input.workspaceId, sender],
   );
   const accountId = account.rows[0]?.id ?? null;
-  // An agent's own address sends as the agent (C100); it needs no mailbox connection.
+  // An agent's own address sends as the agent (C100); it needs no mailbox
+  // connection. A paused address still owns the reply: the send job holds it
+  // until the address is resumed, which sends it.
   const agentInbox = accountId ? null : (await tx.query<{ id: string }>(
-    `SELECT id FROM email_inboxes WHERE workspace_id=$1 AND address=$2 AND kind='agent' AND status='active'`,
+    `SELECT id FROM email_inboxes WHERE workspace_id=$1 AND address=$2 AND kind='agent'`,
     [input.workspaceId, sender],
   )).rows[0]?.id ?? null;
   const state = accountId || agentInbox ? 'queued' as const : 'pending_connection' as const;

@@ -32,6 +32,21 @@ function settleError(caught: unknown): string {
  * Renders nothing unless this approval has a send a person settled or must
  * settle. `version` re-reads the list when the approval changes.
  */
+/**
+ * What a reviewer can check about an uncertain send. A connected mailbox has a
+ * Sent folder; an agent's own address (C100) only sends, so the recipient is
+ * the one who can say whether it arrived.
+ */
+export function uncertainLine(send: EmailSend, canSettle: boolean): string {
+  const who = send.recipient_name || send.recipient_address;
+  const check = send.via === 'agent'
+    ? `Agent addresses have no Sent folder, so ask ${who} whether it arrived.`
+    : `Check the Sent folder of ${send.sender_address}.`;
+  return canSettle
+    ? `The provider didn’t confirm whether it was sent. ${check} “It wasn’t sent” sends nothing: the email goes back for approval first.`
+    : `The provider didn’t confirm whether it was sent. Waiting for a reviewer to check.`;
+}
+
 export function EmailSends({ requestId, version, onSettled }: { requestId: string; version: string; onSettled: () => Promise<void> }) {
   const adapter = useAdapter();
   const state = useAppState();
@@ -79,11 +94,7 @@ export function EmailSends({ requestId, version, onSettled }: { requestId: strin
             key={send.id}
             media={<StatusDot tone={uncertain ? 'warn' : send.settled?.outcome === 'sent' ? 'ok' : 'muted'} hint={uncertain ? 'Not confirmed' : 'Settled'} />}
             title={uncertain ? `${send.recipient_name || send.recipient_address} may or may not have received it` : send.recipient_name || send.recipient_address}
-            description={uncertain
-              ? (list.can_settle
-                ? `The send was interrupted before the provider answered. Check the Sent folder of ${send.sender_address}. “It wasn’t sent” sends nothing: the email goes back for approval first.`
-                : `The send was interrupted before the provider answered. Waiting for a reviewer to check the Sent folder of ${send.sender_address}.`)
-              : settledLine(send)}
+            description={uncertain ? uncertainLine(send, list.can_settle) : settledLine(send)}
             actions={uncertain && list.can_settle ? <>
               <Button disabled={busy !== null} onClick={() => void settle(send, 'not_sent')}>It wasn’t sent</Button>
               <Button primary disabled={busy !== null} onClick={() => void settle(send, 'sent')}>{busy === send.id ? 'Recording…' : 'It was sent'}</Button>

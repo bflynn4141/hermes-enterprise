@@ -12,6 +12,43 @@ import { recipientAllowed } from './recipient-allowlist.js';
 /** Who a reviewer is told did or didn't confirm a send. */
 const PROVIDER_NAME = { gmail: 'Gmail', microsoft: 'Microsoft', agent: 'The email service' } as const;
 
+/**
+ * Tell the approval what became of its email, and any open card to re-read it.
+ * `waiting` keeps the work open; `failed` closes it with the reason in words.
+ */
+async function tellReviewer(
+  tx: import('../db/client.js').Tx,
+  workspaceId: string,
+  requestId: string,
+  effect: 'waiting' | 'failed',
+  reason: string,
+): Promise<string[]> {
+  await tx.query(
+    `UPDATE approval_requests SET effect_status=$3,effect_reason=$4,
+         work_status=CASE WHEN $3='failed' THEN 'completed' ELSE work_status END
+      WHERE workspace_id=$1 AND request_id=$2`,
+    [workspaceId, requestId, effect, reason],
+  );
+  return refreshApproval(tx, workspaceId, requestId);
+}
+
+/** An open approval card shows the delivery state; tell it to re-read. */
+function refreshApproval(tx: import('../db/client.js').Tx, workspaceId: string, requestId: string): Promise<string[]> {
+  return publishEvents(tx, workspaceId, [
+    { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: requestId, ref: { section: 'inbox', view: 'request', id: requestId }, version: null } },
+  ]);
+}
+
+/**
+ * What a reviewer can do about an uncertain send. A connected mailbox has a
+ * Sent folder to check; an agent's own address (C100) only sends, so the one
+ * who can say whether it arrived is the recipient.
+ */
+const checkBeforeResending = (row: { sender_inbox_id: string | null; account_id: string | null; recipient_address: string }): string =>
+  row.sender_inbox_id && !row.account_id
+    ? `Agent addresses have no Sent folder, so ask ${row.recipient_address} whether it arrived before sending it again.`
+    : 'Check the mailbox before sending it again.';
+
 interface OutboxRow {
   readonly id: string;
   readonly request_id: string;
@@ -71,22 +108,12 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
         [row.id],
       );
       await tx.query(
-        `UPDATE approval_requests SET effect_status='failed',effect_reason=$3,work_status='completed'
-          WHERE workspace_id=$1 AND request_id=$2`,
-        [
-          job.workspace_id,
-          row.request_id,
-          'The send was interrupted, so the approved email may or may not have been sent. Check the mailbox before sending it again.',
-        ],
-      );
-      await tx.query(
         `INSERT INTO events (workspace_id,actor_type,kind,request_id)
          VALUES ($1,'system','outbound_email.ambiguous',$2)`,
         [job.workspace_id, row.request_id],
       );
-      published.push(...await publishEvents(tx, job.workspace_id, [
-        { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: row.request_id, ref: { section: 'inbox', view: 'request', id: row.request_id }, version: null } },
-      ]));
+      published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'failed',
+        `The send was interrupted, so the approved email may or may not have been sent. ${checkBeforeResending(row)}`));
       return null;
     }
     // A reply to a role inbox with no connected sender is recorded as a
@@ -117,6 +144,8 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     );
     if (suppression.rowCount === 1) {
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='recipient_suppressed' WHERE id=$1`, [row.id]);
+      published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'failed',
+        `Nothing was sent: ${row.recipient_address} has asked not to be emailed.`));
       return null;
     }
     if (simulate) {
@@ -127,17 +156,23 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       // A test deployment that only emails its own members. The approval
       // says so instead of waiting for a send that will not happen.
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='recipient_not_allowed' WHERE id=$1`, [row.id]);
-      await tx.query(
-        `UPDATE approval_requests SET effect_status='failed',effect_reason=$3,work_status='completed'
-          WHERE workspace_id=$1 AND request_id=$2`,
-        [job.workspace_id, row.request_id, `Nothing was sent: this test workspace only emails its members, and ${row.recipient_address} is not one.`],
-      );
+      published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'failed',
+        `Nothing was sent: this test workspace only emails its members, and ${row.recipient_address} is not one.`));
       return null;
     }
     if (asAgent) {
-      // The address must still be the agent's, still receiving, and the one approved.
-      if (row.sender_inbox_status !== 'active' || row.sender_inbox_address !== row.sender_address) {
+      const agent = row.sender_agent_name ?? 'The agent';
+      // The address must still be the agent's and the one approved.
+      if (row.sender_inbox_address !== row.sender_address) {
         await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
+        published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'failed',
+          `Nothing was sent: this reply was approved to come from ${row.sender_address}, which is no longer ${agent}'s address.`));
+        return null;
+      }
+      // A paused address holds the reply; resuming it sends (routes/email-intake.ts).
+      if (row.sender_inbox_status !== 'active') {
+        published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'waiting',
+          `Waiting: ${agent}'s address is paused. Resuming it sends this reply.`));
         return null;
       }
       await tx.query(
@@ -167,6 +202,8 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
     }
     if (resolved.account.address !== row.sender_address) {
       await tx.query(`UPDATE outbound_email_outbox SET state='cancelled',last_error='sender_account_mismatch' WHERE id=$1`, [row.id]);
+      published.push(...await tellReviewer(tx, job.workspace_id, row.request_id, 'failed',
+        `Nothing was sent: the connected account is no longer ${row.sender_address}.`));
       return null;
     }
     await tx.query(
@@ -207,14 +244,14 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
       : prepared.provider === 'microsoft'
         ? await sendMicrosoftMessage(prepared.accessToken, prepared.raw, microsoftFetcher(env))
         : await sendGmailMessage(prepared.accessToken, prepared.raw, gmailFetcher(env));
-    await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const refreshed = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       const changed = await tx.query(
         `UPDATE outbound_email_outbox SET state='sent',provider_message_id=$3,provider_thread_id=$4,
             provider_response=$5::jsonb,sent_at=now(),last_error=NULL
           WHERE workspace_id=$1 AND id=$2 AND state='sending'`,
         [job.workspace_id, prepared.row.id, sent.id, sent.threadId, JSON.stringify(sent)],
       );
-      if (changed.rowCount !== 1) return;
+      if (changed.rowCount !== 1) return [];
       if (prepared.row.candidate_id) {
         await tx.query(
           `UPDATE partner_engagements SET stage='sent',last_outreach_at=now()
@@ -233,14 +270,16 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
          VALUES ($1,'system','outbound_email.sent',$2)`,
         [job.workspace_id, prepared.row.request_id],
       );
+      return refreshApproval(tx, job.workspace_id, prepared.row.request_id);
     });
+    if (refreshed.length > 0) await runJobsAfterCommit(env, job.workspace_id, refreshed);
   } catch (error) {
     const retryable = (error instanceof GmailApiError && error.status === 429)
       || (error instanceof AgentSendError && error.retryable);
     const ambiguous = error instanceof AgentSendError
       ? error.ambiguous
       : !(error instanceof GmailApiError) || error.status >= 500;
-    await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const refreshed = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
       await tx.query(
         `UPDATE outbound_email_outbox SET state=$3,last_error=$4
           WHERE workspace_id=$1 AND id=$2 AND state='sending'`,
@@ -251,20 +290,12 @@ export async function runOutboundEmailSendJob(env: Env, job: Job): Promise<void>
           error instanceof Error ? error.message.slice(0, 500) : 'gmail_send_failed',
         ],
       );
-      if (!retryable) {
-        await tx.query(
-          `UPDATE approval_requests SET effect_status='failed',effect_reason=$3,work_status='completed'
-            WHERE workspace_id=$1 AND request_id=$2`,
-          [
-            job.workspace_id,
-            prepared.row.request_id,
-            ambiguous
-              ? `${PROVIDER_NAME[prepared.provider]} did not confirm whether the approved email was sent. Review the mailbox before retrying.`
-              : `${PROVIDER_NAME[prepared.provider]} rejected the approved email.`,
-          ],
-        );
-      }
+      if (retryable) return [];
+      return tellReviewer(tx, job.workspace_id, prepared.row.request_id, 'failed', ambiguous
+        ? `${PROVIDER_NAME[prepared.provider]} did not confirm whether the approved email was sent. ${checkBeforeResending(prepared.row)}`
+        : `${PROVIDER_NAME[prepared.provider]} rejected the approved email.`);
     });
+    if (refreshed.length > 0) await runJobsAfterCommit(env, job.workspace_id, refreshed);
     if (retryable) throw error;
   }
 }
@@ -296,8 +327,5 @@ async function recordSimulatedReply(
      VALUES ($1,'system','outbound_email.simulated',$2)`,
     [workspaceId, row.request_id],
   );
-  // An open approval card shows the delivery state; tell it to re-read.
-  return publishEvents(tx, workspaceId, [
-    { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: row.request_id, ref: { section: 'inbox', view: 'request', id: row.request_id }, version: null } },
-  ]);
+  return refreshApproval(tx, workspaceId, row.request_id);
 }
