@@ -87,7 +87,8 @@ after 14 days; the Worker, queues and Hyperdrive configs do not.
 comes from the environment (`TURNKEY_PARENT_ORG_ID`, `TURNKEY_API_PUBLIC_KEY`,
 `TURNKEY_API_PRIVATE_KEY`), normally injected by `op run` from 1Password, and is
 uploaded as a Worker secret for that deploy only; it is never written to
-`state.json`. That key may only create workspace sub-organizations. The passkey
+`state.json`. If `ZERION_API_KEY` is also in the environment, wallet balances
+on that preview come from Zerion. That key may only create workspace sub-organizations. The passkey
 relying party is the preview's host, so an owner passkey created there works only
 on that preview. Signing and payments stay off. Workspaces created from a preview
 remain in Turnkey after `down`; they hold no funds.

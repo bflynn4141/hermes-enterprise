@@ -378,6 +378,8 @@ async function up(pr) {
     WORKOS_COOKIE_PASSWORD: preview.cookie,
     // Read from the environment for this deploy only; never saved in state.json.
     ...(TURNKEY ? { TURNKEY_API_PRIVATE_KEY: turnkeyEnv('TURNKEY_API_PRIVATE_KEY') } : {}),
+    // Wallet balances from Zerion, when its key is injected the same way (op run).
+    ...(TURNKEY && process.env.ZERION_API_KEY?.trim() ? { ZERION_API_KEY: process.env.ZERION_API_KEY.trim() } : {}),
   };
   let url = deploy(previewConfig({ name, pr, origin: preview.url, hyperdrive }), secrets);
   if (!url) throw new Error('wrangler did not report a workers.dev URL');
