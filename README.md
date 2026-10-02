@@ -241,6 +241,19 @@ To rebuild the README screenshots from the current mock product flow, run:
 pnpm --filter @hermes/client screenshots:readme
 ```
 
+### Checks in Dagger
+
+Coding agents and contributors can run the quick checks and build with a
+pinned container toolchain:
+
+```sh
+dagger call check
+```
+
+Requires Dagger 0.21.9 and Docker; no host Node/pnpm or cloud account is needed.
+See [Dagger checks](docs/DAGGER.md) for separate quick/build commands, caching,
+source filtering and the checks that still run through the existing CI path.
+
 ### Self-hosting
 
 The local path above works offline: `AUTH_MODE=fake` signs you in as a seeded

@@ -14,6 +14,7 @@ dated evidence and proposals that may no longer describe current behavior.
 | [Runbook](RUNBOOK.md) | Deployment, health, incident, restore, and operator procedures |
 | [Pull request previews](PREVIEWS.md) | A passcode-locked running copy of the app for one pull request |
 | [Security review](SECURITY-REVIEW.md) | Threat model, controls, and security findings |
+| [Dagger checks](DAGGER.md) | Reproducible local quick checks and build for contributors and coding agents |
 | [Contributor guide](../CONTRIBUTING.md) | Setup, pull request expectations, and required checks |
 
 ## Current subsystem references
